@@ -1,0 +1,6 @@
+appId: com.proctorx.desktop
+productName: ProctorX
+directories:
+  output: release
+files:
+  - out/**

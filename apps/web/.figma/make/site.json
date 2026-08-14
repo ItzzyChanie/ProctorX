@@ -1,0 +1,11 @@
+{
+  "title": "ProctorX 1st Landing Page Sample",
+  "description": "AI-powered online exam proctoring platform delivering secure, scalable remote monitoring with facial recognition and behavior analytics for institutions.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

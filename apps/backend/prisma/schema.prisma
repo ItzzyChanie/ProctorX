@@ -1,0 +1,55 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  TEACHER
+  DEAN
+}
+
+model User {
+  id                  String   @id @default(uuid())
+  role                Role
+  loginId             String   @unique
+  email               String?  @unique
+  passwordHash        String
+  fullName            String
+  mustChangePassword  Boolean  @default(true)
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  studentId           String?  @unique
+  yearLevel           String?
+  program             String?
+  employeeId          String?  @unique
+  permissionOverrides UserPermission[]
+
+  @@map("users")
+}
+
+model Permission {
+  id            String            @id @default(uuid())
+  key           String            @unique
+  description   String
+  userOverrides UserPermission[]
+
+  @@map("permissions")
+}
+
+model UserPermission {
+  id           String     @id @default(uuid())
+  userId       String
+  permissionId String
+  granted      Boolean
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@map("user_permissions")
+}

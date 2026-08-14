@@ -1,0 +1,12 @@
+ALTER TABLE "users" ADD COLUMN "loginId" TEXT, ADD COLUMN "mustChangePassword" BOOLEAN NOT NULL DEFAULT true, ADD COLUMN "isActive" BOOLEAN NOT NULL DEFAULT true, ADD COLUMN "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, ADD COLUMN "studentId" TEXT, ADD COLUMN "yearLevel" TEXT, ADD COLUMN "program" TEXT, ADD COLUMN "employeeId" TEXT;
+UPDATE "users" SET "loginId" = "email";
+ALTER TABLE "users" ALTER COLUMN "email" DROP NOT NULL, ALTER COLUMN "loginId" SET NOT NULL;
+CREATE UNIQUE INDEX "users_loginId_key" ON "users"("loginId");
+CREATE UNIQUE INDEX "users_studentId_key" ON "users"("studentId");
+CREATE UNIQUE INDEX "users_employeeId_key" ON "users"("employeeId");
+CREATE TABLE "permissions" ("id" TEXT NOT NULL, "key" TEXT NOT NULL, "description" TEXT NOT NULL, CONSTRAINT "permissions_pkey" PRIMARY KEY ("id"));
+CREATE UNIQUE INDEX "permissions_key_key" ON "permissions"("key");
+CREATE TABLE "user_permissions" ("id" TEXT NOT NULL, "userId" TEXT NOT NULL, "permissionId" TEXT NOT NULL, "granted" BOOLEAN NOT NULL, CONSTRAINT "user_permissions_pkey" PRIMARY KEY ("id"));
+CREATE UNIQUE INDEX "user_permissions_userId_permissionId_key" ON "user_permissions"("userId", "permissionId");
+ALTER TABLE "user_permissions" ADD CONSTRAINT "user_permissions_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "user_permissions" ADD CONSTRAINT "user_permissions_permissionId_fkey" FOREIGN KEY ("permissionId") REFERENCES "permissions"("id") ON DELETE CASCADE ON UPDATE CASCADE;

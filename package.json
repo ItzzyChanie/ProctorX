@@ -1,0 +1,22 @@
+{
+  "name": "proctorx",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=web",
+    "dev:backend": "npm run start:dev --workspace=backend",
+    "dev:desktop": "npm run dev --workspace=desktop",
+    "build": "npm run build --workspaces --if-present",
+    "db:migrate": "npm run prisma --workspace=backend -- migrate dev",
+    "db:studio": "npm run prisma --workspace=backend -- studio",
+    "db:seed": "npm run db:seed --workspace=backend"
+  },
+  "engines": {
+    "node": ">=20.19.0",
+    "npm": ">=10"
+  }
+}
