@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuthStore } from "../store/authStore";
 import { Role, type LoginResponse } from "../types";
+type PendingActivationResponse = { activationRequired: true };
 const schema = z.object({
   loginId: z.string().min(1, "Enter your Student ID or school email."),
   password: z.string().min(1, "Enter your password."),
@@ -26,6 +27,8 @@ export function SignInModal({
   const navigate = useNavigate();
   const dialog = useRef<HTMLDivElement>(null);
   const [error, setError] = useState("");
+  const [activation, setActivation] = useState<{ loginId: string } | null>(null);
+  const [otp, setOtp] = useState("");
   const { setAuth } = useAuthStore();
   const {
     register,
@@ -43,7 +46,11 @@ export function SignInModal({
   const submit = async (values: z.infer<typeof schema>) => {
     setError("");
     try {
-      const { data } = await api.post<LoginResponse>("/auth/login", values);
+      const { data } = await api.post<LoginResponse | PendingActivationResponse>("/auth/login", values);
+      if ("activationRequired" in data) {
+        setActivation({ loginId: values.loginId });
+        return;
+      }
       setAuth(data.user);
       onClose();
       navigate(
@@ -56,6 +63,13 @@ export function SignInModal({
         "We couldn’t sign you in. Check your credentials and try again.",
       );
     }
+  };
+  const verifyActivation = async (event: React.FormEvent) => {
+    event.preventDefault(); setError("");
+    try {
+      const { data } = await api.post("/auth/verify-activation", { loginId: activation?.loginId, code: otp });
+      setAuth(data.user); onClose(); navigate("/change-password");
+    } catch { setError("The activation code is invalid or expired."); }
   };
   return (
     <div
@@ -95,7 +109,13 @@ export function SignInModal({
           Students use their Student ID. Teachers and Deans use their school
           email.
         </p>
-        <form className="mt-7 space-y-4" onSubmit={handleSubmit(submit)}>
+        {activation ? <form className="mt-7 space-y-4" onSubmit={verifyActivation}>
+          <p className="rounded-xl border border-blue-400/20 bg-blue-500/10 p-3 text-sm text-blue-100">Enter the 6-digit activation code sent to your registered email address.</p>
+          <label className="block text-sm font-medium text-slate-200">Activation code<input required inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ""))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/80 px-4 py-3 text-white outline-none focus:border-blue-400/60" /></label>
+          {error && <p role="alert" className="rounded-xl border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-200">{error}</p>}
+          <button className="btn-primary w-full rounded-xl py-3 font-semibold text-white">Verify and continue</button>
+          <button type="button" className="w-full text-sm text-blue-300" onClick={() => { setActivation(null); setOtp(""); }}>Back to sign in</button>
+        </form> : <form className="mt-7 space-y-4" onSubmit={handleSubmit(submit)}>
           <label className="block text-sm font-medium text-slate-200">
             Student ID or school email
             <input
@@ -141,7 +161,7 @@ export function SignInModal({
           >
             Forgot password?
           </button>
-        </form>
+        </form>}
       </div>
     </div>
   );

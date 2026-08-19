@@ -13,21 +13,115 @@ enum Role {
   DEAN
 }
 
+enum AccountStatus {
+  PENDING
+  ACTIVE
+  DISABLED
+}
+
+enum ImportRowResult {
+  CREATED
+  SKIPPED_DUPLICATE
+  ERROR
+}
+
+enum Program {
+  CS
+  IT
+}
+
+enum YearLevel {
+  YEAR_1
+  YEAR_2
+  YEAR_3
+  YEAR_4
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE
+  ENUMERATION
+  ESSAY
+  IDENTIFICATION
+}
+
+enum ExamSourceType {
+  MANUAL
+  GOOGLE_FORMS_IMPORT
+  AI_GENERATED
+}
+
+enum ExamStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum AppPolicyMode {
+  BLACKLIST
+  WHITELIST
+}
+
+enum GradeStatus {
+  UNGRADED
+  AUTO_GRADED
+  AI_SUGGESTED
+  TEACHER_CONFIRMED
+}
+
+enum SessionStatus {
+  IN_PROGRESS
+  COMPLETED
+  DISCONNECTED
+}
+
+enum RiskTier {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum EventType {
+  TAB_SWITCH
+  FULLSCREEN_EXIT
+  FACE_NOT_VISIBLE
+  EXCESSIVE_EYE_MOVEMENT
+  POSSIBLE_TALKING
+  MULTIPLE_FACES_DETECTED
+  VOICE_DETECTED
+  BLACKLISTED_APP
+  USB_EVENT
+  IDLE
+}
+
+enum RecordingStatus {
+  UPLOADING
+  COMPLETE
+  FAILED
+}
+
 model User {
-  id                  String   @id @default(uuid())
-  role                Role
-  loginId             String   @unique
-  email               String?  @unique
-  passwordHash        String
-  fullName            String
-  mustChangePassword  Boolean  @default(true)
-  isActive            Boolean  @default(true)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-  permissionOverrides UserPermission[]
-  deanProfile         DeanProfile?
-  teacherProfile      TeacherProfile?
-  studentProfile      StudentProfile?
+  id                    String               @id @default(uuid())
+  role                  Role
+  loginId               String               @unique
+  email                 String?              @unique
+  passwordHash          String
+  fullName              String
+  mustChangePassword    Boolean              @default(true)
+  isActive              Boolean              @default(true)
+  status                AccountStatus        @default(ACTIVE)
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  permissionOverrides   UserPermission[]
+  deanProfile           DeanProfile?
+  teacherProfile        TeacherProfile?
+  studentProfile        StudentProfile?
+  activationCodes       ActivationCode[]
+  uploadedImportBatches StudentImportBatch[] @relation("ImportBatchUploader")
+  taughtSubjects        Subject[]            @relation("SubjectTeacher")
+  enrollments           Enrollment[]
+  examSessions          ExamSession[]
+  auditLogs             AuditLog[]
+  notifications         Notification[]
 
   @@map("users")
 }
@@ -71,8 +165,8 @@ model StudentProfile {
 }
 
 model Permission {
-  id            String            @id @default(uuid())
-  key           String            @unique
+  id            String           @id @default(uuid())
+  key           String           @unique
   description   String
   userOverrides UserPermission[]
 
@@ -89,4 +183,244 @@ model UserPermission {
 
   @@unique([userId, permissionId])
   @@map("user_permissions")
+}
+
+model ActivationCode {
+  id         String    @id @default(uuid())
+  userId     String
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("activation_codes")
+}
+
+model StudentImportBatch {
+  id           String             @id @default(uuid())
+  uploadedById String
+  fileName     String
+  totalRows    Int
+  createdRows  Int
+  skippedRows  Int
+  errorRows    Int
+  createdAt    DateTime           @default(now())
+  uploadedBy   User               @relation("ImportBatchUploader", fields: [uploadedById], references: [id])
+  rows         StudentImportRow[]
+
+  @@index([uploadedById])
+  @@map("student_import_batches")
+}
+
+model StudentImportRow {
+  id           String             @id @default(uuid())
+  batchId      String
+  rowNumber    Int
+  studentId    String?
+  fullName     String?
+  email        String?
+  result       ImportRowResult
+  errorMessage String?
+  batch        StudentImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId])
+  @@map("student_import_rows")
+}
+
+model Subject {
+  id          String       @id @default(uuid())
+  code        String       @unique
+  name        String
+  teacherId   String
+  createdAt   DateTime     @default(now())
+  teacher     User         @relation("SubjectTeacher", fields: [teacherId], references: [id])
+  enrollments Enrollment[]
+  exams       Exam[]
+
+  @@index([teacherId])
+  @@map("subjects")
+}
+
+model Enrollment {
+  id         String   @id @default(uuid())
+  subjectId  String
+  studentId  String
+  enrolledAt DateTime @default(now())
+  subject    Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  student    User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectId, studentId])
+  @@index([studentId])
+  @@map("enrollments")
+}
+
+model Exam {
+  id                String        @id @default(uuid())
+  subjectId         String
+  title             String
+  instructions      String?
+  totalPoints       Int
+  durationMinutes   Int
+  roomCode          String        @unique
+  requireCamera     Boolean       @default(false)
+  requireMicrophone Boolean       @default(false)
+  appPolicyMode     AppPolicyMode @default(BLACKLIST)
+  appPolicyList     String[]      @default([])
+  status            ExamStatus    @default(DRAFT)
+  createdAt         DateTime      @default(now())
+  subject           Subject       @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  questions         Question[]
+  sessions          ExamSession[]
+
+  @@index([subjectId])
+  @@map("exams")
+}
+
+model Question {
+  id            String           @id @default(uuid())
+  examId        String
+  type          QuestionType
+  order         Int
+  points        Int
+  prompt        String
+  /// Null for multiple-choice and essay questions; its JSON shape varies by question type.
+  correctAnswer Json?
+  rubric        String?
+  source        ExamSourceType   @default(MANUAL)
+  exam          Exam             @relation(fields: [examId], references: [id], onDelete: Cascade)
+  options       QuestionOption[]
+  answers       Answer[]
+
+  @@unique([examId, order])
+  @@map("questions")
+}
+
+model QuestionOption {
+  id         String   @id @default(uuid())
+  questionId String
+  label      String
+  isCorrect  Boolean  @default(false)
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+  @@map("question_options")
+}
+
+model Submission {
+  id          String      @id @default(uuid())
+  sessionId   String      @unique
+  submittedAt DateTime?
+  totalScore  Int?
+  maxScore    Int
+  gradeStatus GradeStatus @default(UNGRADED)
+  session     ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  answers     Answer[]
+
+  @@map("submissions")
+}
+
+model Answer {
+  id                String      @id @default(uuid())
+  submissionId      String
+  questionId        String
+  responseText      String?
+  selectedOptionIds String[]    @default([])
+  awardedPoints     Int?
+  aiSuggestedPoints Int?
+  aiJustification   String?
+  gradeStatus       GradeStatus @default(UNGRADED)
+  submission        Submission  @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  question          Question    @relation(fields: [questionId], references: [id])
+
+  @@unique([submissionId, questionId])
+  @@index([questionId])
+  @@map("answers")
+}
+
+model ExamSession {
+  id           String                   @id @default(uuid())
+  examId       String
+  studentId    String
+  startedAt    DateTime
+  endedAt      DateTime?
+  status       SessionStatus
+  exam         Exam                     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student      User                     @relation(fields: [studentId], references: [id])
+  recording    Recording?
+  submission   Submission?
+  events       ProctoringEvent[]
+  scoreHistory SuspicionScoreSnapshot[]
+
+  @@unique([examId, studentId])
+  @@index([studentId])
+  @@map("exam_sessions")
+}
+
+model Recording {
+  id            String          @id @default(uuid())
+  sessionId     String          @unique
+  storagePath   String
+  durationSec   Int?
+  fileSizeBytes BigInt?
+  status        RecordingStatus
+  session       ExamSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("recordings")
+}
+
+model ProctoringEvent {
+  id           String      @id @default(uuid())
+  sessionId    String
+  type         EventType
+  intensity    Float?
+  metadata     Json?
+  evidencePath String?
+  occurredAt   DateTime
+  session      ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, occurredAt])
+  @@map("proctoring_events")
+}
+
+model SuspicionScoreSnapshot {
+  id                  String      @id @default(uuid())
+  sessionId           String
+  score               Int
+  tier                RiskTier
+  contributingFactors Json
+  computedAt          DateTime
+  session             ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, computedAt])
+  @@map("suspicion_score_snapshots")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String
+  action     String
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  actor      User     @relation(fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
 }

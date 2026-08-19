@@ -1,44 +1,230 @@
-import { BadRequestException, Injectable } from '@nestjs/common'
-import { Prisma, Role } from '@prisma/client'
-import bcrypt from 'bcrypt'
-import { parse } from 'csv-parse/sync'
-import * as XLSX from 'xlsx'
-import { PrismaService } from '../../prisma/prisma.service'
-import { generateDefaultPassword } from './password.util'
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from "@nestjs/common";
+import { AccountStatus, ImportRowResult, Role } from "@prisma/client";
+import bcrypt from "bcrypt";
+import * as XLSX from "xlsx";
+import { PrismaService } from "../../prisma/prisma.service";
+import { CreateStudentDto } from "../dto/create-student.dto";
+import { generateDefaultPassword } from "./password.util";
 
-type Result = { imported: number; skipped: { row: number; reason: string }[]; credentials: { row: number; loginId: string; fullName: string; password: string }[] }
-const normalize = (key: string) => key.toLowerCase().replace(/[\s_-]/g, '')
-const pick = (row: Record<string, unknown>, keys: string[]) => { const found = Object.entries(row).find(([key]) => keys.includes(normalize(key))); return String(found?.[1] ?? '').trim() }
+const columns = [
+  "Student ID",
+  "First Name",
+  "Middle Name",
+  "Last Name",
+  "Program",
+  "Year Level",
+  "Email",
+] as const;
+type SpreadsheetRow = Record<(typeof columns)[number], unknown>;
 
 @Injectable()
 export class ImportService {
   constructor(private prisma: PrismaService) {}
-  private rows(file: Express.Multer.File) {
-    const ext = file.originalname.split('.').pop()?.toLowerCase()
-    if (ext === 'csv' || file.mimetype.includes('csv')) return parse(file.buffer, { columns: true, skip_empty_lines: true, trim: true }) as Record<string, unknown>[]
-    if (ext === 'xlsx' || file.mimetype.includes('spreadsheetml')) { const book = XLSX.read(file.buffer, { type: 'buffer' }); const firstSheet = book.SheetNames[0]; if (!firstSheet) throw new BadRequestException('Workbook has no sheets'); return XLSX.utils.sheet_to_json<Record<string, unknown>>(book.Sheets[firstSheet]!, { defval: '' }) }
-    throw new BadRequestException('Upload a CSV or XLSX file')
+
+  template(): Buffer {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet([[...columns]]),
+      "Students",
+    );
+    return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
   }
-  async import(file: Express.Multer.File, role: Role): Promise<Result> {
-    if (!file) throw new BadRequestException('A file is required')
-    const skipped: Result['skipped'] = []; const candidates: any[] = []
-    this.rows(file).forEach((row, index) => {
-      const rowNumber = index + 2; const fullName = pick(row, ['fullname', 'name']); const email = pick(row, ['emailaddress', 'email']).toLowerCase(); const identifier = role === Role.STUDENT ? pick(row, ['studentid', 'studentnumber', 'idnumber']) : pick(row, ['idno', 'employeeid', 'teachernumber', 'idnumber'])
-      if (!identifier || !fullName || !email) { skipped.push({ row: rowNumber, reason: 'Missing required identifier, full_name, or email_address' }); return }
-      try { const password = generateDefaultPassword(fullName); candidates.push({ row: rowNumber, fullName, email, identifier, password, yearLevel: pick(row, ['yearlevel', 'year']), program: pick(row, ['program', 'course']) }) } catch (error: any) { skipped.push({ row: rowNumber, reason: error.message }); }
-    })
-    const seen = new Set<string>()
-    const valid = candidates.filter((candidate) => { const key = `${candidate.identifier}|${candidate.email}`; if (seen.has(key)) { skipped.push({ row: candidate.row, reason: 'Duplicate identifier or email in file' }); return false }; seen.add(key); return true })
-    const where: Prisma.UserWhereInput[] = []
-    valid.forEach((candidate) => { if (role === Role.STUDENT) where.push({ studentProfile: { is: { studentId: candidate.identifier } } }, { email: candidate.email }, { loginId: candidate.identifier }); else where.push({ teacherProfile: { is: { employeeId: candidate.identifier } } }, { email: candidate.email }, { loginId: candidate.email }) })
-    const existing = await this.prisma.user.findMany({ where: { OR: where }, select: { email: true, loginId: true, studentProfile: { select: { studentId: true } }, teacherProfile: { select: { employeeId: true } } } })
-    const credentials: Result['credentials'] = []
-    for (const candidate of valid) {
-      const clash = existing.some((user) => user.email === candidate.email || user.loginId === (role === Role.STUDENT ? candidate.identifier : candidate.email) || user.studentProfile?.studentId === candidate.identifier || user.teacherProfile?.employeeId === candidate.identifier)
-      if (clash) { skipped.push({ row: candidate.row, reason: 'Identifier or email already exists' }); continue }
-      await this.prisma.user.create({ data: role === Role.STUDENT ? { role, loginId: candidate.identifier, email: candidate.email, fullName: candidate.fullName, passwordHash: await bcrypt.hash(candidate.password, 12), studentProfile: { create: { studentId: candidate.identifier, yearLevel: candidate.yearLevel || null, program: candidate.program || null } } } : { role, loginId: candidate.email, email: candidate.email, fullName: candidate.fullName, passwordHash: await bcrypt.hash(candidate.password, 12), teacherProfile: { create: { employeeId: candidate.identifier } } } })
-      credentials.push({ row: candidate.row, loginId: role === Role.STUDENT ? candidate.identifier : candidate.email, fullName: candidate.fullName, password: candidate.password })
+
+  private readRows(file: Express.Multer.File): SpreadsheetRow[] {
+    if (!file || !file.originalname.toLowerCase().endsWith(".xlsx"))
+      throw new BadRequestException("Upload the provided .xlsx template");
+    const workbook = XLSX.read(file.buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) throw new BadRequestException("Workbook has no sheets");
+    const sheet = workbook.Sheets[sheetName]!;
+    const header = (
+      XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 })[0] ?? []
+    ).map(String);
+    if (
+      header.length !== columns.length ||
+      columns.some((column, index) => header[index] !== column)
+    )
+      throw new BadRequestException(
+        `Expected columns exactly: ${columns.join(", ")}`,
+      );
+    return XLSX.utils.sheet_to_json<SpreadsheetRow>(sheet, { defval: "" });
+  }
+
+  private async assertAvailable(studentId: string, email: string) {
+    const existing = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { loginId: studentId },
+          { email },
+          { studentProfile: { is: { studentId } } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (existing)
+      throw new ConflictException("Student ID or email already exists");
+  }
+
+  async createStudent(input: CreateStudentDto, actorId: string) {
+    const studentId = input.studentId.trim();
+    const email = input.email.trim().toLowerCase();
+    await this.assertAvailable(studentId, email);
+    const initialPassword = generateDefaultPassword(input);
+    const fullName = [input.firstName, input.middleName, input.lastName]
+      .filter(Boolean)
+      .map((value) => value!.trim())
+      .join(" ");
+    const user = await this.prisma.user.create({
+      data: {
+        role: Role.STUDENT,
+        loginId: studentId,
+        email,
+        fullName,
+        passwordHash: await bcrypt.hash(initialPassword.toLocaleLowerCase(), 12),
+        status: AccountStatus.PENDING,
+        mustChangePassword: true,
+        studentProfile: {
+          create: {
+            studentId,
+            program: input.program.trim(),
+            yearLevel: input.yearLevel.trim(),
+          },
+        },
+      },
+      select: {
+        id: true,
+        loginId: true,
+        email: true,
+        fullName: true,
+        status: true,
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId,
+        action: "STUDENT_ACCOUNT_CREATED",
+        targetType: "User",
+        targetId: user.id,
+      },
+    });
+    return { user, initialPassword };
+  }
+
+  async importStudents(file: Express.Multer.File, actorId: string) {
+    const rows = this.readRows(file);
+    const batch = await this.prisma.studentImportBatch.create({
+      data: {
+        uploadedById: actorId,
+        fileName: file.originalname,
+        totalRows: rows.length,
+        createdRows: 0,
+        skippedRows: 0,
+        errorRows: 0,
+      },
+    });
+    const resultRows: {
+      rowNumber: number;
+      result: ImportRowResult;
+      errorMessage: string | null;
+      initialPassword?: string;
+    }[] = [];
+    for (const [index, row] of rows.entries()) {
+      const rowNumber = index + 2;
+      const input: CreateStudentDto = {
+        studentId: String(row["Student ID"] ?? "").trim(),
+        firstName: String(row["First Name"] ?? "").trim(),
+        middleName: String(row["Middle Name"] ?? "").trim(),
+        lastName: String(row["Last Name"] ?? "").trim(),
+        program: String(row.Program ?? "").trim(),
+        yearLevel: String(row["Year Level"] ?? "").trim(),
+        email: String(row.Email ?? "").trim(),
+      };
+      try {
+        if (
+          ![
+            input.studentId,
+          input.firstName,
+          input.middleName,
+            input.lastName,
+            input.program,
+            input.yearLevel,
+            input.email,
+          ].every(Boolean)
+        )
+          throw new BadRequestException("Missing one or more required values");
+        const created = await this.createStudent(input, actorId);
+        await this.prisma.studentImportRow.create({
+          data: {
+            batchId: batch.id,
+            rowNumber,
+            studentId: input.studentId,
+            fullName: created.user.fullName,
+            email: created.user.email,
+            result: ImportRowResult.CREATED,
+          },
+        });
+        resultRows.push({
+          rowNumber,
+          result: ImportRowResult.CREATED,
+          errorMessage: null,
+          initialPassword: created.initialPassword,
+        });
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Unexpected import error";
+        const result =
+          error instanceof ConflictException
+            ? ImportRowResult.SKIPPED_DUPLICATE
+            : ImportRowResult.ERROR;
+        await this.prisma.studentImportRow.create({
+          data: {
+            batchId: batch.id,
+            rowNumber,
+            studentId: input.studentId || null,
+            fullName:
+              [input.firstName, input.middleName, input.lastName]
+                .filter(Boolean)
+                .join(" ") || null,
+            email: input.email || null,
+            result,
+            errorMessage,
+          },
+        });
+        resultRows.push({ rowNumber, result, errorMessage });
+      }
     }
-    return { imported: credentials.length, skipped, credentials }
+    const createdRows = resultRows.filter(
+      (row) => row.result === ImportRowResult.CREATED,
+    ).length;
+    const skippedRows = resultRows.filter(
+      (row) => row.result === ImportRowResult.SKIPPED_DUPLICATE,
+    ).length;
+    const errorRows = resultRows.length - createdRows - skippedRows;
+    await this.prisma.studentImportBatch.update({
+      where: { id: batch.id },
+      data: { createdRows, skippedRows, errorRows },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId,
+        action: "STUDENT_IMPORT_COMPLETED",
+        targetType: "StudentImportBatch",
+        targetId: batch.id,
+        metadata: { createdRows, skippedRows, errorRows },
+      },
+    });
+    return {
+      batchId: batch.id,
+      totalRows: rows.length,
+      createdRows,
+      skippedRows,
+      errorRows,
+      rows: resultRows,
+    };
   }
 }

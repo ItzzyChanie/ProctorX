@@ -91,8 +91,14 @@ export const NAV: Record<Role, NavItem[]> = {
     },
     {
       key: "classes",
-      label: "Classes & Students",
+      label: "Student Lists",
       icon: Users,
+      path: "/teacher/students",
+    },
+    {
+      key: "subjects",
+      label: "Subjects & Exams",
+      icon: GraduationCap,
       path: "/teacher/classes",
     },
     {
@@ -127,6 +133,7 @@ export const NAV: Record<Role, NavItem[]> = {
       icon: GraduationCap,
       path: "/dean/departments",
     },
+    { key: "students", label: "Student Lists", icon: Users, path: "/dean/students" },
     {
       key: "reports",
       label: "Reports",

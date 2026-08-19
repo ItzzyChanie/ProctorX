@@ -1,85 +1,37 @@
-import { Hand, Lock, Monitor } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Maximize2, Monitor, X } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "../../components/layout/DashboardLayout";
-import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
-import { Chip } from "../../components/ui/Chip";
-import { SuspicionMeter } from "../../components/ui/SuspicionMeter";
-import { useChartPalette, riskTier } from "../../lib/chartPalette";
-import { useTheme } from "../../lib/useTheme";
-import { liveStudents } from "../../data/mockDashboard";
+import { api } from "../../lib/api";
+import { socket } from "../../lib/socket";
 
-/**
- * Flagship screen. In production, replace `liveStudents` with a live data source
- * (WebSocket/polling against your NestJS gateway) keyed by an active session id.
- */
+type Student = { id: string; name: string };
+type Exam = { id: string; title: string; status: "DRAFT" | "PUBLISHED" | "ARCHIVED"; roomCode: string; subject: { code: string; name: string }; _count: { sessions: number } };
+type Signal = { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
+const rtcConfig: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
 export default function LiveMonitoring() {
-  const { dark } = useTheme();
-  const p = useChartPalette(dark);
-  const sorted = [...liveStudents].sort((a, b) => b.score - a.score);
+  const [params, setParams] = useSearchParams(); const examId = params.get("examId") ?? "";
+  const [exams, setExams] = useState<Exam[]>([]); const [students, setStudents] = useState<Student[]>([]); const [streams, setStreams] = useState<Record<string, MediaStream>>({}); const [selected, setSelected] = useState<Student | null>(null);
+  const peers = useRef(new Map<string, RTCPeerConnection>()); const watched = useRef(new Set<string>());
+  const selectedExam = exams.find((exam) => exam.id === examId);
+  const stopAll = () => { peers.current.forEach((peer) => peer.close()); peers.current.clear(); watched.current.clear(); setStreams({}); };
 
-  return (
-    <DashboardLayout
-      role="teacher"
-      pageTitle="Live Monitoring"
-      userName="Prof. Nathalie Eglea"
-      userTag="College of Computer Studies"
-    >
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 font-body text-[12.5px] text-text-2">
-            <span className="w-2 h-2 rounded-full bg-risk-low" />
-            Session CS330-Lab · 10 connected · 00:24:12 elapsed
-          </div>
-          <div className="flex gap-2">
-            <Button variant="ghost">Sort: Risk ↓</Button>
-            <Button variant="ghost" icon={Hand}>
-              Raise-hand queue (1)
-            </Button>
-          </div>
-        </div>
+  useEffect(() => { void api.get<Exam[]>("/sessions/monitorable-exams").then(({ data }) => setExams(data)).catch(() => setExams([])); }, []);
+  useEffect(() => {
+    if (!examId) { setStudents([]); return; }
+    let active = true;
+    const refreshStudents = async () => { try { const { data } = await api.get(`/sessions/exam/${examId}/monitor`); if (!active) return; const next = data.map((session: any) => ({ id: session.id as string, name: session.student.fullName as string })); setStudents(next); next.forEach((student: Student) => { if (!watched.current.has(student.id)) { watched.current.add(student.id); socket.emit("webrtc:watch", { sessionId: student.id }); } }); } catch { /* Authorization failures leave the selected grid empty. */ } };
+    socket.connect(); socket.emit("monitor:join", { examId }); void refreshStudents();
+    const timer = window.setInterval(() => void refreshStudents(), 5_000);
+    const ready = async ({ sessionId }: { sessionId: string }) => { if (peers.current.has(sessionId)) return; const peer = new RTCPeerConnection(rtcConfig); peers.current.set(sessionId, peer); peer.ontrack = ({ streams: remoteStreams }) => setStreams((current) => ({ ...current, [sessionId]: remoteStreams[0] })); peer.onicecandidate = ({ candidate }) => candidate && socket.emit("webrtc:signal", { sessionId, signal: { candidate: candidate.toJSON() } }); const offer = await peer.createOffer(); await peer.setLocalDescription(offer); socket.emit("webrtc:signal", { sessionId, signal: { description: peer.localDescription } }); };
+    const signal = async ({ sessionId, signal: incoming }: { sessionId: string; signal: Signal }) => { const peer = peers.current.get(sessionId); if (!peer) return; if (incoming.description) await peer.setRemoteDescription(incoming.description); else if (incoming.candidate) await peer.addIceCandidate(incoming.candidate); };
+    socket.on("webrtc:ready", ready); socket.on("webrtc:signal", signal);
+    return () => { window.clearInterval(timer); watched.current.forEach((sessionId) => socket.emit("webrtc:stop", { sessionId })); socket.off("webrtc:ready", ready); socket.off("webrtc:signal", signal); stopAll(); socket.disconnect(); active = false; };
+  }, [examId]);
 
-        <div
-          className="grid gap-4"
-          style={{
-            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-          }}
-        >
-          {sorted.map((s) => {
-            const tier = riskTier(s.score, p);
-            return (
-              <Card key={s.id}>
-                <div className="h-[100px] rounded-[9px] bg-canvas flex items-center justify-center mb-2.5">
-                  <Monitor size={26} className="text-text-3" />
-                </div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-body text-[12.5px] font-semibold text-text-1">
-                    {s.name}
-                  </span>
-                  {s.alerts > 0 && (
-                    <Chip color="var(--risk-med)">{s.alerts} alerts</Chip>
-                  )}
-                </div>
-                <SuspicionMeter score={s.score} size="sm" />
-                <div className="flex gap-2 mt-3">
-                  <Button
-                    variant="ghost"
-                    className="flex-1 justify-center !px-2 !py-1.5 !text-[11.5px]"
-                  >
-                    Warn
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    icon={Lock}
-                    className="flex-1 justify-center !px-2 !py-1.5 !text-[11.5px]"
-                  >
-                    Lock
-                  </Button>
-                </div>
-              </Card>
-            );
-          })}
-        </div>
-      </div>
-    </DashboardLayout>
-  );
+  const chooseExam = (id: string) => { setSelected(null); setParams(id ? { examId: id } : {}); };
+  const selectedStream = selected ? streams[selected.id] : undefined;
+  return <DashboardLayout role="teacher" pageTitle="Live Monitoring" userName="Prof. Nathalie Eglea" userTag="College of Computer Studies"><div className="flex flex-col gap-4"><div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-2 text-[12.5px] text-text-2"><span className="h-2 w-2 rounded-full bg-risk-low" />{examId ? `${students.length} active student screen${students.length === 1 ? "" : "s"}` : "Choose one of your exams to monitor"}</div><label className="flex items-center gap-2 text-sm text-text-2">Exam<select value={examId} onChange={(event) => chooseExam(event.target.value)} className="min-w-64 rounded-lg border border-border bg-surface px-3 py-2 text-text-1"><option value="">Select an exam…</option>{exams.map((exam) => <option key={exam.id} value={exam.id}>{exam.subject.code} — {exam.title} ({exam.status.toLowerCase()}{exam._count.sessions ? `, ${exam._count.sessions} active` : ""})</option>)}</select></label></div>{!exams.length && <div className="rounded-lg border border-border bg-canvas p-4 text-sm text-text-2">No exams have been created for your subjects yet.</div>}{examId && <><div className="text-sm text-text-2">Monitoring <b className="text-text-1">{selectedExam ? `${selectedExam.subject.code} — ${selectedExam.title}` : "selected exam"}</b>. Student screens appear automatically after they begin the exam.</div><div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>{students.map((student) => <button key={student.id} type="button" onClick={() => setSelected(student)} className="group relative aspect-video overflow-hidden rounded-lg bg-black text-left shadow-sm"><video ref={(node) => { if (node && streams[student.id] && node.srcObject !== streams[student.id]) node.srcObject = streams[student.id]; }} autoPlay playsInline className="h-full w-full object-contain" />{!streams[student.id] && <span className="absolute inset-0 grid place-items-center text-sm text-white/70"><Monitor size={20} className="mr-2" />Connecting to {student.name}…</span>}<span className="absolute bottom-0 left-0 right-0 flex items-center justify-between bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-8 text-sm text-white"><span>{student.name}</span><Maximize2 size={16} /></span></button>)}</div>{!students.length && <div className="rounded-lg border border-border bg-canvas p-6 text-sm text-text-2">No students have started this exam yet.</div>}</>}</div>{selected && <div className="fixed inset-0 z-[100] grid place-items-center bg-black/90 p-6"><div className="relative flex h-full w-full max-w-7xl flex-col"><div className="mb-3 flex items-center justify-between text-white"><span>{selected.name} — live screen</span><Button variant="ghost" icon={X} onClick={() => setSelected(null)}>Close</Button></div><div className="grid flex-1 place-items-center overflow-hidden rounded-lg bg-black"><video ref={(node) => { if (node && selectedStream && node.srcObject !== selectedStream) node.srcObject = selectedStream; }} autoPlay playsInline className="max-h-full max-w-full" />{!selectedStream && <span className="text-sm text-white/70">Connecting…</span>}</div></div></div>}</DashboardLayout>;
 }

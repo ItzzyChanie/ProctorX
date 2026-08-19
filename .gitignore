@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+apps/ai-service/.venv/
+apps/ai-service/__pycache__/
 
 # Editor directories and files
 .vscode/*

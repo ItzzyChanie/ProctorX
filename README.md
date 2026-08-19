@@ -1,5 +1,17 @@
 # React + TypeScript + Vite
 
+## Local development
+
+Start infrastructure with `docker compose up -d`, then run each development service in its own terminal:
+
+```powershell
+npm run dev:web
+npm run dev:backend
+npm run dev:ai
+```
+
+The AI service uses Python 3.11 and its isolated environment at `apps/ai-service/.venv`. Its protected fuzzy scoring endpoint is available at `http://127.0.0.1:8000/docs`. `INTERNAL_API_KEY` in `apps/backend/.env` and `apps/ai-service/.env` must match.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

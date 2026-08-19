@@ -30,6 +30,7 @@ import Departments from "./pages/dean/Departments";
 import Reports from "./pages/dean/Reports";
 import AuditLogs from "./pages/dean/AuditLogs";
 import Security from "./pages/dean/Security";
+import StudentLists from "./pages/shared/StudentLists";
 
 import { Role } from "./types";
 import { api } from "./lib/api";
@@ -85,6 +86,7 @@ export default function App() {
           <Route path="/teacher/classes" element={<Classes />} />
           <Route path="/teacher/messages" element={<Messages />} />
           <Route path="/teacher/profile" element={<TeacherProfile />} />
+          <Route path="/teacher/students" element={<StudentLists role="teacher" />} />
         </Route>
 
         <Route element={<ProtectedRoute roles={[Role.DEAN]} />}>
@@ -95,6 +97,7 @@ export default function App() {
           <Route path="/dean/audit" element={<AuditLogs />} />
           <Route path="/dean/security" element={<Security />} />
           <Route path="/dean/profile" element={<DeanProfile />} />
+          <Route path="/dean/students" element={<StudentLists role="dean" />} />
         </Route>
         </Routes>
       </SessionBootstrap>

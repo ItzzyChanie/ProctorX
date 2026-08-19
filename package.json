@@ -9,6 +9,7 @@
   "scripts": {
     "dev:web": "npm run dev --workspace=web",
     "dev:backend": "npm run start:dev --workspace=backend",
+    "dev:ai": "powershell -ExecutionPolicy Bypass -File apps/ai-service/scripts/dev.ps1",
     "dev:desktop": "npm run dev --workspace=desktop",
     "build": "npm run build --workspaces --if-present",
     "db:up": "docker compose up -d",

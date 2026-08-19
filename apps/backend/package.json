@@ -7,7 +7,8 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "prisma": "prisma",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "test:password": "node --require ts-node/register --test src/users/import/password.util.spec.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
@@ -29,6 +30,7 @@
     "class-validator": "^0.14.1",
     "csv-parse": "^7.0.2",
     "helmet": "^8.0.0",
+    "nodemailer": "^9.0.5",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
@@ -43,6 +45,7 @@
     "@types/express": "^5.0.1",
     "@types/multer": "^2.2.0",
     "@types/node": "^22.13.14",
+    "@types/nodemailer": "^8.0.1",
     "@types/passport-jwt": "^4.0.1",
     "prisma": "^6.5.0",
     "ts-node": "^10.9.2",

@@ -7,11 +7,13 @@ import {
   Res,
   UseGuards,
 } from "@nestjs/common";
+import { Throttle, ThrottlerGuard } from "@nestjs/throttler";
 import type { Response } from "express";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { ChangePasswordDto } from "./dto/change-password.dto";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
+import { VerifyOtpDto } from "./dto/verify-otp.dto";
 
 @Controller("auth")
 export class AuthController {
@@ -31,16 +33,24 @@ export class AuthController {
   }
 
   @Post("login")
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async login(
     @Body() body: LoginDto,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const { accessToken, user } = await this.auth.login(
-      body.loginId,
-      body.password,
-    );
-    response.cookie("proctorx_session", accessToken, this.cookieOptions());
-    return { user };
+    const result = await this.auth.login(body.loginId, body.password);
+    if ("activationRequired" in result) return result;
+    response.cookie("proctorx_session", result.accessToken, this.cookieOptions());
+    return { user: result.user, passwordChangeRequired: result.user.mustChangePassword };
+  }
+  @Post("verify-activation")
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async verifyActivation(@Body() body: VerifyOtpDto, @Res({ passthrough: true }) response: Response) {
+    const result = await this.auth.verifyActivation(body.loginId, body.code);
+    response.cookie("proctorx_session", result.accessToken, this.cookieOptions());
+    return { user: result.user, passwordChangeRequired: true };
   }
   @Post("logout") logout(@Res({ passthrough: true }) response: Response) {
     response.clearCookie("proctorx_session", this.cookieOptions());

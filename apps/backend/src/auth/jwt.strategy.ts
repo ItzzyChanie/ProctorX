@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PassportStrategy } from "@nestjs/passport";
 import { ExtractJwt, Strategy } from "passport-jwt";
+import { AccountStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 
 function sessionCookie(request: { headers?: { cookie?: string } }): string | null {
@@ -42,7 +43,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         studentProfile: true,
       },
     });
-    if (!user || !user.isActive) throw new UnauthorizedException();
+    if (!user || !user.isActive || user.status === AccountStatus.DISABLED) throw new UnauthorizedException();
     return user;
   }
 }

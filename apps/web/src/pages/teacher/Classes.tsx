@@ -1,50 +1,8 @@
+import { useEffect, useState } from "react";
+import { Plus, UserPlus } from "lucide-react";
 import { DashboardLayout } from "../../components/layout/DashboardLayout";
 import { Card, CardHeader } from "../../components/ui/Card";
-import { SuspicionMeter } from "../../components/ui/SuspicionMeter";
-
-// Replace with GET /teacher/sections/:id/roster
-const rows = [
-  { name: "Reyes, Marco A.", sessions: 6, avg: 22 },
-  { name: "Santos, Angela P.", sessions: 6, avg: 61 },
-  { name: "Dela Cruz, Rico", sessions: 5, avg: 15 },
-  { name: "Garcia, Liza", sessions: 6, avg: 44 },
-];
-
-export default function Classes() {
-  return (
-    <DashboardLayout
-      role="teacher"
-      pageTitle="Classes & Students"
-      userName="Prof. Nathalie Eglea"
-      userTag="College of Computer Studies"
-    >
-      <Card padded={false}>
-        <div className="p-5">
-          <CardHeader
-            title="BSCS-4A roster"
-            subtitle="Aggregate suspicion history per student"
-          />
-        </div>
-        {rows.map((r, i) => (
-          <div
-            key={i}
-            className="flex items-center justify-between px-5 py-3.5"
-            style={{ borderTop: i > 0 ? "1px solid var(--border)" : "none" }}
-          >
-            <div className="font-body text-[13.5px] font-semibold text-text-1">
-              {r.name}
-            </div>
-            <div className="flex items-center gap-6">
-              <span className="font-body text-xs text-text-3">
-                {r.sessions} sessions
-              </span>
-              <div className="w-[140px]">
-                <SuspicionMeter score={r.avg} size="sm" />
-              </div>
-            </div>
-          </div>
-        ))}
-      </Card>
-    </DashboardLayout>
-  );
-}
+import { api } from "../../lib/api";
+type Subject={id:string;code:string;name:string;_count:{enrollments:number;exams:number}}; type Student={id:string;fullName:string;email:string;studentProfile:{studentId:string}}; type Q={type:string;prompt:string;points:number;correctAnswer:string;rubric:string;options:{label:string;isCorrect:boolean}[]};
+const blankQ=(type="MULTIPLE_CHOICE"):Q=>({type,prompt:"",points:1,correctAnswer:"",rubric:"",options:[{label:"",isCorrect:true},{label:"",isCorrect:false}]});
+export default function Classes(){const [subjects,setSubjects]=useState<Subject[]>([]),[active,setActive]=useState<Subject|null>(null),[code,setCode]=useState(""),[name,setName]=useState(""),[search,setSearch]=useState(""),[students,setStudents]=useState<Student[]>([]),[exam,setExam]=useState({title:"",instructions:"",durationMinutes:60,requireCamera:false,requireMicrophone:false,appPolicyMode:"BLACKLIST",appPolicyList:""}),[questions,setQuestions]=useState<Q[]>([blankQ()]),[notice,setNotice]=useState(""); const load=()=>api.get<Subject[]>("/subjects/mine").then(r=>setSubjects(r.data)); useEffect(()=>{void load()},[]); useEffect(()=>{if(active)api.get<Student[]>(`/subjects/${active.id}/available-students?search=${encodeURIComponent(search)}`).then(r=>setStudents(r.data))},[active,search]); const create=async(e:React.FormEvent)=>{e.preventDefault();await api.post('/subjects',{code,name});setCode('');setName('');setNotice('Subject created.');load()}; const enroll=async(id:string)=>{if(!active)return;await api.post(`/subjects/${active.id}/enrollments`,{studentId:id});setNotice('Student enrolled.');setStudents(v=>v.filter(s=>s.id!==id));load()}; const updateQ=(i:number,patch:Partial<Q>)=>setQuestions(v=>v.map((q,n)=>n===i?{...q,...patch}:q)); const saveExam=async(e:React.FormEvent)=>{e.preventDefault();if(!active)return;await api.post(`/subjects/${active.id}/exams`,{...exam,durationMinutes:Number(exam.durationMinutes),appPolicyList:exam.appPolicyList.split(',').map(x=>x.trim()).filter(Boolean),questions:questions.map(q=>({...q,correctAnswer:q.type==='ENUMERATION'?JSON.stringify(q.correctAnswer.split(',').map(x=>x.trim()).filter(Boolean)):JSON.stringify(q.correctAnswer)}))});setNotice('Exam draft saved.');setExam({...exam,title:'',instructions:''});setQuestions([blankQ()]);load()}; return <DashboardLayout role="teacher" pageTitle="Subjects & Exam Builder"><div className="grid gap-5 lg:grid-cols-[300px_1fr]"><div className="space-y-5"><Card><CardHeader title="Create subject"/><form onSubmit={create} className="space-y-3"><input required value={code} onChange={e=>setCode(e.target.value)} placeholder="Code (CS101)" className="w-full rounded border border-border p-2"/><input required value={name} onChange={e=>setName(e.target.value)} placeholder="Subject name" className="w-full rounded border border-border p-2"/><button className="w-full rounded bg-brand p-2 text-white"><Plus size={15} className="mr-1 inline"/>Create subject</button></form></Card><Card padded={false}><div className="p-4"><CardHeader title="My subjects"/></div>{subjects.map(s=><button key={s.id} onClick={()=>setActive(s)} className={`block w-full border-t border-border px-4 py-3 text-left ${active?.id===s.id?'bg-brand-soft':''}`}><b>{s.code}</b><div className="text-sm text-text-2">{s.name}</div><div className="text-xs text-text-3">{s._count.enrollments} students · {s._count.exams} exams</div></button>)}</Card></div><div>{!active?<Card><p className="text-text-3">Create or select a subject to manage its students and build an exam.</p></Card>:<div className="space-y-5"><Card><CardHeader title={`${active.code} — ${active.name}`} subtitle="Enroll existing Dean-provisioned student accounts"/><div className="mt-4"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by student name or ID" className="w-full rounded border border-border p-2"/>{students.slice(0,8).map(s=><div key={s.id} className="mt-2 flex items-center justify-between border-b border-border pb-2 text-sm"><span>{s.fullName} <small className="text-text-3">({s.studentProfile?.studentId})</small></span><button onClick={()=>void enroll(s.id)} className="text-brand"><UserPlus size={16}/></button></div>)}</div></Card><Card><CardHeader title="Manual exam / quiz builder" subtitle="Google Forms and AI generation are planned follow-ups; author questions directly here."/><form onSubmit={saveExam} className="mt-4 space-y-4"><div className="grid gap-3 md:grid-cols-2"><input required value={exam.title} onChange={e=>setExam({...exam,title:e.target.value})} placeholder="Exam title" className="rounded border border-border p-2"/><input required type="number" min="1" value={exam.durationMinutes} onChange={e=>setExam({...exam,durationMinutes:Number(e.target.value)})} placeholder="Duration minutes" className="rounded border border-border p-2"/></div><textarea value={exam.instructions} onChange={e=>setExam({...exam,instructions:e.target.value})} placeholder="Instructions (optional)" className="w-full rounded border border-border p-2"/><div className="flex flex-wrap gap-4 text-sm"><label><input type="checkbox" checked={exam.requireCamera} onChange={e=>setExam({...exam,requireCamera:e.target.checked})}/> Require camera</label><label><input type="checkbox" checked={exam.requireMicrophone} onChange={e=>setExam({...exam,requireMicrophone:e.target.checked})}/> Require microphone</label><select value={exam.appPolicyMode} onChange={e=>setExam({...exam,appPolicyMode:e.target.value})}><option value="BLACKLIST">Blacklisted apps</option><option value="WHITELIST">Allowed apps only</option></select><input value={exam.appPolicyList} onChange={e=>setExam({...exam,appPolicyList:e.target.value})} placeholder="Apps, comma-separated" className="rounded border border-border p-1"/></div>{questions.map((q,i)=><div key={i} className="rounded border border-border p-4"><div className="mb-2 flex gap-2"><select value={q.type} onChange={e=>updateQ(i,{type:e.target.value,options:e.target.value==='MULTIPLE_CHOICE'?q.options:[]})}><option value="MULTIPLE_CHOICE">Multiple choice</option><option value="ENUMERATION">Enumeration</option><option value="ESSAY">Essay</option><option value="IDENTIFICATION">Identification</option></select><input type="number" min="1" value={q.points} onChange={e=>updateQ(i,{points:Number(e.target.value)})} className="w-20 rounded border border-border p-1"/> <button type="button" onClick={()=>setQuestions(v=>v.filter((_,n)=>n!==i))} className="ml-auto text-red-500">Remove</button></div><textarea required value={q.prompt} onChange={e=>updateQ(i,{prompt:e.target.value})} placeholder="Question prompt" className="w-full rounded border border-border p-2"/>{q.type==='MULTIPLE_CHOICE'?<div className="mt-2 space-y-2">{q.options.map((o,n)=><div key={n} className="flex gap-2"><input value={o.label} required onChange={e=>updateQ(i,{options:q.options.map((x,j)=>j===n?{...x,label:e.target.value}:x)})} placeholder={`Option ${n+1}`} className="flex-1 rounded border border-border p-1"/><label><input type="radio" checked={o.isCorrect} onChange={()=>updateQ(i,{options:q.options.map((x,j)=>({...x,isCorrect:j===n}))})}/> Correct</label></div>)}<button type="button" className="text-sm text-brand" onClick={()=>updateQ(i,{options:[...q.options,{label:'',isCorrect:false}]})}>+ Option</button></div>:q.type==='ESSAY'?<textarea value={q.rubric} onChange={e=>updateQ(i,{rubric:e.target.value})} placeholder="Rubric / teacher guidance (optional)" className="mt-2 w-full rounded border border-border p-2"/>:<input required value={q.correctAnswer} onChange={e=>updateQ(i,{correctAnswer:e.target.value})} placeholder={q.type==='ENUMERATION'?'Accepted answers, comma-separated':'Correct answer'} className="mt-2 w-full rounded border border-border p-2"/>}</div>)}<button type="button" onClick={()=>setQuestions(v=>[...v,blankQ('IDENTIFICATION')])} className="text-brand">+ Add question</button><button className="ml-4 rounded bg-brand px-4 py-2 text-white">Save exam draft</button></form></Card></div>}</div></div>{notice&&<div className="fixed bottom-5 right-5 rounded bg-emerald-600 px-4 py-3 text-sm text-white">{notice}</div>}</DashboardLayout>}
