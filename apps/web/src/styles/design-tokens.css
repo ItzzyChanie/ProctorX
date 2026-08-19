@@ -1,0 +1,92 @@
+/* ProctorX SaaS design tokens — add to src/index.css (or globals.css), after your Tailwind directives */
+
+:root {
+  --font-head: "Space Grotesk", "Segoe UI", sans-serif;
+  --font-body: "Inter", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Courier New", monospace;
+
+  --canvas: #f4f6fb;
+  --surface: #ffffff;
+  --surface-2: #ffffff;
+  --border: #e4e8f0;
+  --border-strong: #cfd6e4;
+
+  --text-1: #111325;
+  --text-2: #5d6178;
+  --text-3: #9397ac;
+
+  --brand: #4f46e5;
+  --brand-hover: #4338ca;
+  --brand-soft: #eeecfd;
+  --brand-gradient: linear-gradient(
+    135deg,
+    #6d5cf6 0%,
+    #4f46e5 50%,
+    #3b82f6 100%
+  );
+
+  --risk-low: #0ea37b;
+  --risk-med: #e8a23b;
+  --risk-high: #e5484d;
+
+  --violet: #8b5cf6;
+  --cyan: #0ea5b7;
+  --pink: #ec4899;
+
+  --shadow-rest:
+    0 1px 2px rgba(15, 23, 42, 0.04), 0 10px 26px -18px rgba(30, 41, 59, 0.22);
+  --shadow-raised:
+    0 2px 5px rgba(15, 23, 42, 0.04), 0 18px 38px -24px rgba(30, 41, 59, 0.34);
+  --shadow-glow: 0 16px 34px -16px rgba(79, 70, 229, 0.42);
+  --glass: rgba(255, 255, 255, 0.82);
+}
+
+.dark {
+  --canvas: #08090f;
+  --surface: #12141c;
+  --surface-2: #191c27;
+  --border: rgba(148, 163, 184, 0.18);
+  --border-strong: rgba(148, 163, 184, 0.26);
+
+  --text-1: #f5f6fa;
+  --text-2: #9498ac;
+  --text-3: #5f6478;
+
+  --brand: #7c7bff;
+  --brand-hover: #9291ff;
+  --brand-soft: #201f3d;
+  --brand-gradient: linear-gradient(
+    135deg,
+    #8b7cff 0%,
+    #7c7bff 50%,
+    #5b9cff 100%
+  );
+
+  --risk-low: #1fd8a6;
+  --risk-med: #f5b94f;
+  --risk-high: #ff6369;
+
+  --violet: #a78bfa;
+  --cyan: #22d3ee;
+  --pink: #f472b6;
+
+  --shadow-rest:
+    0 1px 0 rgba(255, 255, 255, 0.035) inset,
+    0 12px 28px -16px rgba(0, 0, 0, 0.55);
+  --shadow-raised: 0 1px 0 rgba(255, 255, 255, 0.035) inset, 0 22px 40px -24px rgba(0, 0, 0, 0.72);
+  --shadow-glow: 0 16px 40px -12px rgba(124, 123, 255, 0.35);
+  --glass: rgba(20, 22, 32, 0.6);
+}
+
+body {
+  background: var(--canvas);
+  color: var(--text-1);
+  font-family: var(--font-body);
+}
+
+button,
+input,
+select,
+textarea {
+  border-color: var(--border) !important;
+}

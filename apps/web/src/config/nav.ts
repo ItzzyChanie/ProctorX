@@ -1,0 +1,150 @@
+import {
+  LayoutDashboard,
+  LogIn,
+  History,
+  Bell,
+  User,
+  Video,
+  FolderKanban,
+  PlayCircle,
+  FileWarning,
+  Upload,
+  Users,
+  MessageSquare,
+  Settings,
+  Shield,
+  FileText,
+  ClipboardList,
+  Clock,
+  GraduationCap,
+} from "lucide-react";
+import type { NavItem, Role } from "../types/dashboard";
+
+/**
+ * `path` values assume routes are namespaced by role, e.g. /student/*, /teacher/*, /dean/*.
+ * Adjust to match your actual router (React Router / file-based) when wiring this in.
+ */
+export const NAV: Record<Role, NavItem[]> = {
+  student: [
+    {
+      key: "dashboard",
+      label: "Dashboard",
+      icon: LayoutDashboard,
+      path: "/student",
+    },
+    { key: "join", label: "Join Session", icon: LogIn, path: "/student/join" },
+    {
+      key: "sessions",
+      label: "My Sessions",
+      icon: History,
+      path: "/student/sessions",
+    },
+    {
+      key: "notifications",
+      label: "Notifications",
+      icon: Bell,
+      path: "/student/notifications",
+    },
+    {
+      key: "profile",
+      label: "Profile & Device",
+      icon: User,
+      path: "/student/profile",
+    },
+  ],
+  teacher: [
+    {
+      key: "dashboard",
+      label: "Dashboard",
+      icon: LayoutDashboard,
+      path: "/teacher",
+    },
+    {
+      key: "monitoring",
+      label: "Live Monitoring",
+      icon: Video,
+      path: "/teacher/monitoring",
+    },
+    {
+      key: "sessions",
+      label: "Sessions",
+      icon: FolderKanban,
+      path: "/teacher/sessions",
+    },
+    {
+      key: "recordings",
+      label: "Recordings & Playback",
+      icon: PlayCircle,
+      path: "/teacher/recordings",
+    },
+    {
+      key: "incidents",
+      label: "Incident Reports",
+      icon: FileWarning,
+      path: "/teacher/incidents",
+    },
+    {
+      key: "correlation",
+      label: "Score Upload & Correlation",
+      icon: Upload,
+      path: "/teacher/correlation",
+    },
+    {
+      key: "classes",
+      label: "Classes & Students",
+      icon: Users,
+      path: "/teacher/classes",
+    },
+    {
+      key: "messages",
+      label: "Raise-Hand Queue",
+      icon: MessageSquare,
+      path: "/teacher/messages",
+    },
+    {
+      key: "profile",
+      label: "Profile & Settings",
+      icon: Settings,
+      path: "/teacher/profile",
+    },
+  ],
+  dean: [
+    {
+      key: "dashboard",
+      label: "Dashboard",
+      icon: LayoutDashboard,
+      path: "/dean",
+    },
+    {
+      key: "analytics",
+      label: "Analytics",
+      icon: FileText,
+      path: "/dean/analytics",
+    },
+    {
+      key: "departments",
+      label: "Departments & Professors",
+      icon: GraduationCap,
+      path: "/dean/departments",
+    },
+    {
+      key: "reports",
+      label: "Reports",
+      icon: ClipboardList,
+      path: "/dean/reports",
+    },
+    { key: "audit", label: "Audit Logs", icon: Clock, path: "/dean/audit" },
+    {
+      key: "security",
+      label: "Security & Access",
+      icon: Shield,
+      path: "/dean/security",
+    },
+    {
+      key: "profile",
+      label: "Profile & Settings",
+      icon: Settings,
+      path: "/dean/profile",
+    },
+  ],
+};

@@ -24,13 +24,50 @@ model User {
   isActive            Boolean  @default(true)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
-  studentId           String?  @unique
-  yearLevel           String?
-  program             String?
-  employeeId          String?  @unique
   permissionOverrides UserPermission[]
+  deanProfile         DeanProfile?
+  teacherProfile      TeacherProfile?
+  studentProfile      StudentProfile?
 
   @@map("users")
+}
+
+model DeanProfile {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  employeeId String?  @unique
+  college    String?
+  title      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("dean_profiles")
+}
+
+model TeacherProfile {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  employeeId String?  @unique
+  department String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("teacher_profiles")
+}
+
+model StudentProfile {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  studentId String?  @unique
+  yearLevel String?
+  program   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("student_profiles")
 }
 
 model Permission {

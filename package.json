@@ -11,9 +11,11 @@
     "dev:backend": "npm run start:dev --workspace=backend",
     "dev:desktop": "npm run dev --workspace=desktop",
     "build": "npm run build --workspaces --if-present",
+    "db:up": "docker compose up -d",
     "db:migrate": "npm run prisma --workspace=backend -- migrate dev",
     "db:studio": "npm run prisma --workspace=backend -- studio",
-    "db:seed": "npm run db:seed --workspace=backend"
+    "db:seed": "npm run db:seed --workspace=backend",
+    "db:setup": "npm run db:up && npm run db:migrate && npm run db:seed"
   },
   "engines": {
     "node": ">=20.19.0",

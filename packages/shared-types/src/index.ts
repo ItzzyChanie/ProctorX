@@ -21,4 +21,4 @@ export interface User {
 }
 
 export interface LoginRequest { loginId: string; password: string }
-export interface LoginResponse { accessToken: string; user: User }
+export interface LoginResponse { user: User }

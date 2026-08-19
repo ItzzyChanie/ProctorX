@@ -30,13 +30,13 @@ export class ImportService {
     const seen = new Set<string>()
     const valid = candidates.filter((candidate) => { const key = `${candidate.identifier}|${candidate.email}`; if (seen.has(key)) { skipped.push({ row: candidate.row, reason: 'Duplicate identifier or email in file' }); return false }; seen.add(key); return true })
     const where: Prisma.UserWhereInput[] = []
-    valid.forEach((candidate) => { if (role === Role.STUDENT) where.push({ studentId: candidate.identifier }, { email: candidate.email }, { loginId: candidate.identifier }); else where.push({ employeeId: candidate.identifier }, { email: candidate.email }, { loginId: candidate.email }) })
-    const existing = await this.prisma.user.findMany({ where: { OR: where }, select: { email: true, loginId: true, studentId: true, employeeId: true } })
+    valid.forEach((candidate) => { if (role === Role.STUDENT) where.push({ studentProfile: { is: { studentId: candidate.identifier } } }, { email: candidate.email }, { loginId: candidate.identifier }); else where.push({ teacherProfile: { is: { employeeId: candidate.identifier } } }, { email: candidate.email }, { loginId: candidate.email }) })
+    const existing = await this.prisma.user.findMany({ where: { OR: where }, select: { email: true, loginId: true, studentProfile: { select: { studentId: true } }, teacherProfile: { select: { employeeId: true } } } })
     const credentials: Result['credentials'] = []
     for (const candidate of valid) {
-      const clash = existing.some((user) => user.email === candidate.email || user.loginId === (role === Role.STUDENT ? candidate.identifier : candidate.email) || user.studentId === candidate.identifier || user.employeeId === candidate.identifier)
+      const clash = existing.some((user) => user.email === candidate.email || user.loginId === (role === Role.STUDENT ? candidate.identifier : candidate.email) || user.studentProfile?.studentId === candidate.identifier || user.teacherProfile?.employeeId === candidate.identifier)
       if (clash) { skipped.push({ row: candidate.row, reason: 'Identifier or email already exists' }); continue }
-      await this.prisma.user.create({ data: role === Role.STUDENT ? { role, loginId: candidate.identifier, studentId: candidate.identifier, email: candidate.email, fullName: candidate.fullName, yearLevel: candidate.yearLevel || null, program: candidate.program || null, passwordHash: await bcrypt.hash(candidate.password, 12) } : { role, loginId: candidate.email, employeeId: candidate.identifier, email: candidate.email, fullName: candidate.fullName, passwordHash: await bcrypt.hash(candidate.password, 12) } })
+      await this.prisma.user.create({ data: role === Role.STUDENT ? { role, loginId: candidate.identifier, email: candidate.email, fullName: candidate.fullName, passwordHash: await bcrypt.hash(candidate.password, 12), studentProfile: { create: { studentId: candidate.identifier, yearLevel: candidate.yearLevel || null, program: candidate.program || null } } } : { role, loginId: candidate.email, email: candidate.email, fullName: candidate.fullName, passwordHash: await bcrypt.hash(candidate.password, 12), teacherProfile: { create: { employeeId: candidate.identifier } } } })
       credentials.push({ row: candidate.row, loginId: role === Role.STUDENT ? candidate.identifier : candidate.email, fullName: candidate.fullName, password: candidate.password })
     }
     return { imported: credentials.length, skipped, credentials }
