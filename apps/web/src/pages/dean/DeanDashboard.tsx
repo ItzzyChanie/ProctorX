@@ -1,9 +1,9 @@
+import { useQuery } from '@tanstack/react-query';
 import {
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
-  Legend,
   Line,
   LineChart,
   Pie,
@@ -12,186 +12,194 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-} from "recharts";
+} from 'recharts';
 import {
   AlertTriangle,
   FileText,
   FileWarning,
   Shield,
   Video,
-} from "lucide-react";
-import { DashboardLayout } from "../../components/layout/DashboardLayout";
-import { Card, CardHeader } from "../../components/ui/Card";
-import { HeroBanner } from "../../components/ui/HeroBanner";
-import { Button } from "../../components/ui/Button";
-import { KPI } from "../../components/ui/KPI";
-import { useAuthStore } from "../../store/authStore";
+} from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { DashboardLayout } from '../../components/layout/DashboardLayout';
+import { Card, CardHeader } from '../../components/ui/Card';
+import { HeroBanner } from '../../components/ui/HeroBanner';
+import { Button } from '../../components/ui/Button';
+import { KPI } from '../../components/ui/KPI';
 import {
   axisProps,
   INCIDENT_COLORS,
   tooltipProps,
-} from "../../components/charts/chartTheme";
-import { useChartPalette, riskTier } from "../../lib/chartPalette";
-import { useTheme } from "../../lib/useTheme";
-import {
-  incidenceTrend,
-  incidentTypes,
-  sectionSuspicion,
-  subjectIncidence,
-} from "../../data/mockDashboard";
-
+} from '../../components/charts/chartTheme';
+import { useChartPalette } from '../../lib/chartPalette';
+import { useTheme } from '../../lib/useTheme';
+import { api } from '../../lib/api';
+type Data = {
+  kpis: {
+    monitoredSessionsThisTerm: number;
+    collegeWideAvgSuspicion: number;
+    incidentRatePercent: number;
+    sectionsAboveThreshold: number;
+  };
+  incidenceRateBySection: { section: string; rate: number }[];
+  incidentsByType: { type: string; count: number }[];
+  incidenceRateTrend: { week: string; rate: number }[];
+  incidenceRateBySubject: { subject: string; rate: number }[];
+};
 export default function DeanDashboard() {
-  const { dark } = useTheme();
-  const p = useChartPalette(dark);
-  const { user } = useAuthStore();
-
+  const { dark } = useTheme(),
+    p = useChartPalette(dark),
+    nav = useNavigate();
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['dean-dashboard'],
+    queryFn: async () => (await api.get<Data>('/dean/dashboard')).data,
+  });
+  const k = data?.kpis;
   return (
     <DashboardLayout
       role="dean"
       pageTitle="Dashboard"
-      userName={user?.fullName ?? "Dean"}
-      userTag={
-        user?.employeeId
-          ? `Employee ${user.employeeId}`
-          : "School of Computer Studies"
-      }
+      userName="Dean"
+      userTag="School of Computer Studies"
     >
       <div className="flex flex-col gap-5">
+        {isLoading && <Card>Loading dashboard…</Card>}
+        {isError && (
+          <Card>
+            <span className="text-risk-high">
+              Could not load dean dashboard.
+            </span>
+          </Card>
+        )}
         <HeroBanner
           eyebrow="School of Computer Studies"
-          title="Academic integrity is trending healthy this term"
-          subtitle="College-wide suspicion is down 3.8% from last term, with 3 sections above the review threshold."
-          stat="17%"
-          statLabel="Overall incidence rate"
+          title="Academic integrity overview"
+          subtitle="Department-wide figures from monitored sessions."
+          stat={`${k?.incidentRatePercent ?? 0}%`}
+          statLabel="Overall incident rate"
           cta={
             <Button
               variant="ghost"
               icon={FileText}
-              className="!bg-white/15 !text-white !border-white/35"
+              className="!bg-white/15 !text-white !border-white/35 hover:!bg-white/25 hover:!border-white/60 hover:shadow-lg"
+              onClick={() => nav('/dean/analytics')}
             >
               View full analytics
             </Button>
           }
         />
-
         <div
           className="grid gap-4"
-          style={{ gridTemplateColumns: "repeat(4, 1fr)" }}
+          style={{ gridTemplateColumns: 'repeat(4,1fr)' }}
         >
           <KPI
-            label="Monitored sessions (term)"
-            value="1,248"
-            delta={12.4}
+            label="Monitored sessions"
+            value={k?.monitoredSessionsThisTerm ?? 0}
             icon={Video}
             accent={0}
           />
           <KPI
-            label="College-wide avg. suspicion"
-            value="29"
-            delta={-3.8}
+            label="Avg. suspicion"
+            value={k?.collegeWideAvgSuspicion ?? 0}
             icon={Shield}
             accent={2}
           />
           <KPI
             label="Incident rate"
-            value="17%"
-            delta={1.1}
+            value={`${k?.incidentRatePercent ?? 0}%`}
             icon={FileWarning}
             accent={3}
           />
           <KPI
             label="Sections above threshold"
-            value="3"
-            delta={0}
+            value={k?.sectionsAboveThreshold ?? 0}
             icon={AlertTriangle}
             accent={1}
           />
         </div>
-
         <div
           className="grid gap-5"
-          style={{ gridTemplateColumns: "1.3fr 1fr" }}
+          style={{ gridTemplateColumns: '1.3fr 1fr' }}
         >
           <Card>
-            <CardHeader title="Cheating-incidence rate by section" />
-            <ResponsiveContainer width="100%" height={230}>
-              <BarChart data={sectionSuspicion}>
-                <CartesianGrid stroke={p.border} vertical={false} />
-                <XAxis dataKey="section" {...axisProps(p)} />
-                <YAxis {...axisProps(p)} />
-                <Tooltip {...tooltipProps(p)} />
-                <Bar dataKey="avg" fill={p.violet} radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <CardHeader title="Incident rate by section" />
+            {data?.incidenceRateBySection.length ? (
+              <ResponsiveContainer width="100%" height={230}>
+                <BarChart data={data.incidenceRateBySection}>
+                  <CartesianGrid stroke={p.border} vertical={false} />
+                  <XAxis dataKey="section" {...axisProps(p)} />
+                  <YAxis {...axisProps(p)} />
+                  <Tooltip {...tooltipProps(p)} />
+                  <Bar dataKey="rate" fill={p.violet} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-text-2">No filtered session data.</p>
+            )}
           </Card>
           <Card>
-            <CardHeader title="Incidents by type" subtitle="College-wide" />
-            <ResponsiveContainer width="100%" height={230}>
-              <PieChart>
-                <Pie
-                  data={incidentTypes}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius={52}
-                  outerRadius={82}
-                  paddingAngle={3}
-                >
-                  {incidentTypes.map((_, i) => (
-                    <Cell key={i} fill={INCIDENT_COLORS(p)[i]} />
-                  ))}
-                </Pie>
-                <Tooltip {...tooltipProps(p)} />
-                <Legend
-                  wrapperStyle={{
-                    fontFamily: "var(--font-body)",
-                    fontSize: 11.5,
-                    color: p.textSecondary,
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+            <CardHeader title="Incidents by type" />
+            {data?.incidentsByType.length ? (
+              <ResponsiveContainer width="100%" height={230}>
+                <PieChart>
+                  <Pie
+                    data={data.incidentsByType.map((x) => ({
+                      name: x.type,
+                      value: x.count,
+                    }))}
+                    dataKey="value"
+                    nameKey="name"
+                  >
+                    {data.incidentsByType.map((_, i) => (
+                      <Cell key={i} fill={INCIDENT_COLORS(p)[i]} />
+                    ))}
+                  </Pie>
+                  <Tooltip {...tooltipProps(p)} />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-text-2">No incidents recorded.</p>
+            )}
           </Card>
         </div>
-
-        <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+        <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 1fr' }}>
           <Card>
             <CardHeader title="Incidence-rate trend" subtitle="This semester" />
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={incidenceTrend}>
-                <CartesianGrid stroke={p.border} vertical={false} />
-                <XAxis dataKey="week" {...axisProps(p)} />
-                <YAxis unit="%" {...axisProps(p)} />
-                <Tooltip {...tooltipProps(p)} />
-                <Line
-                  type="monotone"
-                  dataKey="rate"
-                  stroke={p.riskHigh}
-                  strokeWidth={2.5}
-                  dot={{ r: 3 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            {data?.incidenceRateTrend.length ? (
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={data.incidenceRateTrend}>
+                  <CartesianGrid stroke={p.border} vertical={false} />
+                  <XAxis dataKey="week" {...axisProps(p)} />
+                  <YAxis {...axisProps(p)} />
+                  <Tooltip {...tooltipProps(p)} />
+                  <Line
+                    type="monotone"
+                    dataKey="rate"
+                    stroke={p.brand}
+                    strokeWidth={2.5}
+                    dot={{ r: 3 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-text-2">No trend data yet.</p>
+            )}
           </Card>
           <Card>
-            <CardHeader title="Incidence rate by subject" />
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart
-                data={subjectIncidence}
-                layout="vertical"
-                margin={{ left: 24 }}
-              >
-                <CartesianGrid stroke={p.border} horizontal={false} />
-                <XAxis type="number" unit="%" {...axisProps(p)} />
-                <YAxis
-                  type="category"
-                  dataKey="subject"
-                  width={110}
-                  {...axisProps(p)}
-                />
-                <Tooltip {...tooltipProps(p)} />
-                <Bar dataKey="rate" fill={p.cyan} radius={[0, 6, 6, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <CardHeader title="Incident rate by subject" />
+            {data?.incidenceRateBySubject.length ? (
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={data.incidenceRateBySubject}>
+                  <CartesianGrid stroke={p.border} vertical={false} />
+                  <XAxis dataKey="subject" {...axisProps(p)} />
+                  <YAxis {...axisProps(p)} />
+                  <Tooltip {...tooltipProps(p)} />
+                  <Bar dataKey="rate" fill={p.cyan} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-text-2">No subject data.</p>
+            )}
           </Card>
         </div>
       </div>

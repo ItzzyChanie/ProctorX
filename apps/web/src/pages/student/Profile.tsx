@@ -1,13 +1,13 @@
-import { Monitor } from "lucide-react";
-import { DashboardLayout } from "../../components/layout/DashboardLayout";
-import { Card, CardHeader } from "../../components/ui/Card";
+import { Monitor } from 'lucide-react';
+import { DashboardLayout } from '../../components/layout/DashboardLayout';
+import { Card, CardHeader } from '../../components/ui/Card';
 
 // Replace field values with the logged-in user from your auth/session store.
 const fields = [
-  { label: "Full name", value: "Jefferson B. Palceso" },
-  { label: "Student number", value: "2023-00412" },
-  { label: "Program", value: "BS Computer Science" },
-  { label: "Email", value: "j.palceso@au.edu.ph" },
+  { label: 'Full name', value: 'Jefferson B. Palceso' },
+  { label: 'Student number', value: '2023-00412' },
+  { label: 'Program', value: 'BS Computer Science' },
+  { label: 'Email', value: 'j.palceso@au.edu.ph' },
 ];
 
 export default function Profile() {
@@ -18,7 +18,7 @@ export default function Profile() {
       userName="Jefferson Palceso"
       userTag="BSCS-4A · Student"
     >
-      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <Card>
           <CardHeader title="Profile" />
           {fields.map((f, i) => (

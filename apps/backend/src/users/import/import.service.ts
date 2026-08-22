@@ -2,22 +2,23 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-} from "@nestjs/common";
-import { AccountStatus, ImportRowResult, Role } from "@prisma/client";
-import bcrypt from "bcrypt";
-import * as XLSX from "xlsx";
-import { PrismaService } from "../../prisma/prisma.service";
-import { CreateStudentDto } from "../dto/create-student.dto";
-import { generateDefaultPassword } from "./password.util";
+} from '@nestjs/common';
+import { AccountStatus, ImportRowResult, Role } from '@prisma/client';
+import bcrypt from 'bcrypt';
+import { validateOrReject } from 'class-validator';
+import * as XLSX from 'xlsx';
+import { PrismaService } from '../../prisma/prisma.service';
+import { CreateStudentDto } from '../dto/create-student.dto';
+import { generateDefaultPassword } from './password.util';
 
 const columns = [
-  "Student ID",
-  "First Name",
-  "Middle Name",
-  "Last Name",
-  "Program",
-  "Year Level",
-  "Email",
+  'Student ID',
+  'First Name',
+  'Middle Name',
+  'Last Name',
+  'Program',
+  'Year Level',
+  'Email',
 ] as const;
 type SpreadsheetRow = Record<(typeof columns)[number], unknown>;
 
@@ -30,17 +31,17 @@ export class ImportService {
     XLSX.utils.book_append_sheet(
       workbook,
       XLSX.utils.aoa_to_sheet([[...columns]]),
-      "Students",
+      'Students'
     );
-    return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
   }
 
   private readRows(file: Express.Multer.File): SpreadsheetRow[] {
-    if (!file || !file.originalname.toLowerCase().endsWith(".xlsx"))
-      throw new BadRequestException("Upload the provided .xlsx template");
-    const workbook = XLSX.read(file.buffer, { type: "buffer" });
+    if (!file || !file.originalname.toLowerCase().endsWith('.xlsx'))
+      throw new BadRequestException('Upload the provided .xlsx template');
+    const workbook = XLSX.read(file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
-    if (!sheetName) throw new BadRequestException("Workbook has no sheets");
+    if (!sheetName) throw new BadRequestException('Workbook has no sheets');
     const sheet = workbook.Sheets[sheetName]!;
     const header = (
       XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 })[0] ?? []
@@ -50,9 +51,9 @@ export class ImportService {
       columns.some((column, index) => header[index] !== column)
     )
       throw new BadRequestException(
-        `Expected columns exactly: ${columns.join(", ")}`,
+        `Expected columns exactly: ${columns.join(', ')}`
       );
-    return XLSX.utils.sheet_to_json<SpreadsheetRow>(sheet, { defval: "" });
+    return XLSX.utils.sheet_to_json<SpreadsheetRow>(sheet, { defval: '' });
   }
 
   private async assertAvailable(studentId: string, email: string) {
@@ -67,7 +68,7 @@ export class ImportService {
       select: { id: true },
     });
     if (existing)
-      throw new ConflictException("Student ID or email already exists");
+      throw new ConflictException('Student ID or email already exists');
   }
 
   async createStudent(input: CreateStudentDto, actorId: string) {
@@ -78,14 +79,17 @@ export class ImportService {
     const fullName = [input.firstName, input.middleName, input.lastName]
       .filter(Boolean)
       .map((value) => value!.trim())
-      .join(" ");
+      .join(' ');
     const user = await this.prisma.user.create({
       data: {
         role: Role.STUDENT,
         loginId: studentId,
         email,
         fullName,
-        passwordHash: await bcrypt.hash(initialPassword.toLocaleLowerCase(), 12),
+        passwordHash: await bcrypt.hash(
+          initialPassword.toLocaleLowerCase(),
+          12
+        ),
         status: AccountStatus.PENDING,
         mustChangePassword: true,
         studentProfile: {
@@ -107,8 +111,8 @@ export class ImportService {
     await this.prisma.auditLog.create({
       data: {
         actorId,
-        action: "STUDENT_ACCOUNT_CREATED",
-        targetType: "User",
+        action: 'STUDENT_ACCOUNT_CREATED',
+        targetType: 'User',
         targetId: user.id,
       },
     });
@@ -136,27 +140,31 @@ export class ImportService {
     for (const [index, row] of rows.entries()) {
       const rowNumber = index + 2;
       const input: CreateStudentDto = {
-        studentId: String(row["Student ID"] ?? "").trim(),
-        firstName: String(row["First Name"] ?? "").trim(),
-        middleName: String(row["Middle Name"] ?? "").trim(),
-        lastName: String(row["Last Name"] ?? "").trim(),
-        program: String(row.Program ?? "").trim(),
-        yearLevel: String(row["Year Level"] ?? "").trim(),
-        email: String(row.Email ?? "").trim(),
+        studentId: String(row['Student ID'] ?? '').trim(),
+        firstName: String(row['First Name'] ?? '').trim(),
+        middleName: String(row['Middle Name'] ?? '').trim(),
+        lastName: String(row['Last Name'] ?? '').trim(),
+        program: String(row.Program ?? '').trim(),
+        yearLevel: String(row['Year Level'] ?? '').trim(),
+        email: String(row.Email ?? '').trim(),
       };
       try {
+        await validateOrReject(input, {
+          whitelist: true,
+          forbidNonWhitelisted: true,
+        });
         if (
           ![
             input.studentId,
-          input.firstName,
-          input.middleName,
+            input.firstName,
+            input.middleName,
             input.lastName,
             input.program,
             input.yearLevel,
             input.email,
           ].every(Boolean)
         )
-          throw new BadRequestException("Missing one or more required values");
+          throw new BadRequestException('Missing one or more required values');
         const created = await this.createStudent(input, actorId);
         await this.prisma.studentImportRow.create({
           data: {
@@ -176,7 +184,7 @@ export class ImportService {
         });
       } catch (error) {
         const errorMessage =
-          error instanceof Error ? error.message : "Unexpected import error";
+          error instanceof Error ? error.message : 'Unexpected import error';
         const result =
           error instanceof ConflictException
             ? ImportRowResult.SKIPPED_DUPLICATE
@@ -189,7 +197,7 @@ export class ImportService {
             fullName:
               [input.firstName, input.middleName, input.lastName]
                 .filter(Boolean)
-                .join(" ") || null,
+                .join(' ') || null,
             email: input.email || null,
             result,
             errorMessage,
@@ -199,10 +207,10 @@ export class ImportService {
       }
     }
     const createdRows = resultRows.filter(
-      (row) => row.result === ImportRowResult.CREATED,
+      (row) => row.result === ImportRowResult.CREATED
     ).length;
     const skippedRows = resultRows.filter(
-      (row) => row.result === ImportRowResult.SKIPPED_DUPLICATE,
+      (row) => row.result === ImportRowResult.SKIPPED_DUPLICATE
     ).length;
     const errorRows = resultRows.length - createdRows - skippedRows;
     await this.prisma.studentImportBatch.update({
@@ -212,8 +220,8 @@ export class ImportService {
     await this.prisma.auditLog.create({
       data: {
         actorId,
-        action: "STUDENT_IMPORT_COMPLETED",
-        targetType: "StudentImportBatch",
+        action: 'STUDENT_IMPORT_COMPLETED',
+        targetType: 'StudentImportBatch',
         targetId: batch.id,
         metadata: { createdRows, skippedRows, errorRows },
       },

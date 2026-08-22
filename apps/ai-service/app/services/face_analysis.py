@@ -6,8 +6,6 @@ import mediapipe as mp
 import numpy as np
 
 SAMPLE_SECONDS = 3
-
-
 class FaceAnalyzer:
 
     def __init__(self):

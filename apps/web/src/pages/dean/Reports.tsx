@@ -1,41 +1,182 @@
-import { FileText } from "lucide-react";
-import { DashboardLayout } from "../../components/layout/DashboardLayout";
-import { Card, CardHeader } from "../../components/ui/Card";
-import { Button } from "../../components/ui/Button";
-import { Chip } from "../../components/ui/Chip";
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { FileText } from 'lucide-react';
+import { z } from 'zod';
+import { api } from '../../lib/api';
+import { DashboardLayout } from '../../components/layout/DashboardLayout';
+import { Button } from '../../components/ui/Button';
+import { Card, CardHeader } from '../../components/ui/Card';
+import { Chip } from '../../components/ui/Chip';
 
-// Replace with GET /dean/reports ; "Generate" should POST /dean/reports with the chosen filters
-const rows = [
-  { name: "Q2 Accreditation Summary", date: "Aug 1, 2026", fmt: "PDF" },
-  {
-    name: "Cheating Incidence — All Sections",
-    date: "Jul 15, 2026",
-    fmt: "Excel",
-  },
-];
+type Report = {
+  id: string;
+  name: string;
+  format: 'PDF' | 'EXCEL';
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETE' | 'FAILED';
+  createdAt: string;
+  downloadPath: string | null;
+};
+const reportSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    dateFrom: z.string().date(),
+    dateTo: z.string().date(),
+    format: z.enum(['pdf', 'excel']),
+  })
+  .refine((x) => x.dateFrom <= x.dateTo, {
+    path: ['dateTo'],
+    message: 'End date must be after start date.',
+  });
 
 export default function Reports() {
+  const client = useQueryClient();
+  const [form, setForm] = useState({
+    name: '',
+    dateFrom: '',
+    dateTo: '',
+    format: 'pdf' as 'pdf' | 'excel',
+  });
+  const [message, setMessage] = useState('');
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const {
+    data: rows = [],
+    isLoading,
+    isError,
+  } = useQuery({
+    queryKey: ['dean-reports'],
+    queryFn: async () => (await api.get<Report[]>('/dean/reports')).data,
+    refetchInterval: (q) =>
+      q.state.data?.some(
+        (r) => r.status === 'PENDING' || r.status === 'PROCESSING'
+      )
+        ? 2500
+        : false,
+  });
+  const create = useMutation({
+    mutationFn: (data: z.infer<typeof reportSchema>) =>
+      api.post('/dean/reports', data),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ['dean-reports'] });
+      setMessage('Report queued for generation.');
+      setForm({ name: '', dateFrom: '', dateTo: '', format: 'pdf' });
+    },
+    onError: () => setMessage('Could not queue the report.'),
+  });
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const parsed = reportSchema.safeParse(form);
+    if (!parsed.success) {
+      setMessage(
+        parsed.error.issues[0]?.message ?? 'Check the report details.'
+      );
+      return;
+    }
+    create.mutate(parsed.data);
+  };
+  const download = async (report: Report) => {
+    if (!report.downloadPath) return;
+    setDownloadingId(report.id);
+    try {
+      const response = await api.get(report.downloadPath, {
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${report.name}.${
+        report.format === 'PDF' ? 'pdf' : 'xlsx'
+      }`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setMessage('Report downloaded successfully.');
+    } catch {
+      setMessage('Could not download the report.');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
   return (
     <DashboardLayout
       role="dean"
       pageTitle="Reports"
-      userName="Dean R. Villanueva"
+      userName="Dean"
       userTag="School of Computer Studies"
     >
       <div className="flex flex-col gap-5">
         <Card>
           <CardHeader
             title="Build a report"
-            subtitle="Choose a date range, sections, and metrics to include"
-            right={<Button>Generate</Button>}
+            subtitle="Date range and output format are required."
           />
+          <form onSubmit={submit} className="grid gap-3 md:grid-cols-4">
+            <input
+              required
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="Report name"
+              className="rounded border border-border p-2"
+            />
+            <input
+              required
+              type="date"
+              value={form.dateFrom}
+              onChange={(e) => setForm({ ...form, dateFrom: e.target.value })}
+              className="rounded border border-border p-2"
+            />
+            <input
+              required
+              type="date"
+              value={form.dateTo}
+              onChange={(e) => setForm({ ...form, dateTo: e.target.value })}
+              className="rounded border border-border p-2"
+            />
+            <div className="flex gap-2">
+              <select
+                value={form.format}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    format: e.target.value as 'pdf' | 'excel',
+                  })
+                }
+                className="flex-1 rounded border border-border p-2"
+              >
+                <option value="pdf">PDF</option>
+                <option value="excel">Excel</option>
+              </select>
+              <Button disabled={create.isPending}>
+                {create.isPending ? 'Queuing…' : 'Generate'}
+              </Button>
+            </div>
+          </form>
+          {message && (
+            <p
+              role="status"
+              className="fixed bottom-5 right-5 z-50 rounded bg-brand px-4 py-3 text-sm text-white shadow-lg"
+            >
+              {message}
+            </p>
+          )}
         </Card>
         <Card padded={false}>
+          {isLoading && (
+            <div className="p-5 text-sm text-text-2">Loading reports…</div>
+          )}
+          {isError && (
+            <div className="p-5 text-sm text-risk-high">
+              Could not load reports.
+            </div>
+          )}
+          {!isLoading && !isError && !rows.length && (
+            <div className="p-5 text-sm text-text-2">
+              No reports have been requested.
+            </div>
+          )}
           {rows.map((r, i) => (
             <div
-              key={i}
+              key={r.id}
               className="flex items-center justify-between px-5 py-3.5"
-              style={{ borderTop: i > 0 ? "1px solid var(--border)" : "none" }}
+              style={{ borderTop: i ? '1px solid var(--border)' : 'none' }}
             >
               <div className="flex items-center gap-3">
                 <FileText size={17} className="text-text-3" />
@@ -44,11 +185,38 @@ export default function Reports() {
                     {r.name}
                   </div>
                   <div className="font-body text-[11.5px] text-text-3">
-                    {r.date}
+                    {new Date(r.createdAt).toLocaleString()}
+                    {r.downloadPath && (
+                      <>
+                        {' '}
+                        ·{' '}
+                        <button
+                          type="button"
+                          disabled={downloadingId === r.id}
+                          onClick={() => void download(r)}
+                          className="text-brand underline disabled:opacity-50"
+                        >
+                          {downloadingId === r.id ? 'Downloading…' : 'Download'}
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
-              <Chip color="var(--brand)">{r.fmt}</Chip>
+              <div className="flex gap-2">
+                <Chip color="var(--brand)">{r.format}</Chip>
+                <Chip
+                  color={
+                    r.status === 'FAILED'
+                      ? 'var(--risk-high)'
+                      : r.status === 'COMPLETE'
+                        ? 'var(--risk-low)'
+                        : 'var(--risk-med)'
+                  }
+                >
+                  {r.status}
+                </Chip>
+              </div>
             </div>
           ))}
         </Card>

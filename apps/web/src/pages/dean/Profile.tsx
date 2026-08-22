@@ -1,13 +1,13 @@
-import { KeyRound, ShieldCheck } from "lucide-react";
-import { DashboardLayout } from "../../components/layout/DashboardLayout";
-import { Card, CardHeader } from "../../components/ui/Card";
-import { useAuthStore } from "../../store/authStore";
+import { KeyRound, ShieldCheck } from 'lucide-react';
+import { DashboardLayout } from '../../components/layout/DashboardLayout';
+import { Card, CardHeader } from '../../components/ui/Card';
+import { useAuthStore } from '../../store/authStore';
 
 const fields = [
-  { label: "Full name", value: "Dean Villanueva" },
-  { label: "Employee ID", value: "D-2026-007" },
-  { label: "Office", value: "Office of the Dean" },
-  { label: "Email", value: "dean@school.edu" },
+  { label: 'Full name', value: 'Dean Villanueva' },
+  { label: 'Employee ID', value: 'D-2026-007' },
+  { label: 'Office', value: 'Office of the Dean' },
+  { label: 'Email', value: 'dean@school.edu' },
 ];
 
 export default function DeanProfile() {
@@ -17,14 +17,14 @@ export default function DeanProfile() {
     <DashboardLayout
       role="dean"
       pageTitle="Profile & Settings"
-      userName={user?.fullName ?? "Dean Villanueva"}
+      userName={user?.fullName ?? 'Dean Villanueva'}
       userTag={
         user?.employeeId
           ? `Employee ${user.employeeId}`
-          : "School of Computer Studies"
+          : 'School of Computer Studies'
       }
     >
-      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <Card>
           <CardHeader title="Profile" />
           {fields.map((f, i) => (

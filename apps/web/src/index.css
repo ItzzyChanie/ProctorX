@@ -58,6 +58,30 @@ body {
   overflow-x: hidden;
 }
 
+/* Every interactive control across the public site and authenticated portals
+   advertises clickability consistently. */
+button:not(:disabled),
+select:not(:disabled),
+summary,
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled,
+[role="button"][aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+.app-shell button:not(:disabled) {
+  transition-property: color, background-color, border-color, box-shadow, opacity, transform, filter;
+  transition-duration: 180ms;
+}
+
+.app-shell button:not(:disabled):hover {
+  filter: brightness(1.06);
+}
+
 /* Shared authenticated-portal frame: navigation remains stationary while only
    the content panel is allowed to scroll. */
 .app-shell {

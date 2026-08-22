@@ -1,22 +1,30 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
+  Patch,
   Post,
-  Query,
   Req,
   UseGuards,
+  UploadedFile,
+  UseInterceptors,
+  BadRequestException,
 } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { Role } from "@prisma/client";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Roles, RolesGuard } from "../auth/guards/roles.guard";
 import {
   CreateExamDto,
   CreateSubjectDto,
-  EnrollStudentDto,
+  JoinSubjectDto,
+  ReviewJoinRequestDto,
+  UpdateSubjectDto,
 } from "./dto/subjects.dto";
 import { SubjectsService } from "./subjects.service";
+import type { QuestionCounts } from "../ai/ai.service";
 @Controller("subjects")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class SubjectsController {
@@ -30,26 +38,30 @@ export class SubjectsController {
   ) {
     return this.subjects.create(req.user.id, body);
   }
+  @Patch(":id") @Roles(Role.TEACHER) update(@Param("id") id: string, @Req() req: any, @Body() body: UpdateSubjectDto) {
+    return this.subjects.update(id, req.user.id, body);
+  }
+  @Delete(":id") @Roles(Role.TEACHER) remove(@Param("id") id: string, @Req() req: any) {
+    return this.subjects.remove(id, req.user.id);
+  }
   @Get(":id/students") @Roles(Role.TEACHER) students(
     @Param("id") id: string,
     @Req() req: any,
   ) {
     return this.subjects.students(id, req.user.id);
   }
-  @Get(":id/available-students") @Roles(Role.TEACHER) available(
-    @Param("id") id: string,
-    @Req() req: any,
-    @Query("search") search?: string,
-  ) {
-    return this.subjects.availableStudents(id, req.user.id, search);
+  @Post("join") @Roles(Role.STUDENT) join(@Req() req: any, @Body() body: JoinSubjectDto) {
+    return this.subjects.requestJoin(body.code, req.user.id);
   }
-  @Post(":id/enrollments") @Roles(Role.TEACHER) enroll(
-    @Param("id") id: string,
-    @Req() req: any,
-    @Body() body: EnrollStudentDto,
-  ) {
-    return this.subjects.enroll(id, body.studentId, req.user.id);
+  @Get("join-requests/mine") @Roles(Role.STUDENT) myRequests(@Req() req: any) {
+    return this.subjects.studentJoinRequests(req.user.id);
   }
+  @Get("join-requests/pending") @Roles(Role.TEACHER) pending(@Req() req: any) {
+    return this.subjects.pendingJoinRequests(req.user.id);
+  }
+  @Post("join-requests/:requestId/review") @Roles(Role.TEACHER) review(
+    @Param("requestId") requestId: string, @Req() req: any, @Body() body: ReviewJoinRequestDto,
+  ) { return this.subjects.reviewJoinRequest(requestId, req.user.id, body.status); }
   @Get(":id/exams") @Roles(Role.TEACHER) exams(
     @Param("id") id: string,
     @Req() req: any,
@@ -62,5 +74,27 @@ export class SubjectsController {
     @Body() body: CreateExamDto,
   ) {
     return this.subjects.createExam(id, req.user.id, body);
+  }
+  @Post(":id/questions/generate")
+  @Roles(Role.TEACHER)
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 20_000_000, files: 1 } }))
+  generateQuestions(
+    @Param("id") id: string,
+    @Req() req: any,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body("counts") rawCounts: string,
+  ) {
+    if (!file) throw new BadRequestException("Choose a PDF, PPT, or PPTX file");
+    const extension = file.originalname.toLowerCase().match(/\.(pdf|ppt|pptx)$/)?.[1];
+    if (!extension) throw new BadRequestException("Only PDF, PPT, and PPTX files are supported");
+    let parsed: unknown;
+    try { parsed = JSON.parse(rawCounts); } catch { throw new BadRequestException("Question counts are invalid"); }
+    const keys = ["MULTIPLE_CHOICE", "ENUMERATION", "IDENTIFICATION", "ESSAY"] as const;
+    if (!parsed || typeof parsed !== "object") throw new BadRequestException("Question counts are invalid");
+    const counts = Object.fromEntries(keys.map((key) => [key, Number((parsed as Record<string, unknown>)[key] ?? 0)])) as QuestionCounts;
+    const values = Object.values(counts);
+    if (values.some((value) => !Number.isInteger(value) || value < 0) || values.reduce((sum, value) => sum + value, 0) < 1 || values.reduce((sum, value) => sum + value, 0) > 50)
+      throw new BadRequestException("Request between 1 and 50 total questions");
+    return this.subjects.generateQuestions(id, req.user.id, file, counts);
   }
 }

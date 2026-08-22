@@ -1,7 +1,11 @@
 from fastapi import FastAPI, Response
+from pydantic import BaseModel
 
 from app.api.v1.analysis import router as analysis_router
+from app.api.v1.jobs import router as jobs_router
+from app.api.v1.analytics import router as analytics_router
 from app.api.v1.fuzzy import router as fuzzy_router
+from app.api.v1.questions import router as questions_router
 
 app = FastAPI(
     title="ProctorX AI Service",
@@ -11,9 +15,18 @@ app = FastAPI(
 
 app.include_router(fuzzy_router)
 app.include_router(analysis_router)
+app.include_router(jobs_router)
+app.include_router(analytics_router)
+app.include_router(questions_router)
 
-@app.get("/")
-def root():
+class ServiceStatus(BaseModel):
+    service: str
+    status: str
+    docs: str | None = None
+    health: str | None = None
+
+@app.get("/", response_model=ServiceStatus)
+def root() -> ServiceStatus:
     return {
         "service": "proctorx-ai",
         "status": "ok",
@@ -21,9 +34,9 @@ def root():
         "health": "/health",
     }
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "service": "proctorx-ai"}
+@app.get("/health", response_model=ServiceStatus)
+def health() -> ServiceStatus:
+    return ServiceStatus(status="ok", service="proctorx-ai")
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():

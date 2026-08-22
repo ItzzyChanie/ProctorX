@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Post,
+  ParseFilePipeBuilder,
   Req,
   Res,
   UploadedFile,
@@ -39,7 +40,7 @@ export class UsersController {
   @Post("import/students")
   @Roles(Role.DEAN)
   @UseInterceptors(FileInterceptor("file"))
-  students(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
+  students(@UploadedFile(new ParseFilePipeBuilder().addFileTypeValidator({ fileType: /^(application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|application\/vnd\.ms-excel)$/ }).addMaxSizeValidator({ maxSize: 10_000_000 }).build()) file: Express.Multer.File, @Req() req: any) {
     return this.imports.importStudents(file, req.user.id);
   }
 }

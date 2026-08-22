@@ -9,9 +9,10 @@ import { useAuthStore } from "../store/authStore";
 import { Role, type LoginResponse } from "../types";
 type PendingActivationResponse = { activationRequired: true };
 const schema = z.object({
-  loginId: z.string().min(1, "Enter your Student ID or school email."),
+  loginId: z.string().trim().min(1, "Enter your Student ID or school email.").max(320),
   password: z.string().min(1, "Enter your password."),
 });
+const otpSchema = z.object({ loginId: z.string().trim().min(1).max(320), code: z.string().regex(/^\d{6}$/, "Enter the six-digit activation code.") });
 const destination: Record<Role, string> = {
   STUDENT: "/student",
   TEACHER: "/teacher",
@@ -66,8 +67,10 @@ export function SignInModal({
   };
   const verifyActivation = async (event: React.FormEvent) => {
     event.preventDefault(); setError("");
+    const parsed = otpSchema.safeParse({ loginId: activation?.loginId, code: otp });
+    if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? "Enter a valid activation code."); return; }
     try {
-      const { data } = await api.post("/auth/verify-activation", { loginId: activation?.loginId, code: otp });
+      const { data } = await api.post("/auth/verify-activation", parsed.data);
       setAuth(data.user); onClose(); navigate("/change-password");
     } catch { setError("The activation code is invalid or expired."); }
   };

@@ -56,6 +56,17 @@ enum ExamStatus {
   ARCHIVED
 }
 
+enum AssessmentType {
+  EXAM
+  QUIZ
+}
+
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  DECLINED
+}
+
 enum AppPolicyMode {
   BLACKLIST
   WHITELIST
@@ -98,6 +109,20 @@ enum RecordingStatus {
   COMPLETE
   FAILED
 }
+enum ReportFormat {
+  PDF
+  EXCEL
+}
+enum ReportJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETE
+  FAILED
+}
+enum IncidentStatus {
+  OPEN
+  RESOLVED
+}
 
 model User {
   id                    String               @id @default(uuid())
@@ -119,9 +144,11 @@ model User {
   uploadedImportBatches StudentImportBatch[] @relation("ImportBatchUploader")
   taughtSubjects        Subject[]            @relation("SubjectTeacher")
   enrollments           Enrollment[]
+  subjectJoinRequests   SubjectJoinRequest[]
   examSessions          ExamSession[]
   auditLogs             AuditLog[]
   notifications         Notification[]
+  requestedReports      GeneratedReport[]
 
   @@map("users")
 }
@@ -157,11 +184,28 @@ model StudentProfile {
   studentId String?  @unique
   yearLevel String?
   program   String?
+  section   String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("student_profiles")
+}
+model GeneratedReport {
+  id String @id @default(uuid())
+  requestedById String
+  name String
+  format ReportFormat
+  dateFrom DateTime
+  dateTo DateTime
+  filters Json?
+  status ReportJobStatus @default(PENDING)
+  downloadPath String?
+  errorMessage String?
+  createdAt DateTime @default(now())
+  requestedBy User @relation(fields:[requestedById],references:[id])
+  @@index([requestedById,createdAt])
+  @@map("generated_reports")
 }
 
 model Permission {
@@ -233,15 +277,35 @@ model StudentImportRow {
 model Subject {
   id          String       @id @default(uuid())
   code        String       @unique
+  subjectCode String?
+  schedule    String?
   name        String
   teacherId   String
   createdAt   DateTime     @default(now())
   teacher     User         @relation("SubjectTeacher", fields: [teacherId], references: [id])
   enrollments Enrollment[]
+  joinRequests SubjectJoinRequest[]
   exams       Exam[]
 
   @@index([teacherId])
+  @@unique([teacherId, subjectCode])
   @@map("subjects")
+}
+
+model SubjectJoinRequest {
+  id          String            @id @default(uuid())
+  subjectId   String
+  studentId   String
+  status      JoinRequestStatus @default(PENDING)
+  requestedAt DateTime          @default(now())
+  reviewedAt  DateTime?
+  subject     Subject           @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  student     User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectId, studentId])
+  @@index([subjectId, status])
+  @@index([studentId, status])
+  @@map("subject_join_requests")
 }
 
 model Enrollment {
@@ -261,6 +325,7 @@ model Exam {
   id                String        @id @default(uuid())
   subjectId         String
   title             String
+  assessmentType    AssessmentType @default(EXAM)
   instructions      String?
   totalPoints       Int
   durationMinutes   Int
@@ -270,6 +335,10 @@ model Exam {
   appPolicyMode     AppPolicyMode @default(BLACKLIST)
   appPolicyList     String[]      @default([])
   status            ExamStatus    @default(DRAFT)
+  scheduledAt        DateTime?
+  endsAt             DateTime?
+  sourceType         ExamSourceType @default(MANUAL)
+  externalFormUrl    String?
   createdAt         DateTime      @default(now())
   subject           Subject       @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   questions         Question[]
@@ -286,6 +355,7 @@ model Question {
   order         Int
   points        Int
   prompt        String
+  isRequired    Boolean          @default(true)
   /// Null for multiple-choice and essay questions; its JSON shape varies by question type.
   correctAnswer Json?
   rubric        String?
@@ -353,10 +423,35 @@ model ExamSession {
   submission   Submission?
   events       ProctoringEvent[]
   scoreHistory SuspicionScoreSnapshot[]
+  raiseHandRequests RaiseHandRequest[]
+  incidents Incident[]
 
   @@unique([examId, studentId])
   @@index([studentId])
   @@map("exam_sessions")
+}
+
+model Incident {
+  id String @id @default(uuid())
+  sessionId String
+  eventId String? @unique
+  status IncidentStatus @default(OPEN)
+  createdAt DateTime @default(now())
+  resolvedAt DateTime?
+  session ExamSession @relation(fields:[sessionId], references:[id], onDelete:Cascade)
+  @@index([sessionId,status])
+  @@map("incidents")
+}
+
+model RaiseHandRequest {
+  id         String      @id @default(uuid())
+  sessionId  String
+  reason     String?
+  raisedAt   DateTime    @default(now())
+  resolvedAt DateTime?
+  session    ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  @@index([sessionId, resolvedAt])
+  @@map("raise_hand_requests")
 }
 
 model Recording {

@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-class ReducedIndicators(BaseModel):
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+class ReducedIndicators(StrictModel):
     tab_switch_count: int = Field(ge=0, default=0)
     blacklisted_app_seconds: float = Field(ge=0, default=0)
     idle_seconds: float = Field(ge=0, default=0)
@@ -15,18 +18,18 @@ class FullIndicators(ReducedIndicators):
     multiple_faces: float | None = Field(default=None, ge=0, le=1)
     voice_detected: float | None = Field(default=None, ge=0, le=1)
 
-class FuzzyScoreRequest(BaseModel):
-    session_id: str
-    student_id: str
+class FuzzyScoreRequest(StrictModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    student_id: str = Field(min_length=1, max_length=128)
     indicators: ReducedIndicators | FullIndicators
     rule_set: Literal["reduced", "full"] = "reduced"
 
-class ContributingFactor(BaseModel):
+class ContributingFactor(StrictModel):
     indicator: str
     value: float | int
     membership: str
 
-class FuzzyScoreResponse(BaseModel):
+class FuzzyScoreResponse(StrictModel):
     suspicion_score: int
     tier: Literal["Low", "Medium", "High"]
     contributing_factors: list[ContributingFactor]

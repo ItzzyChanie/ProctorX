@@ -15,7 +15,7 @@ export function Button({
   ...props
 }: ButtonProps) {
   const base =
-    "inline-flex items-center justify-center gap-1.5 rounded-[10px] px-3.5 py-2.5 text-[13px] font-semibold font-body leading-none transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-brand/15 disabled:cursor-not-allowed disabled:opacity-50";
+    "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-[10px] px-3.5 py-2.5 text-[13px] font-semibold font-body leading-none transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-brand/15 disabled:cursor-not-allowed disabled:opacity-50";
   const variants: Record<string, string> = {
     primary:
       "bg-brand-gradient text-white shadow-rest hover:shadow-glow hover:-translate-y-px active:translate-y-0",

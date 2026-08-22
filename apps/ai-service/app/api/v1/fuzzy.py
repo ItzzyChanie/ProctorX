@@ -1,11 +1,9 @@
 from fastapi import APIRouter, Depends
-
 from app.core.security import verify_internal_api_key
 from app.models.schemas import FuzzyScoreRequest, FuzzyScoreResponse
 from app.services.fuzzy_engine import engine
 
 router = APIRouter(prefix="/v1/fuzzy", tags=["fuzzy"])
-
 
 @router.post(
     "/score",

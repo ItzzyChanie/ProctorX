@@ -13,8 +13,8 @@ export class MonitoringAnalysisService {
     if ((kind === "face" && !session.exam.requireCamera) || (kind === "audio" && !session.exam.requireMicrophone)) return { skipped: true };
     const result = await this.ai.analyze(kind, sessionId, sample, kind === "face" ? "frame.jpg" : "sample.wav");
     const types: Record<string, EventType> = { face_not_visible: EventType.FACE_NOT_VISIBLE, excessive_eye_movement: EventType.EXCESSIVE_EYE_MOVEMENT, possible_talking: EventType.POSSIBLE_TALKING, multiple_faces: EventType.MULTIPLE_FACES_DETECTED, voice_detected: EventType.VOICE_DETECTED };
-    const emitted = [] as unknown[];
-    for (const [name, finding] of Object.entries(result) as [string, any][]) if (types[name] && finding.event) emitted.push(await this.prisma.proctoringEvent.create({ data: { sessionId, type: types[name], intensity: finding.intensity, metadata: { duration_seconds: finding.duration_seconds }, occurredAt: new Date() } }));
+    const emitted = [] as { id: string }[];
+    for (const [name, finding] of Object.entries(result) as [string, any][]) if (types[name] && finding.event) { const event=await this.prisma.proctoringEvent.create({ data: { sessionId, type: types[name], intensity: finding.intensity, metadata: { duration_seconds: finding.duration_seconds }, occurredAt: new Date() } }); await this.prisma.incident.create({data:{sessionId,eventId:event.id}}); emitted.push(event); }
     if (!emitted.length) return result;
     const all = await this.prisma.proctoringEvent.findMany({ where: { sessionId }, orderBy: { occurredAt: "desc" } });
     const latest = (type: EventType) => all.find((event) => event.type === type)?.intensity ?? 0;

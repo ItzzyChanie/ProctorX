@@ -101,6 +101,23 @@ class ReducedFuzzyEngine:
             .title()
         )
 
+    @staticmethod
+    def _fallback_score(inputs: dict[str, float | int]) -> int:
+        """Return a conservative review score when no calibrated rule fires.
+
+        The reduced rule base intentionally does not define every possible
+        combination of indicator memberships.  A simulation without an active
+        consequent cannot be defuzzified, so retain service availability while
+        marking materially elevated activity for review.
+        """
+        if (
+            inputs["tab"] >= 6
+            or inputs["app"] >= 120
+            or inputs["idle"] >= 300
+        ):
+            return 35
+        return 20
+
     def score_indicators(
         self,
         values: ReducedIndicators | FullIndicators,
@@ -115,8 +132,11 @@ class ReducedFuzzyEngine:
         }
         for name, value in inputs.items():
             simulation.input[name] = value
-        simulation.compute()
-        score = int(round(simulation.output["score"]))
+        try:
+            simulation.compute()
+            score = int(round(simulation.output["score"]))
+        except (KeyError, ValueError):
+            score = self._fallback_score(inputs)
         tier = "Low" if score < 35 else "Medium" if score < 70 else "High"
         factors = [
             ContributingFactor(
@@ -161,17 +181,13 @@ class ReducedFuzzyEngine:
             active = {
                 name: value for name, value in sensor_values.items() if value is not None
             }
-            sensor_risk = max(active.values(), default=0.0)
-            # Preserve the calibrated reduced-rule output while adding bounded
-            # review evidence; multi-face has the strongest sensor weight.
-            weighted = max(
-                [sensor_risk]
-                + [
-                    value * (1.25 if name == "multiple_faces" else 0.8)
-                    for name, value in active.items()
-                ]
-            )
-            score = min(100, int(round(score + weighted * 35)))
+            # Full configuration: combine the calibrated reduced output with
+            # only the sensors enabled for this session.  Multi-face receives
+            # the strongest bounded contribution but never creates a verdict.
+            weights = {"face_not_visible": .55, "excessive_eye_movement": .35, "possible_talking": .30, "multiple_faces": 1.0, "voice_detected": .35}
+            active_weight = sum(weights[name] for name in active) or 1
+            sensor_score = sum(value * weights[name] for name, value in active.items()) / active_weight
+            score = min(100, int(round(score * .65 + sensor_score * 35)))
             tier = "Low" if score < 35 else "Medium" if score < 70 else "High"
             factors.extend(
                 ContributingFactor(

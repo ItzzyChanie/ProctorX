@@ -2,7 +2,6 @@ import {
   LayoutDashboard,
   LogIn,
   History,
-  Bell,
   User,
   Video,
   FolderKanban,
@@ -38,12 +37,6 @@ export const NAV: Record<Role, NavItem[]> = {
       label: "My Sessions",
       icon: History,
       path: "/student/sessions",
-    },
-    {
-      key: "notifications",
-      label: "Notifications",
-      icon: Bell,
-      path: "/student/notifications",
     },
     {
       key: "profile",

@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import {
   Area,
   AreaChart,
@@ -8,151 +9,182 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-} from "recharts";
-import { Clock, LogIn } from "lucide-react";
-import { DashboardLayout } from "../../components/layout/DashboardLayout";
-import { Card, CardHeader } from "../../components/ui/Card";
-import { Button } from "../../components/ui/Button";
-import { HeroBanner } from "../../components/ui/HeroBanner";
-import { axisProps, tooltipProps } from "../../components/charts/chartTheme";
-import { useChartPalette } from "../../lib/chartPalette";
-import { useTheme } from "../../lib/useTheme";
-import { useAuthStore } from "../../store/authStore";
-import { scoreHistory, sessionTime } from "../../data/mockDashboard";
-
-const upcomingSessions = [
-  { s: "IT 210 — Networking Quiz", d: "Aug 18, 1:00 PM" },
-  { s: "CS 330 — Lab Practical", d: "Aug 21, 9:00 AM" },
-];
-const recentActivity = [
-  { txt: "Joined CS330-Lab", time: "2h ago" },
-  { txt: "Submitted IT210-Mid", time: "1d ago" },
-  { txt: "Warning acknowledged", time: "3d ago" },
-];
-
+} from 'recharts';
+import { Clock, LogIn } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { DashboardLayout } from '../../components/layout/DashboardLayout';
+import { Card, CardHeader } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
+import { HeroBanner } from '../../components/ui/HeroBanner';
+import { axisProps, tooltipProps } from '../../components/charts/chartTheme';
+import { useChartPalette } from '../../lib/chartPalette';
+import { useTheme } from '../../lib/useTheme';
+import { useAuthStore } from '../../store/authStore';
+import { api } from '../../lib/api';
+type Dashboard = {
+  monitoringClientStatus: string;
+  upcomingSessions: { examTitle: string; startsAt: string }[];
+  recentActivity: { text: string; occurredAt: string }[];
+  scoreHistory: { examTitle: string; score: number; maxScore: number }[];
+  sessionTimeMinutes: { examTitle: string; minutes: number }[];
+};
 export default function StudentDashboard() {
-  const { dark } = useTheme();
-  const p = useChartPalette(dark);
-  const { user } = useAuthStore();
-  const userName = user?.fullName ?? "Student";
-  const userTag = user ? `${user.program ?? "BSCS"} • Student` : "Student";
-
+  const { dark } = useTheme(),
+    p = useChartPalette(dark),
+    { user } = useAuthStore(),
+    navigate = useNavigate();
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['student-dashboard'],
+    queryFn: async () =>
+      (await api.get<Dashboard>('/students/me/dashboard')).data,
+  });
+  const scores =
+    data?.scoreHistory.map((x, i) => ({
+      term: `#${i + 1}`,
+      score: Math.round((x.score / x.maxScore) * 100),
+    })) ?? [];
+  const time =
+    data?.sessionTimeMinutes.map((x) => ({
+      session: x.examTitle,
+      mins: x.minutes,
+    })) ?? [];
   return (
     <DashboardLayout
       role="student"
       pageTitle="Dashboard"
-      userName={userName}
-      userTag={userTag}
+      userName={user?.fullName ?? 'Student'}
+      userTag="Student"
     >
       <div className="flex flex-col gap-5">
+        {isLoading && <Card>Loading dashboard…</Card>}
+        {isError && (
+          <Card>
+            <span className="text-risk-high">
+              Could not load your dashboard.
+            </span>
+          </Card>
+        )}
         <HeroBanner
           eyebrow="Welcome back"
-          title="Ready for IT 210 — Networking Quiz"
-          subtitle="Starts Aug 18, 1:00 PM · your monitoring client is connected and ready to go."
-          stat="88"
+          title={
+            data?.upcomingSessions[0]?.examTitle ??
+            'Ready for your next assessment'
+          }
+          subtitle={`Monitoring client: ${data?.monitoringClientStatus ?? 'checking'}`}
+          stat={scores.at(-1)?.score ?? '—'}
           statLabel="Latest exam score"
           cta={
             <Button
               variant="ghost"
               icon={LogIn}
-              className="!bg-white/15 !text-white !border-white/35"
+              className="!bg-white/15 !text-white !border-white/35 hover:!bg-white/25 hover:!border-white/60 hover:shadow-lg"
+              onClick={() => navigate('/student/join')}
             >
               Go to join session
             </Button>
           }
         />
-
-        <div className="grid gap-5" style={{ gridTemplateColumns: "2fr 1fr" }}>
+        <div className="grid gap-5" style={{ gridTemplateColumns: '2fr 1fr' }}>
           <div className="flex flex-col gap-5">
             <Card>
               <CardHeader
                 title="Exam score history"
-                subtitle="Released once your professor uploads results"
+                subtitle="Teacher-confirmed results"
               />
-              <ResponsiveContainer width="100%" height={220}>
-                <AreaChart data={scoreHistory}>
-                  <defs>
-                    <linearGradient id="scoreFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop
-                        offset="0%"
-                        stopColor={p.brand}
-                        stopOpacity={0.35}
-                      />
-                      <stop offset="100%" stopColor={p.brand} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke={p.border} vertical={false} />
-                  <XAxis dataKey="term" {...axisProps(p)} />
-                  <YAxis domain={[0, 100]} {...axisProps(p)} />
-                  <Tooltip {...tooltipProps(p)} />
-                  <Area
-                    type="monotone"
-                    dataKey="score"
-                    stroke={p.brand}
-                    strokeWidth={2.5}
-                    fill="url(#scoreFill)"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              {scores.length ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <AreaChart data={scores}>
+                    <defs>
+                      <linearGradient
+                        id="scoreFill"
+                        x1="0"
+                        y1="0"
+                        x2="0"
+                        y2="1"
+                      >
+                        <stop
+                          offset="0%"
+                          stopColor={p.brand}
+                          stopOpacity={0.35}
+                        />
+                        <stop
+                          offset="100%"
+                          stopColor={p.brand}
+                          stopOpacity={0}
+                        />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke={p.border} vertical={false} />
+                    <XAxis dataKey="term" {...axisProps(p)} />
+                    <YAxis domain={[0, 100]} {...axisProps(p)} />
+                    <Tooltip {...tooltipProps(p)} />
+                    <Area
+                      type="monotone"
+                      dataKey="score"
+                      stroke={p.brand}
+                      fill="url(#scoreFill)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-sm text-text-2">No released scores yet.</p>
+              )}
             </Card>
-
             <Card>
               <CardHeader title="Time spent per session" />
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={sessionTime}>
-                  <CartesianGrid stroke={p.border} vertical={false} />
-                  <XAxis dataKey="session" {...axisProps(p)} />
-                  <YAxis unit="m" {...axisProps(p)} />
-                  <Tooltip {...tooltipProps(p)} />
-                  <Bar dataKey="mins" fill={p.cyan} radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              {time.length ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={time}>
+                    <CartesianGrid stroke={p.border} vertical={false} />
+                    <XAxis dataKey="session" {...axisProps(p)} />
+                    <YAxis unit="m" {...axisProps(p)} />
+                    <Tooltip {...tooltipProps(p)} />
+                    <Bar dataKey="mins" fill={p.cyan} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-sm text-text-2">
+                  No completed sessions yet.
+                </p>
+              )}
             </Card>
           </div>
-
           <div className="flex flex-col gap-5">
             <Card>
               <CardHeader title="Upcoming sessions" />
-              {upcomingSessions.map((u, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between py-2.5"
-                  style={{
-                    borderTop: i > 0 ? "1px solid var(--border)" : "none",
-                  }}
-                >
-                  <div>
-                    <div className="font-body text-[13px] font-semibold text-text-1">
-                      {u.s}
+              {data?.upcomingSessions.length ? (
+                <>
+                  {data.upcomingSessions.map((x) => (
+                    <div
+                      key={x.examTitle}
+                      className="flex justify-between py-2"
+                    >
+                      <span>{x.examTitle}</span>
+                      <Clock size={15} />
                     </div>
-                    <div className="font-body text-[11.5px] text-text-3">
-                      {u.d}
-                    </div>
-                  </div>
-                  <Clock size={15} className="text-text-3" />
-                </div>
-              ))}
+                  ))}
+                </>
+              ) : (
+                <p className="text-sm text-text-2">No upcoming sessions.</p>
+              )}
             </Card>
-
             <Card>
               <CardHeader title="Recent activity" />
-              {recentActivity.map((a, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-2 py-2"
-                  style={{
-                    borderTop: i > 0 ? "1px solid var(--border)" : "none",
-                  }}
-                >
-                  <div className="w-1.5 h-1.5 rounded-full bg-brand flex-shrink-0" />
-                  <span className="font-body text-[12.5px] text-text-1 flex-1">
-                    {a.txt}
-                  </span>
-                  <span className="font-body text-[11px] text-text-3">
-                    {a.time}
-                  </span>
-                </div>
-              ))}
+              {data?.recentActivity.length ? (
+                data.recentActivity.map((x) => (
+                  <div
+                    key={`${x.text}${x.occurredAt}`}
+                    className="py-2 text-sm"
+                  >
+                    <span>{x.text}</span>
+                    <small className="ml-2 text-text-3">
+                      {new Date(x.occurredAt).toLocaleString()}
+                    </small>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-text-2">No recent activity.</p>
+              )}
             </Card>
           </div>
         </div>

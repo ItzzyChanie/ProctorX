@@ -1,11 +1,19 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MaxLength } from "class-validator";
+import {
+  IsEmail,
+  IsIn,
+  IsNotEmpty,
+  IsString,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 
 export class CreateStudentDto {
-  @IsString() @IsNotEmpty() @MaxLength(100) studentId!: string;
+  @IsString() @Matches(/^[A-Za-z0-9-]{3,50}$/) studentId!: string;
   @IsString() @IsNotEmpty() @MaxLength(100) firstName!: string;
   @IsString() @IsNotEmpty() @MaxLength(100) middleName!: string;
   @IsString() @IsNotEmpty() @MaxLength(100) lastName!: string;
-  @IsString() @IsNotEmpty() @MaxLength(100) program!: string;
-  @IsString() @IsNotEmpty() @MaxLength(50) yearLevel!: string;
+  @IsIn(['CS', 'IT']) program!: string;
+  @IsIn(['1', '2', '3', '4', 'YEAR_1', 'YEAR_2', 'YEAR_3', 'YEAR_4'])
+  yearLevel!: string;
   @IsEmail() @MaxLength(320) email!: string;
 }

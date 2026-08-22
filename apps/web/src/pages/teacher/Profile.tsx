@@ -1,13 +1,13 @@
-import { Monitor, ShieldCheck } from "lucide-react";
-import { DashboardLayout } from "../../components/layout/DashboardLayout";
-import { Card, CardHeader } from "../../components/ui/Card";
-import { useAuthStore } from "../../store/authStore";
+import { Monitor, ShieldCheck } from 'lucide-react';
+import { DashboardLayout } from '../../components/layout/DashboardLayout';
+import { Card, CardHeader } from '../../components/ui/Card';
+import { useAuthStore } from '../../store/authStore';
 
 const fields = [
-  { label: "Full name", value: "Prof. Maria Santos" },
-  { label: "Employee ID", value: "PM-2026-001" },
-  { label: "Department", value: "College of Computer Studies" },
-  { label: "Email", value: "teacher@school.edu" },
+  { label: 'Full name', value: 'Prof. Maria Santos' },
+  { label: 'Employee ID', value: 'PM-2026-001' },
+  { label: 'Department', value: 'College of Computer Studies' },
+  { label: 'Email', value: 'teacher@school.edu' },
 ];
 
 export default function TeacherProfile() {
@@ -17,14 +17,14 @@ export default function TeacherProfile() {
     <DashboardLayout
       role="teacher"
       pageTitle="Profile & Settings"
-      userName={user?.fullName ?? "Prof. Maria Santos"}
+      userName={user?.fullName ?? 'Prof. Maria Santos'}
       userTag={
         user?.employeeId
           ? `Employee ${user.employeeId}`
-          : "College of Computer Studies"
+          : 'College of Computer Studies'
       }
     >
-      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <Card>
           <CardHeader title="Profile" />
           {fields.map((f, i) => (

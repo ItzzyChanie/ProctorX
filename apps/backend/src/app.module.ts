@@ -8,6 +8,8 @@ import { UsersModule } from "./users/users.module";
 import { SubjectsModule } from "./subjects/subjects.module";
 import { AiModule } from "./ai/ai.module";
 import { SessionsModule } from "./sessions/sessions.module";
+import { ReportsModule } from "./reports/reports.module";
+import { PortalModule } from "./portal/portal.module";
 
 @Module({
   imports: [
@@ -19,6 +21,8 @@ import { SessionsModule } from "./sessions/sessions.module";
     SubjectsModule,
     AiModule,
     SessionsModule,
+    ReportsModule,
+    PortalModule,
   ],
   controllers: [HealthController],
 })

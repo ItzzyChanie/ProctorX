@@ -1,92 +1,108 @@
-import { Copy, Plus } from "lucide-react";
-import { DashboardLayout } from "../../components/layout/DashboardLayout";
-import { Card, CardHeader } from "../../components/ui/Card";
-import { Button } from "../../components/ui/Button";
-import { Chip } from "../../components/ui/Chip";
-
-// Replace with GET /teacher/sessions ; the create form should POST /sessions
-const rows = [
-  {
-    name: "CS330-Lab",
-    code: "CS-4F2K",
-    section: "BSCS-4A",
-    status: "Live",
-    students: 10,
-  },
-  {
-    name: "IT210-Mid",
-    code: "IT-9Q1X",
-    section: "BSIT-2A",
-    status: "Scheduled",
-    students: 34,
-  },
-  {
-    name: "CS101-Q2",
-    code: "CS-7B3M",
-    section: "BSCS-3B",
-    status: "Ended",
-    students: 28,
-  },
-];
-
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Copy, Plus } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { DashboardLayout } from '../../components/layout/DashboardLayout';
+import { Card, CardHeader } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
+import { Chip } from '../../components/ui/Chip';
+import { api } from '../../lib/api';
+type Exam = {
+  examId: string;
+  title: string;
+  subjectCode: string;
+  roomCode: string;
+  status: string;
+  liveSessionCount: number;
+  studentCount: number;
+};
 export default function Sessions() {
+  const nav = useNavigate(),
+    [toast, setToast] = useState('');
+  const {
+    data: rows = [],
+    isLoading,
+    isError,
+  } = useQuery({
+    queryKey: ['teacher-exams'],
+    queryFn: async () => (await api.get<Exam[]>('/teacher/exams')).data,
+  });
+  const copy = async (code: string) => {
+    await navigator.clipboard.writeText(code);
+    setToast('Room code copied.');
+    window.setTimeout(() => setToast(''), 2500);
+  };
   return (
     <DashboardLayout
       role="teacher"
       pageTitle="Sessions"
-      userName="Prof. Nathalie Eglea"
+      userName="Professor"
       userTag="College of Computer Studies"
     >
       <div className="flex flex-col gap-5">
+        {toast && (
+          <div
+            role="status"
+            className="fixed bottom-5 right-5 rounded bg-emerald-600 px-4 py-3 text-sm text-white"
+          >
+            {toast}
+          </div>
+        )}
         <Card>
           <CardHeader
-            title="Create session"
-            subtitle="Generates a unique room code for students to join"
-            right={<Button icon={Plus}>New session</Button>}
+            title="Exams and sessions"
+            subtitle="Room codes are generated when you create an exam in the real exam builder."
+            right={
+              <Button icon={Plus} onClick={() => nav('/teacher/classes')}>
+                Create exam
+              </Button>
+            }
           />
-          <div
-            className="grid gap-3"
-            style={{ gridTemplateColumns: "1fr 1fr 1fr" }}
-          >
-            {["Subject", "Section", "Duration (min)"].map((ph, i) => (
-              <input
-                key={i}
-                placeholder={ph}
-                className="font-body text-[13px] px-3 py-2.5 rounded-[9px] bg-canvas text-text-1 outline-none focus:border-brand"
-              />
-            ))}
-          </div>
         </Card>
-
         <Card padded={false}>
+          {isLoading && (
+            <div className="p-5 text-sm text-text-2">Loading exams…</div>
+          )}
+          {isError && (
+            <div className="p-5 text-sm text-risk-high">
+              Could not load your exams.
+            </div>
+          )}
+          {!isLoading && !isError && !rows.length && (
+            <div className="p-5 text-sm text-text-2">
+              Create an exam to generate its student room code.
+            </div>
+          )}
           {rows.map((r, i) => (
             <div
-              key={i}
+              key={r.examId}
               className="flex items-center justify-between px-5 py-4"
-              style={{ borderTop: i > 0 ? "1px solid var(--border)" : "none" }}
+              style={{ borderTop: i ? '1px solid var(--border)' : 'none' }}
             >
               <div>
                 <div className="font-body text-[13.5px] font-semibold text-text-1">
-                  {r.name}
+                  {r.subjectCode} — {r.title}
                 </div>
                 <div className="font-body text-[11.5px] text-text-3">
-                  {r.section} · {r.students} students
+                  {r.studentCount} enrolled · {r.liveSessionCount} live
                 </div>
               </div>
               <div className="flex items-center gap-4">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-mono text-[13px] font-semibold text-brand">
-                    {r.code}
-                  </span>
-                  <Copy size={13} className="text-text-3 cursor-pointer" />
-                </div>
+                <button
+                  onClick={() => void copy(r.roomCode)}
+                  className="flex items-center gap-1.5 font-mono text-[13px] font-semibold text-brand"
+                  aria-label={`Copy room code ${r.roomCode}`}
+                >
+                  {r.roomCode}
+                  <Copy size={13} />
+                </button>
                 <Chip
                   color={
-                    r.status === "Live"
-                      ? "var(--risk-low)"
-                      : r.status === "Scheduled"
-                        ? "var(--brand)"
-                        : "var(--text-3)"
+                    r.status === 'Live'
+                      ? 'var(--risk-low)'
+                      : r.status === 'Scheduled'
+                        ? 'var(--brand)'
+                        : 'var(--text-3)'
                   }
                 >
                   {r.status}
