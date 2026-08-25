@@ -51,6 +51,7 @@ export default function TeacherDashboard() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['teacher-dashboard'],
     queryFn: async () => (await api.get<Data>('/teacher/dashboard')).data,
+    refetchInterval: 5_000,
   });
   useEffect(() => {
     const refresh = () =>

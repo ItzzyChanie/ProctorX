@@ -53,6 +53,7 @@ export default function DeanDashboard() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['dean-dashboard'],
     queryFn: async () => (await api.get<Data>('/dean/dashboard')).data,
+    refetchInterval: 5_000,
   });
   const k = data?.kpis;
   return (

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Check, Moon, Search, Sun } from "lucide-react";
+import { Bell, Check, Moon, Sun } from "lucide-react";
 import { api } from "../../lib/api";
 import { useTheme } from "../../lib/useTheme";
 import type { Role } from "../../types/dashboard";
@@ -28,12 +28,14 @@ export function Topbar({ role, pageTitle, userName, userTag }: TopbarProps) {
   const { data: notifications = [], isLoading, isError } = useQuery({
     queryKey,
     queryFn: async () => (await api.get<Notification[]>(endpoint)).data,
-    refetchInterval: 30_000,
+    refetchInterval: 5_000,
   });
+
   const orderedNotifications = useMemo(
     () => [...notifications].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)),
     [notifications],
   );
+
   const unreadCount = notifications.filter((item) => !item.isRead).length;
   const markRead = useMutation({
     mutationFn: (id: string) => api.patch(`${endpoint}/${id}/read`),
@@ -45,9 +47,11 @@ export function Topbar({ role, pageTitle, userName, userTag }: TopbarProps) {
     const close = (event: MouseEvent) => {
       if (!notificationPanel.current?.contains(event.target as Node)) setNotificationsOpen(false);
     };
+
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setNotificationsOpen(false);
     };
+
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", escape);
     return () => {
@@ -57,6 +61,7 @@ export function Topbar({ role, pageTitle, userName, userTag }: TopbarProps) {
   }, [notificationsOpen]);
 
   const initials = userName.split(" ").map((word) => word[0]).slice(0, 2).join("");
+  
   return (
     <div className="app-topbar z-10 flex h-[84px] shrink-0 items-center justify-between border-b border-border px-5 backdrop-blur-glass sm:px-8" style={{ background: "var(--surface)" }}>
       <div>
@@ -64,7 +69,6 @@ export function Topbar({ role, pageTitle, userName, userTag }: TopbarProps) {
         <div className="font-head text-[20px] font-bold tracking-tight text-text-1">{pageTitle}</div>
       </div>
       <div className="flex items-center gap-3">
-        {(role === "teacher" || role === "dean") && <div className="hidden items-center gap-2 rounded-[10px] border border-border bg-canvas/70 px-3 py-2 text-text-3 lg:flex"><Search size={14} /><span className="font-body text-[12.5px]">Search…</span></div>}
         <button onClick={toggleDark} className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-[10px] border border-border bg-surface text-text-2 transition-colors hover:bg-brand-soft hover:text-brand" aria-label={dark ? "Use light mode" : "Use dark mode"}>
           {dark ? <Sun size={16} /> : <Moon size={16} />}
         </button>

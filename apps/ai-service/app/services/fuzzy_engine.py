@@ -29,9 +29,9 @@ class ReducedFuzzyEngine:
         self.usb = ctrl.Antecedent(np.arange(0, 11, 1), "usb")
         self.score = ctrl.Consequent(np.arange(0, 101, 1), "score")
 
-        self.tab["low"] = fuzz.trapmf(self.tab.universe, [0, 0, 2, 4])
-        self.tab["medium"] = fuzz.trimf(self.tab.universe, [2, 5, 9])
-        self.tab["high"] = fuzz.trapmf(self.tab.universe, [6, 9, 20, 20])
+        self.tab["low"] = fuzz.trapmf(self.tab.universe, [0, 0, 2, 3])
+        self.tab["medium"] = fuzz.trapmf(self.tab.universe, [2, 3, 5, 6])
+        self.tab["high"] = fuzz.trapmf(self.tab.universe, [5, 6, 20, 20])
 
         self.app["none"] = fuzz.trapmf(self.app.universe, [0, 0, 5, 15])
         self.app["brief"] = fuzz.trimf(self.app.universe, [5, 45, 180])
@@ -85,6 +85,10 @@ class ReducedFuzzyEngine:
                 self.score["low"],
             ),
             ctrl.Rule(self.tab["medium"] & self.app["extended"], self.score["high"]),
+            # Repeated tab/fullscreen exits are independently review-worthy;
+            # they must not require an unrelated signal to move the score.
+            ctrl.Rule(self.tab["medium"], self.score["medium"]),
+            ctrl.Rule(self.tab["high"], self.score["high"]),
         ]
         self.system = ctrl.ControlSystem(rules)
 
@@ -137,6 +141,12 @@ class ReducedFuzzyEngine:
             score = int(round(simulation.output["score"]))
         except (KeyError, ValueError):
             score = self._fallback_score(inputs)
+        # Product calibration: repeated tab/fullscreen exits establish these
+        # minimum review tiers even when no other monitoring signal is present.
+        if values.tab_switch_count >= 6:
+            score = max(score, 70)
+        elif values.tab_switch_count >= 3:
+            score = max(score, 35)
         tier = "Low" if score < 35 else "Medium" if score < 70 else "High"
         factors = [
             ContributingFactor(
@@ -188,6 +198,10 @@ class ReducedFuzzyEngine:
             active_weight = sum(weights[name] for name in active) or 1
             sensor_score = sum(value * weights[name] for name, value in active.items()) / active_weight
             score = min(100, int(round(score * .65 + sensor_score * 35)))
+            if values.tab_switch_count >= 6:
+                score = max(score, 70)
+            elif values.tab_switch_count >= 3:
+                score = max(score, 35)
             tier = "Low" if score < 35 else "Medium" if score < 70 else "High"
             factors.extend(
                 ContributingFactor(

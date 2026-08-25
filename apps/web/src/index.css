@@ -157,10 +157,7 @@ select:disabled,
 }
 
 @media (max-width: 768px) {
-  .app-sidebar {
-    width: 68px !important;
-  }
-  .app-sidebar nav {
+  .app-sidebar[data-collapsed="true"] nav {
     padding-left: 9px;
     padding-right: 9px;
   }

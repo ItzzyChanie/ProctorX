@@ -26,6 +26,7 @@ export default function Sessions() {
   } = useQuery({
     queryKey: ['teacher-exams'],
     queryFn: async () => (await api.get<Exam[]>('/teacher/exams')).data,
+    refetchInterval: 5_000,
   });
   const copy = async (code: string) => {
     await navigator.clipboard.writeText(code);

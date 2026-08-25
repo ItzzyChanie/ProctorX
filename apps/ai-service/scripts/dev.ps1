@@ -3,13 +3,14 @@ Set-Location -Path $ServiceRoot
 
 $PythonPath = Join-Path -Path $ServiceRoot -ChildPath ".venv\Scripts\python.exe"
 $Worker = Start-Process -FilePath $PythonPath `
-  -ArgumentList @("-m", "celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=info", "--pool=solo") `
+  -ArgumentList @("-m", "celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=info", "--pool=solo", "--queues=proctorx_v2", "--hostname=proctorx-v2@%h") `
   -WorkingDirectory $ServiceRoot `
   -WindowStyle Hidden `
   -PassThru
 
 try {
   & $PythonPath -m uvicorn app.main:app --reload --port 8000
-} finally {
+} 
+finally {
   if (!$Worker.HasExited) { Stop-Process -Id $Worker.Id }
 }

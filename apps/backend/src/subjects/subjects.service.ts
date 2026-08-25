@@ -4,15 +4,45 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
-import { AppPolicyMode, AssessmentType, ExamSourceType, ExamStatus, JoinRequestStatus, QuestionType, Role } from '@prisma/client';
+import { AppPolicyMode, AssessmentType, ExamSourceType, ExamStatus, JoinRequestStatus, QuestionType, Role, SessionStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateExamDto, CreateSubjectDto, UpdateSubjectDto } from './dto/subjects.dto';
 import { AiService, QuestionCounts } from '../ai/ai.service';
+import { SessionsGateway } from '../sessions/sessions.gateway';
 
 @Injectable()
-export class SubjectsService {
-  constructor(private prisma: PrismaService, private ai: AiService) {}
+export class SubjectsService implements OnModuleInit, OnModuleDestroy {
+  private expiryTimer?: NodeJS.Timeout;
+  constructor(private prisma: PrismaService, private ai: AiService, private gateway: SessionsGateway) {}
+  onModuleInit() {
+    void this.closeExpiredExams().catch(() => undefined);
+    this.expiryTimer = setInterval(() => void this.closeExpiredExams().catch(() => undefined), 5_000);
+  }
+  onModuleDestroy() { if (this.expiryTimer) clearInterval(this.expiryTimer); }
+  private async closeExpiredExams() {
+    const expired = await this.prisma.exam.findMany({
+      where: { status: ExamStatus.PUBLISHED, endsAt: { lte: new Date() } },
+      select: { id: true, title: true, assessmentType: true, subject: { select: { subjectCode: true, enrollments: { select: { studentId: true } } } } },
+    });
+    if (!expired.length) return;
+    const ids = expired.map(({ id }) => id);
+    const notifications = expired.flatMap(exam => exam.subject.enrollments.map(({ studentId }) => ({
+      userId: studentId,
+      type: 'ASSESSMENT_ENDED',
+      message: `The scheduled ${exam.assessmentType === AssessmentType.QUIZ ? 'quiz' : 'exam'} "${exam.title}" for ${exam.subject.subjectCode} has ended.`,
+    })));
+    const endedAt = new Date();
+    await this.prisma.$transaction([
+      this.prisma.exam.updateMany({ where: { id: { in: ids }, status: ExamStatus.PUBLISHED }, data: { status: ExamStatus.ARCHIVED } }),
+      this.prisma.examSession.updateMany({ where: { examId: { in: ids }, status: SessionStatus.IN_PROGRESS }, data: { status: SessionStatus.COMPLETED, endedAt } }),
+      this.prisma.recording.updateMany({ where: { session: { examId: { in: ids } }, status: 'UPLOADING' }, data: { status: 'COMPLETE' } }),
+      this.prisma.notification.createMany({ data: notifications }),
+    ]);
+    ids.forEach(id => this.gateway.clearExam(id));
+  }
   private googleFormUrl(value: string) {
     let url: URL;
     try { url = new URL(value.trim()); } catch { throw new BadRequestException('Enter a valid Google Form URL'); }
@@ -64,6 +94,8 @@ export class SubjectsService {
   }
   async remove(subjectId: string, teacherId: string) {
     await this.owned(subjectId, teacherId);
+    const exams = await this.prisma.exam.findMany({ where: { subjectId }, select: { id: true } });
+    exams.forEach(exam => this.gateway.clearExam(exam.id));
     await this.prisma.subject.delete({ where: { id: subjectId } });
     await this.prisma.auditLog.create({ data: { actorId: teacherId, action: 'SUBJECT_DELETED', targetType: 'Subject', targetId: subjectId } });
     return { deleted: true };
@@ -118,14 +150,28 @@ export class SubjectsService {
       return updated;
     });
   }
-  mine(userId: string, role: Role) {
-    return role === Role.TEACHER
-      ? this.prisma.subject.findMany({
+  async mine(userId: string, role: Role) {
+    if (role === Role.TEACHER) {
+      const now = new Date();
+      await this.prisma.exam.updateMany({
+        where: { subject: { teacherId: userId }, status: ExamStatus.PUBLISHED, endsAt: { lte: now } },
+        data: { status: ExamStatus.ARCHIVED },
+      });
+      return this.prisma.subject.findMany({
           where: { teacherId: userId },
-          include: { _count: { select: { enrollments: true, exams: true } } },
+          include: {
+            _count: { select: { enrollments: true, exams: true } },
+            exams: {
+              where: { status: ExamStatus.PUBLISHED, OR: [{ endsAt: null }, { endsAt: { gt: now } }] },
+              select: { id: true, title: true, assessmentType: true, scheduledAt: true, endsAt: true },
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+            },
+          },
           orderBy: { createdAt: 'desc' },
-        })
-      : this.prisma.subject.findMany({
+        });
+    }
+    return this.prisma.subject.findMany({
           where: { enrollments: { some: { studentId: userId } } },
           select: {
             id: true,
@@ -134,7 +180,21 @@ export class SubjectsService {
             schedule: true,
             name: true,
             teacher: { select: { fullName: true } },
-            exams: { select: { assessmentType: true, sessions: { where: { studentId: userId, status: 'COMPLETED' }, select: { endedAt: true }, take: 1, orderBy: { endedAt: 'desc' } } } },
+            exams: {
+              select: {
+                assessmentType: true,
+                status: true,
+                endsAt: true,
+                sessions: {
+                  where: { studentId: userId, status: 'COMPLETED' },
+                  select: { endedAt: true },
+                  take: 1,
+                  orderBy: { endedAt: 'desc' },
+                },
+              },
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+            },
           },
           orderBy: { name: 'asc' },
         });
@@ -150,7 +210,8 @@ export class SubjectsService {
   }
   async students(subjectId: string, teacherId: string) {
     await this.owned(subjectId, teacherId);
-    return this.prisma.enrollment.findMany({
+    const [enrollments, latestExam] = await Promise.all([
+      this.prisma.enrollment.findMany({
       where: { subjectId },
       select: {
         enrolledAt: true,
@@ -166,7 +227,19 @@ export class SubjectsService {
         },
       },
       orderBy: { student: { fullName: 'asc' } },
+      }),
+      this.prisma.exam.findFirst({ where: { subjectId }, select: { id: true }, orderBy: { createdAt: 'desc' } }),
+    ]);
+    if (!latestExam) return enrollments.map((row) => ({ ...row, assessmentStatus: 'NOT_TAKEN' }));
+    const completed = await this.prisma.examSession.findMany({
+      where: { examId: latestExam.id, status: 'COMPLETED', studentId: { in: enrollments.map((row) => row.student.id) } },
+      select: { studentId: true },
     });
+    const completedIds = new Set(completed.map((session) => session.studentId));
+    return enrollments.map((row) => ({
+      ...row,
+      assessmentStatus: completedIds.has(row.student.id) ? 'TAKEN' : 'NOT_TAKEN',
+    }));
   }
   async generateQuestions(subjectId: string, teacherId: string, file: Express.Multer.File, counts: QuestionCounts) {
     await this.owned(subjectId, teacherId);
@@ -215,6 +288,15 @@ export class SubjectsService {
   }
   async createExam(subjectId: string, teacherId: string, dto: CreateExamDto) {
     const subject = await this.owned(subjectId, teacherId);
+    const now = new Date();
+    await this.prisma.exam.updateMany({
+      where: { subjectId, status: ExamStatus.PUBLISHED, endsAt: { lte: now } },
+      data: { status: ExamStatus.ARCHIVED },
+    });
+    const activeExam = await this.prisma.exam.findFirst({
+      where: { subjectId, status: ExamStatus.PUBLISHED, OR: [{ endsAt: null }, { endsAt: { gt: now } }] },
+    });
+    if (activeExam) throw new ConflictException('Stop the active exam or quiz before creating another one');
     const questions = dto.questions ?? [];
     const sourceType = dto.sourceType ?? 'MANUAL';
     if (sourceType !== 'GOOGLE_FORMS_IMPORT' && questions.length === 0)
@@ -241,8 +323,16 @@ export class SubjectsService {
           'This question type requires a correct answer'
         );
     }
-    const exam = await this.prisma.exam.create({
-      data: {
+    const archivedExams = await this.prisma.exam.findMany({
+      where: { subjectId, status: ExamStatus.ARCHIVED },
+      select: { id: true },
+    });
+    const exam = await this.prisma.$transaction(async tx => {
+      await tx.exam.deleteMany({
+        where: { subjectId, status: ExamStatus.ARCHIVED },
+      });
+      return tx.exam.create({
+        data: {
         subjectId,
         assessmentType: dto.assessmentType as AssessmentType,
         title: dto.title.trim(),
@@ -286,9 +376,11 @@ export class SubjectsService {
                 : undefined,
           })),
         },
-      },
-      include: { questions: { include: { options: true } } },
+        },
+        include: { questions: { include: { options: true } } },
+      });
     });
+    archivedExams.forEach(previous => this.gateway.clearExam(previous.id));
     await this.prisma.auditLog.create({
       data: {
         actorId: teacherId,
@@ -309,6 +401,31 @@ export class SubjectsService {
       })),
     });
     return exam;
+  }
+  async stopExam(subjectId: string, examId: string, teacherId: string) {
+    const subject = await this.owned(subjectId, teacherId);
+    const exam = await this.prisma.exam.findFirst({ where: { id: examId, subjectId } });
+    if (!exam) throw new NotFoundException('Exam or quiz not found');
+    if (exam.status !== ExamStatus.PUBLISHED)
+      throw new ConflictException('This exam or quiz is already inactive');
+    const endedAt = new Date();
+    const stopped = await this.prisma.$transaction(async tx => {
+      const saved = await tx.exam.update({ where: { id: examId }, data: { status: ExamStatus.ARCHIVED, endsAt: endedAt } });
+      await tx.examSession.updateMany({ where: { examId, status: SessionStatus.IN_PROGRESS }, data: { status: SessionStatus.COMPLETED, endedAt } });
+      await tx.recording.updateMany({ where: { session: { examId }, status: 'UPLOADING' }, data: { status: 'COMPLETE' } });
+      const enrollments = await tx.enrollment.findMany({ where: { subjectId }, select: { studentId: true } });
+      if (enrollments.length) await tx.notification.createMany({ data: enrollments.map(({ studentId }) => ({
+        userId: studentId,
+        type: 'ASSESSMENT_ENDED',
+        message: `Your teacher ended the ${exam.assessmentType === AssessmentType.QUIZ ? 'quiz' : 'exam'} "${exam.title}" for ${subject.subjectCode}.`,
+      })) });
+      return saved;
+    });
+    this.gateway.clearExam(examId);
+    await this.prisma.auditLog.create({
+      data: { actorId: teacherId, action: 'EXAM_STOPPED', targetType: 'Exam', targetId: examId },
+    });
+    return stopped;
   }
   async exams(subjectId: string, teacherId: string) {
     await this.owned(subjectId, teacherId);

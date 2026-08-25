@@ -53,8 +53,10 @@ def report(request: ReportRequest):
 @router.get("/{job_id}", dependencies=[Depends(verify_internal_api_key)])
 def status(job_id: str = Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9-]+$")):
     task = AsyncResult(job_id, app=celery_app)
+    error = str(task.result) if task.failed() else None
     return {
         "job_id": job_id,
         "status": task.status,
         "result": task.result if task.successful() else None,
+        "error": error,
     }

@@ -16,7 +16,6 @@ pandas
 python-pptx
 pdfplumber
 PyMuPDF
-weasyprint
 matplotlib
 openpyxl
 celery

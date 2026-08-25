@@ -37,6 +37,7 @@ export default function StudentDashboard() {
     queryKey: ['student-dashboard'],
     queryFn: async () =>
       (await api.get<Dashboard>('/students/me/dashboard')).data,
+    refetchInterval: 5_000,
   });
   const scores =
     data?.scoreHistory.map((x, i) => ({

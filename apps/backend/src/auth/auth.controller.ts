@@ -6,25 +6,25 @@ import {
   Req,
   Res,
   UseGuards,
-} from "@nestjs/common";
-import { Throttle, ThrottlerGuard } from "@nestjs/throttler";
-import type { Response } from "express";
-import { AuthService } from "./auth.service";
-import { LoginDto } from "./dto/login.dto";
-import { ChangePasswordDto } from "./dto/change-password.dto";
-import { JwtAuthGuard } from "./guards/jwt-auth.guard";
-import { VerifyOtpDto } from "./dto/verify-otp.dto";
+} from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import type { Response } from 'express';
+import { AuthService } from './auth.service';
+import { LoginDto } from './dto/login.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
 
-@Controller("auth")
+@Controller('auth')
 export class AuthController {
   constructor(private auth: AuthService) {}
   private cookieOptions() {
     const configuredMaxAge = Number(process.env.AUTH_COOKIE_MAX_AGE_MS);
     return {
       httpOnly: true,
-      sameSite: "lax" as const,
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
+      sameSite: 'lax' as const,
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
       maxAge:
         Number.isFinite(configuredMaxAge) && configuredMaxAge > 0
           ? configuredMaxAge
@@ -32,41 +32,55 @@ export class AuthController {
     };
   }
 
-  @Post("login")
+  @Post('login')
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async login(
     @Body() body: LoginDto,
-    @Res({ passthrough: true }) response: Response,
+    @Res({ passthrough: true }) response: Response
   ) {
     const result = await this.auth.login(body.loginId, body.password);
-    if ("activationRequired" in result) return result;
-    response.cookie("proctorx_session", result.accessToken, this.cookieOptions());
-    return { user: result.user, passwordChangeRequired: result.user.mustChangePassword };
+    if ('activationRequired' in result) return result;
+    response.cookie(
+      'proctorx_session',
+      result.accessToken,
+      this.cookieOptions()
+    );
+    return {
+      user: result.user,
+      passwordChangeRequired: result.user.mustChangePassword,
+    };
   }
-  @Post("verify-activation")
+  @Post('verify-activation')
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async verifyActivation(@Body() body: VerifyOtpDto, @Res({ passthrough: true }) response: Response) {
+  async verifyActivation(
+    @Body() body: VerifyOtpDto,
+    @Res({ passthrough: true }) response: Response
+  ) {
     const result = await this.auth.verifyActivation(body.loginId, body.code);
-    response.cookie("proctorx_session", result.accessToken, this.cookieOptions());
+    response.cookie(
+      'proctorx_session',
+      result.accessToken,
+      this.cookieOptions()
+    );
     return { user: result.user, passwordChangeRequired: true };
   }
-  @Post("logout") logout(@Res({ passthrough: true }) response: Response) {
-    response.clearCookie("proctorx_session", this.cookieOptions());
+  @Post('logout') logout(@Res({ passthrough: true }) response: Response) {
+    response.clearCookie('proctorx_session', this.cookieOptions());
     return { success: true };
   }
-  @UseGuards(JwtAuthGuard) @Post("change-password") changePassword(
+  @UseGuards(JwtAuthGuard) @Post('change-password') changePassword(
     @Req() req: any,
-    @Body() body: ChangePasswordDto,
+    @Body() body: ChangePasswordDto
   ) {
     return this.auth.changePassword(
       req.user.id,
       body.currentPassword,
-      body.newPassword,
+      body.newPassword
     );
   }
-  @UseGuards(JwtAuthGuard) @Get("me") me(@Req() req: any) {
+  @UseGuards(JwtAuthGuard) @Get('me') me(@Req() req: any) {
     return this.auth.me(req.user);
   }
 }

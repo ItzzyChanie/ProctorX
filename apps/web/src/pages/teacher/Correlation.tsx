@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   CartesianGrid,
-  Line,
+  ReferenceLine,
   ResponsiveContainer,
   Scatter,
   ScatterChart,
@@ -19,16 +19,29 @@ import { useTheme } from '../../lib/useTheme';
 type Exam = {
   id: string;
   title: string;
+  status: string;
+  endsAt: string | null;
+  sessionCount: number;
   subject: { code: string };
   _count: { sessions: number };
 };
+type CorrelationPair = {
+  suspicion_score: number;
+  exam_score: number;
+};
 type Result = {
+  pairs: CorrelationPair[];
+  regressionLine: unknown[] | null;
+  insufficientData: true;
+} | {
   slope: number;
   intercept: number;
   r: number;
   r_squared: number;
   p_value: number;
-  pairs: { suspicion_score: number; exam_score: number }[];
+  pairs: CorrelationPair[];
+  regressionLine: unknown[];
+  insufficientData: false;
 };
 export default function Correlation() {
   const { dark } = useTheme(),
@@ -38,10 +51,13 @@ export default function Correlation() {
     [result, setResult] = useState<Result | null>(null),
     [message, setMessage] = useState('');
   useEffect(() => {
-    void api
-      .get<Exam[]>('/sessions/monitorable-exams')
-      .then(({ data }) => setExams(data))
-      .catch(() => setMessage('Could not load your exams.'));
+    const load = () => void api.get<Exam[]>('/sessions/monitorable-exams').then(({ data }) => {
+      const now = Date.now();
+      setExams(data.filter(exam => exam.sessionCount > 0 && (exam.status !== 'PUBLISHED' || (!!exam.endsAt && new Date(exam.endsAt).getTime() <= now))));
+    }).catch(() => setMessage('Could not load your exams.'));
+    load();
+    const timer = window.setInterval(load, 5_000);
+    return () => window.clearInterval(timer);
   }, []);
   useEffect(() => {
     if (!examId) {
@@ -62,19 +78,6 @@ export default function Correlation() {
         )
       );
   }, [examId]);
-  const line = useMemo(
-    () =>
-      result
-        ? [
-            { suspicion_score: 0, exam_score: result.intercept },
-            {
-              suspicion_score: 100,
-              exam_score: result.intercept + result.slope * 100,
-            },
-          ]
-        : [],
-    [result]
-  );
   return (
     <DashboardLayout
       role="teacher"
@@ -91,7 +94,7 @@ export default function Correlation() {
               onChange={(event) => setExamId(event.target.value)}
               className="ml-2 min-w-72 rounded border border-border bg-surface p-2 text-text-1"
             >
-              <option value="">Select a fully graded exam…</option>
+              <option value="">Select a completed, fully graded exam…</option>
               {exams.map((exam) => (
                 <option key={exam.id} value={exam.id}>
                   {exam.subject.code} — {exam.title}
@@ -103,6 +106,7 @@ export default function Correlation() {
             Uses ProctorX’s own teacher-confirmed grades and final suspicion
             snapshots. No CSV or external scoring source is used.
           </p>
+          {!exams.length && <p className="mt-3 text-sm text-text-3">The graph becomes available after an exam has ended and has graded submissions.</p>}
         </Card>
         {message && (
           <Card>
@@ -138,17 +142,22 @@ export default function Correlation() {
                 />
                 <Tooltip {...tooltipProps(p)} />
                 <Scatter data={result.pairs} fill={p.brand} />
-                <Line
-                  data={line}
-                  type="linear"
-                  dataKey="exam_score"
-                  stroke={p.riskHigh}
-                  strokeWidth={2}
-                  dot={false}
-                />
+                {!result.insufficientData && (
+                  <ReferenceLine
+                    segment={[{ x: 0, y: result.intercept }, { x: 100, y: result.intercept + result.slope * 100 }]}
+                    stroke={p.riskHigh}
+                    strokeWidth={2}
+                  />
+                )}
               </ScatterChart>
             </ResponsiveContainer>
-            <div className="mt-4 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+            {result.insufficientData ? (
+              <p className="mt-4 text-sm text-text-2">
+                A correlation requires at least two graded sessions with
+                different suspicion scores.
+              </p>
+            ) : (
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
               <span>
                 r: <b>{result.r.toFixed(3)}</b>
               </span>
@@ -161,7 +170,8 @@ export default function Correlation() {
               <span>
                 p-value: <b>{result.p_value.toFixed(4)}</b>
               </span>
-            </div>
+              </div>
+            )}
           </Card>
         )}
       </div>

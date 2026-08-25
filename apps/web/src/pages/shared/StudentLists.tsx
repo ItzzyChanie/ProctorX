@@ -21,6 +21,7 @@ type Student = {
   email: string | null;
   status: string;
   createdAt: string;
+  assessmentStatus?: 'TAKEN' | 'NOT_TAKEN';
   studentProfile: {
     studentId: string | null;
     program: string | null;
@@ -403,6 +404,7 @@ export default function StudentLists({ role }: { role: Role }) {
                       'Program',
                       'Email',
                       'Status',
+                      ...(role === 'teacher' ? ['Assessment Status'] : []),
                       'Date & Time Created',
                       ...(role === 'dean' ? ['Actions'] : []),
                     ].map((header) => (
@@ -439,6 +441,13 @@ export default function StudentLists({ role }: { role: Role }) {
                           {student.status}
                         </span>
                       </td>
+                      {role === 'teacher' && (
+                        <td className="px-5 py-4">
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${student.assessmentStatus === 'TAKEN' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                            {student.assessmentStatus === 'TAKEN' ? 'Exam/Quiz Taken' : 'Exam/Quiz Not yet taken'}
+                          </span>
+                        </td>
+                      )}
                       <td className="px-5 py-4 text-text-2">
                         {formatCreatedAt(student.createdAt)}
                       </td>
@@ -472,7 +481,7 @@ export default function StudentLists({ role }: { role: Role }) {
                   {!loading && filteredRows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={role === 'dean' ? 7 : 6}
+                        colSpan={7}
                         className="px-5 py-10 text-center text-text-3"
                       >
                         No students found in this year level.

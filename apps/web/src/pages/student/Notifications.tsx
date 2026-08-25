@@ -33,9 +33,10 @@ export default function Notifications() {
     isLoading,
     isError,
   } = useQuery({
-    queryKey: ['notifications'],
+    queryKey: ['notifications', 'student'],
     queryFn: async () =>
       (await api.get<Notification[]>('/students/me/notifications')).data,
+    refetchInterval: 5_000,
   });
   const notify = (message: string, error = false) => {
     setToast({ message, error });
@@ -45,7 +46,7 @@ export default function Notifications() {
     mutationFn: (id: string) =>
       api.patch(`/students/me/notifications/${id}/read`),
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: ['notifications'] });
+      client.invalidateQueries({ queryKey: ['notifications', 'student'] });
       notify('Notification marked as read.');
     },
     onError: () => notify('Could not mark the notification as read.', true),

@@ -6,7 +6,13 @@ import { Button } from '../../components/ui/Button';
 import { api } from '../../lib/api';
 import { socket } from '../../lib/socket';
 
-type Student = { id: string; name: string; score: number; tabSwitches: number };
+type Student = {
+  id: string;
+  name: string;
+  score: number;
+  tier: 'LOW' | 'MEDIUM' | 'HIGH';
+  tabSwitches: number;
+};
 type Exam = {
   id: string;
   title: string;
@@ -28,7 +34,9 @@ export default function LiveMonitoring() {
   const examId = params.get('examId') ?? '';
   const [exams, setExams] = useState<Exam[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [loadError, setLoadError] = useState(false);
   const [streams, setStreams] = useState<Record<string, MediaStream>>({});
+  const [frames, setFrames] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Student | null>(null);
   const [alerts, setAlerts] = useState<
     {
@@ -42,6 +50,7 @@ export default function LiveMonitoring() {
     new Map<string, RTCIceCandidateInit[]>()
   );
   const watched = useRef(new Set<string>());
+  const frameUrls = useRef(new Map<string, string>());
   const selectedExam = exams.find((exam) => exam.id === examId);
   const stopAll = () => {
     peers.current.forEach((peer) => peer.close());
@@ -49,6 +58,9 @@ export default function LiveMonitoring() {
     pendingCandidates.current.clear();
     watched.current.clear();
     setStreams({});
+    frameUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    frameUrls.current.clear();
+    setFrames({});
   };
 
   useEffect(() => {
@@ -60,6 +72,7 @@ export default function LiveMonitoring() {
   useEffect(() => {
     if (!examId) {
       setStudents([]);
+      setLoadError(false);
       return;
     }
     let active = true;
@@ -67,16 +80,25 @@ export default function LiveMonitoring() {
       try {
         const { data } = await api.get(`/sessions/exam/${examId}/monitor`);
         if (!active) return;
+        setLoadError(false);
         const next = data.map((session: any) => ({
           id: session.id as string,
           name: session.student.fullName as string,
           score: session.scoreHistory[0]?.score ?? 0,
+          tier: session.scoreHistory[0]?.tier ?? 'LOW',
           tabSwitches: session.events.filter(
             (event: any) =>
               event.type === 'TAB_SWITCH' || event.type === 'FULLSCREEN_EXIT'
           ).length,
         }));
         setStudents(next);
+        setExams((current) =>
+          current.map((exam) =>
+            exam.id === examId
+              ? { ...exam, _count: { sessions: next.length } }
+              : exam
+          )
+        );
         next.forEach((student: Student) => {
           if (!watched.current.has(student.id)) {
             watched.current.add(student.id);
@@ -84,14 +106,17 @@ export default function LiveMonitoring() {
           }
         });
       } catch {
-        /* Authorization failures leave the selected grid empty. */
+        if (active) setLoadError(true);
       }
     };
+    const joinMonitorRoom = () => socket.emit('monitor:join', { examId });
+    socket.on('connect', joinMonitorRoom);
     socket.connect();
-    socket.emit('monitor:join', { examId });
+    if (socket.connected) joinMonitorRoom();
     void refreshStudents();
     const ready = async ({ sessionId }: { sessionId: string }) => {
-      if (peers.current.has(sessionId)) return;
+      peers.current.get(sessionId)?.close();
+      pendingCandidates.current.delete(sessionId);
       const peer = new RTCPeerConnection(rtcConfig);
       peers.current.set(sessionId, peer);
       peer.ontrack = ({ streams: remoteStreams }) =>
@@ -139,10 +164,12 @@ export default function LiveMonitoring() {
     const update = ({
       sessionId,
       score,
+      tier,
       event,
     }: {
       sessionId: string;
       score: number;
+      tier: string;
       event: { type: string; intensity?: number };
     }) => {
       setStudents((current) =>
@@ -151,6 +178,7 @@ export default function LiveMonitoring() {
             ? {
                 ...student,
                 score,
+                tier: tier.toUpperCase() as Student['tier'],
                 tabSwitches:
                   student.tabSwitches +
                   (['TAB_SWITCH', 'FULLSCREEN_EXIT'].includes(event.type)
@@ -167,9 +195,29 @@ export default function LiveMonitoring() {
         ].slice(0, 8)
       );
     };
+    const frame = ({
+      sessionId,
+      frame: incoming,
+      mimeType,
+    }: {
+      sessionId: string;
+      frame: ArrayBuffer | Uint8Array;
+      mimeType?: string;
+    }) => {
+      const previous = frameUrls.current.get(sessionId);
+      if (previous) URL.revokeObjectURL(previous);
+      const url = URL.createObjectURL(
+        new Blob([incoming as BlobPart], { type: mimeType ?? 'image/webp' })
+      );
+      frameUrls.current.set(sessionId, url);
+      setFrames((current) => ({ ...current, [sessionId]: url }));
+    };
     socket.on('webrtc:ready', ready);
     socket.on('webrtc:signal', signal);
     socket.on('monitor:update', update);
+    socket.on('monitor:session-start', refreshStudents);
+    socket.on('monitor:session-end', refreshStudents);
+    socket.on('screen:frame', frame);
     return () => {
       watched.current.forEach((sessionId) =>
         socket.emit('webrtc:stop', { sessionId })
@@ -177,6 +225,10 @@ export default function LiveMonitoring() {
       socket.off('webrtc:ready', ready);
       socket.off('webrtc:signal', signal);
       socket.off('monitor:update', update);
+      socket.off('monitor:session-start', refreshStudents);
+      socket.off('monitor:session-end', refreshStudents);
+      socket.off('screen:frame', frame);
+      socket.off('connect', joinMonitorRoom);
       stopAll();
       socket.disconnect();
       active = false;
@@ -271,9 +323,16 @@ export default function LiveMonitoring() {
                     }}
                     autoPlay
                     playsInline
-                    className="h-full w-full object-contain"
+                    className={`h-full w-full object-contain ${streams[student.id] ? '' : 'hidden'}`}
                   />
-                  {!streams[student.id] && (
+                  {!streams[student.id] && frames[student.id] && (
+                    <img
+                      src={frames[student.id]}
+                      alt={`${student.name}'s shared screen`}
+                      className="h-full w-full object-contain"
+                    />
+                  )}
+                  {!streams[student.id] && !frames[student.id] && (
                     <span className="absolute inset-0 grid place-items-center text-sm text-white/70">
                       <Monitor size={20} className="mr-2" />
                       Connecting to {student.name}…
@@ -281,7 +340,7 @@ export default function LiveMonitoring() {
                   )}
                   <span className="absolute bottom-0 left-0 right-0 flex items-center justify-between bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-8 text-sm text-white">
                     <span>
-                      {student.name} · Score {student.score} ·{' '}
+                      {student.name} · Score {student.score} ({student.tier.toLowerCase()} risk) ·{' '}
                       {student.tabSwitches} tab switch
                       {student.tabSwitches === 1 ? '' : 'es'}
                     </span>
@@ -290,7 +349,13 @@ export default function LiveMonitoring() {
                 </button>
               ))}
             </div>
-            {!students.length && (
+            {loadError && (
+              <div className="rounded-lg border border-risk-high/30 bg-risk-high/5 p-6 text-sm text-risk-high">
+                Live sessions could not be loaded. Check that the backend is
+                running, then refresh this page.
+              </div>
+            )}
+            {!loadError && !students.length && (
               <div className="rounded-lg border border-border bg-canvas p-6 text-sm text-text-2">
                 No students have started this exam yet.
               </div>
@@ -303,7 +368,7 @@ export default function LiveMonitoring() {
           <div className="relative flex h-full w-full max-w-7xl flex-col">
             <div className="mb-3 flex items-center justify-between text-white">
               <span>
-                {selectedStudent.name} — score {selectedStudent.score} ·{' '}
+                {selectedStudent.name} — score {selectedStudent.score} ({selectedStudent.tier.toLowerCase()} risk) ·{' '}
                 {selectedStudent.tabSwitches} tab switches
               </span>
               <Button
@@ -326,9 +391,16 @@ export default function LiveMonitoring() {
                 }}
                 autoPlay
                 playsInline
-                className="max-h-full max-w-full"
+                className={`max-h-full max-w-full ${selectedStream ? '' : 'hidden'}`}
               />
-              {!selectedStream && (
+              {!selectedStream && frames[selectedStudent.id] && (
+                <img
+                  src={frames[selectedStudent.id]}
+                  alt={`${selectedStudent.name}'s shared screen`}
+                  className="max-h-full max-w-full object-contain"
+                />
+              )}
+              {!selectedStream && !frames[selectedStudent.id] && (
                 <span className="text-sm text-white/70">Connecting…</span>
               )}
             </div>
