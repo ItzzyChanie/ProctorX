@@ -62,8 +62,7 @@ export class AuthService {
             },
           });
         });
-      }
-      catch (error) {
+      } catch (error) {
         if (
           !(error instanceof Prisma.PrismaClientKnownRequestError) ||
           error.code !== 'P2002'
@@ -100,7 +99,7 @@ export class AuthService {
       ...(sessionId ? { jti: sessionId } : {}),
     });
   }
-  
+
   private profile(user: UserWithProfile) {
     const {
       passwordHash,
@@ -285,6 +284,7 @@ export class AuthService {
       where: { userId, id: sessionId, expiresAt: { gt: new Date() } },
       data: { lastSeenAt: new Date() },
     });
+
     if (!result.count) throw new UnauthorizedException();
     return { success: true };
   }
