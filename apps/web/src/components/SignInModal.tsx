@@ -44,9 +44,12 @@ export function SignInModal({
     dialog.current?.focus();
     return () => window.removeEventListener("keydown", close);
   }, [open, onClose]);
+
   if (!open) return null;
+
   const submit = async (values: z.infer<typeof schema>) => {
     setError("");
+
     try {
       const { data } = await api.post<LoginResponse | PendingActivationResponse>("/auth/login", values);
       if ("activationRequired" in data) {
@@ -60,20 +63,27 @@ export function SignInModal({
           ? "/change-password"
           : destination[data.user.role],
       );
-    } catch {
+    }
+    catch (error: any) {
       setError(
-        "We couldn’t sign you in. Check your credentials and try again.",
+        error?.response?.status === 409
+          ? "This student account is already active on another browser or device. The existing session was kept active and notified."
+          : "We couldn’t sign you in. Check your credentials and try again.",
       );
     }
   };
+
   const verifyActivation = async (event: React.FormEvent) => {
     event.preventDefault(); setError("");
     const parsed = otpSchema.safeParse({ loginId: activation?.loginId, code: otp });
+
     if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? "Enter a valid activation code."); return; }
+
     try {
       const { data } = await api.post("/auth/verify-activation", parsed.data);
       setAuth(data.user); onClose(); navigate("/change-password");
-    } catch { setError("The activation code is invalid or expired."); }
+    }
+    catch { setError("The activation code is invalid or expired."); }
   };
   return (
     <div

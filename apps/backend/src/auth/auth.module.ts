@@ -8,6 +8,7 @@ import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { RolesGuard } from "./guards/roles.guard";
 import { PermissionsGuard } from "./guards/permissions.guard";
 import { EmailService } from "./email.service";
+import { AuthGateway } from "./auth.gateway";
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { EmailService } from "./email.service";
     RolesGuard,
     PermissionsGuard,
     EmailService,
+    AuthGateway,
   ],
   exports: [JwtAuthGuard, RolesGuard, PermissionsGuard],
 })

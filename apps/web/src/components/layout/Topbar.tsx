@@ -4,6 +4,7 @@ import { Bell, Check, Moon, Sun } from "lucide-react";
 import { api } from "../../lib/api";
 import { useTheme } from "../../lib/useTheme";
 import type { Role } from "../../types/dashboard";
+import { notificationSocket } from "../../lib/socket";
 
 type TopbarProps = { role: Role; pageTitle: string; userName: string; userTag: string };
 type Notification = { id: string; type: string; message: string; isRead: boolean; createdAt: string };
@@ -41,6 +42,13 @@ export function Topbar({ role, pageTitle, userName, userTag }: TopbarProps) {
     mutationFn: (id: string) => api.patch(`${endpoint}/${id}/read`),
     onSuccess: () => client.invalidateQueries({ queryKey }),
   });
+
+  useEffect(() => {
+    if (role !== 'student') return;
+    const refresh = () => client.invalidateQueries({ queryKey });
+    notificationSocket.on('notification:new', refresh);
+    return () => { notificationSocket.off('notification:new', refresh); };
+  }, [client, role]);
 
   useEffect(() => {
     if (!notificationsOpen) return;

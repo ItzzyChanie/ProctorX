@@ -148,9 +148,22 @@ model User {
   examSessions          ExamSession[]
   auditLogs             AuditLog[]
   notifications         Notification[]
+  studentLoginSession   StudentLoginSession?
   requestedReports      GeneratedReport[]
 
   @@map("users")
+}
+
+model StudentLoginSession {
+  id         String   @id
+  userId     String   @unique
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  expiresAt  DateTime
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("student_login_sessions")
 }
 
 model DeanProfile {

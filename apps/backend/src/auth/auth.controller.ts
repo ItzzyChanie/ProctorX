@@ -51,9 +51,11 @@ export class AuthController {
       passwordChangeRequired: result.user.mustChangePassword,
     };
   }
+
   @Post('verify-activation')
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+
   async verifyActivation(
     @Body() body: VerifyOtpDto,
     @Res({ passthrough: true }) response: Response
@@ -66,10 +68,20 @@ export class AuthController {
     );
     return { user: result.user, passwordChangeRequired: true };
   }
-  @Post('logout') logout(@Res({ passthrough: true }) response: Response) {
+
+  @UseGuards(JwtAuthGuard) @Post('logout') async logout(
+    @Req() req: any,
+    @Res({ passthrough: true }) response: Response
+  ) {
+    await this.auth.logout(req.user.id, req.user.loginSessionId);
     response.clearCookie('proctorx_session', this.cookieOptions());
     return { success: true };
   }
+
+  @UseGuards(JwtAuthGuard) @Post('heartbeat') heartbeat(@Req() req: any) {
+    return this.auth.heartbeat(req.user.id, req.user.loginSessionId);
+  }
+
   @UseGuards(JwtAuthGuard) @Post('change-password') changePassword(
     @Req() req: any,
     @Body() body: ChangePasswordDto
@@ -80,6 +92,7 @@ export class AuthController {
       body.newPassword
     );
   }
+
   @UseGuards(JwtAuthGuard) @Get('me') me(@Req() req: any) {
     return this.auth.me(req.user);
   }

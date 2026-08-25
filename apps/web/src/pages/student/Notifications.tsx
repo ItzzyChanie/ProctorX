@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Bell, CheckCircle2 } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card } from '../../components/ui/Card';
 import { api } from '../../lib/api';
+import { notificationSocket } from '../../lib/socket';
 
 type Notification = {
   id: string;
@@ -51,6 +52,14 @@ export default function Notifications() {
     },
     onError: () => notify('Could not mark the notification as read.', true),
   });
+  useEffect(() => {
+    const refresh = () =>
+      client.invalidateQueries({ queryKey: ['notifications', 'student'] });
+    notificationSocket.on('notification:new', refresh);
+    return () => {
+      notificationSocket.off('notification:new', refresh);
+    };
+  }, [client]);
   return (
     <DashboardLayout
       role="student"

@@ -34,7 +34,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       secretOrKey: config.get<string>("JWT_SECRET") ?? "development-secret",
     });
   }
-  async validate(payload: { sub: string }) {
+  async validate(payload: { sub: string; role?: string; jti?: string }) {
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       include: {
@@ -43,7 +43,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         studentProfile: true,
       },
     });
+
     if (!user || !user.isActive || user.status === AccountStatus.DISABLED) throw new UnauthorizedException();
-    return user;
+
+    if (user.role === 'STUDENT') {
+      if (!payload.jti) throw new UnauthorizedException();
+      const session = await this.prisma.studentLoginSession.findUnique({ where: { userId: user.id } });
+      if (!session || session.id !== payload.jti || session.expiresAt <= new Date()) throw new UnauthorizedException();
+    }
+    return { ...user, loginSessionId: payload.jti };
   }
 }
