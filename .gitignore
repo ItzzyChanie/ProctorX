@@ -7,6 +7,12 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Keep local secrets out of Git while retaining the local files
+.env
+.env.*
+!.env.example
+!**/.env.example
+
 node_modules
 dist
 dist-ssr
