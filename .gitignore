@@ -11,6 +11,9 @@ lerna-debug.log*
 .env
 .env.*
 
+# Local database seeding configuration
+apps/backend/prisma/seed.ts
+
 node_modules
 dist
 dist-ssr
