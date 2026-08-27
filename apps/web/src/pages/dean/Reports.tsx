@@ -22,6 +22,8 @@ const reportSchema = z
     dateFrom: z.string().date(),
     dateTo: z.string().date(),
     format: z.enum(['pdf', 'excel']),
+    academicPeriodId: z.string().optional(),
+    term: z.string().optional(),
   })
   .refine((x) => x.dateFrom <= x.dateTo, {
     path: ['dateTo'],
@@ -35,6 +37,12 @@ export default function Reports() {
     dateFrom: '',
     dateTo: '',
     format: 'pdf' as 'pdf' | 'excel',
+    academicPeriodId: '',
+    term: '',
+  });
+  const { data: periods = [] } = useQuery({
+    queryKey: ['academic-periods'],
+    queryFn: async () => (await api.get<{id:string;academicYear:string;semester:string;status:string}[]>('/academic-periods')).data,
   });
   const [message, setMessage] = useState('');
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -58,7 +66,7 @@ export default function Reports() {
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ['dean-reports'] });
       setMessage('Report queued for generation.');
-      setForm({ name: '', dateFrom: '', dateTo: '', format: 'pdf' });
+      setForm({ name: '', dateFrom: '', dateTo: '', format: 'pdf', academicPeriodId: '', term: '' });
     },
     onError: () => setMessage('Could not queue the report.'),
   });
@@ -116,6 +124,8 @@ export default function Reports() {
               placeholder="Report name"
               className="rounded border border-border p-2"
             />
+            <select value={form.academicPeriodId} onChange={(e)=>setForm({...form,academicPeriodId:e.target.value})} className="rounded border border-border p-2"><option value="">All semesters</option>{periods.map(x=><option key={x.id} value={x.id}>{x.academicYear} · {x.semester === 'FIRST' ? 'First' : 'Second'} Semester</option>)}</select>
+            <select value={form.term} onChange={(e)=>setForm({...form,term:e.target.value})} className="rounded border border-border p-2"><option value="">All terms</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option><option value="UNSPECIFIED">Legacy / Unspecified</option></select>
             <input
               required
               type="date"

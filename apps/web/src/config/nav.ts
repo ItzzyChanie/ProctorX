@@ -16,6 +16,9 @@ import {
   ClipboardList,
   Clock,
   GraduationCap,
+  CalendarRange,
+  BookOpen,
+  Layers3,
 } from "lucide-react";
 import type { NavItem, Role } from "../types/dashboard";
 
@@ -83,16 +86,15 @@ export const NAV: Record<Role, NavItem[]> = {
       path: "/teacher/correlation",
     },
     {
-      key: "classes",
-      label: "Student Lists",
-      icon: Users,
-      path: "/teacher/students",
-    },
-    {
       key: "subjects",
       label: "Subjects & Exams",
       icon: GraduationCap,
       path: "/teacher/classes",
+      children: [
+        { key: "subjects-overview", label: "My Subjects & Exams", icon: BookOpen, path: "/teacher/classes" },
+        { key: "class-sections", label: "Class Sections", icon: Layers3, path: "/teacher/class-sections" },
+        { key: "student-rosters", label: "Student Rosters", icon: Users, path: "/teacher/rosters" },
+      ],
     },
     {
       key: "messages",
@@ -120,6 +122,7 @@ export const NAV: Record<Role, NavItem[]> = {
       icon: FileText,
       path: "/dean/analytics",
     },
+    { key: "academic-semesters", label: "Academic Semesters", icon: CalendarRange, path: "/dean/academic-semesters" },
     {
       key: "departments",
       label: "Departments & Professors",

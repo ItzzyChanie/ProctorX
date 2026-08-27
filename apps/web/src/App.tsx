@@ -21,11 +21,14 @@ import Recordings from './pages/teacher/Recordings';
 import Incidents from './pages/teacher/Incidents';
 import Correlation from './pages/teacher/Correlation';
 import Classes from './pages/teacher/Classes';
+import ClassSections from './pages/teacher/ClassSections';
+import StudentRosters from './pages/teacher/StudentRosters';
 import Messages from './pages/teacher/Messages';
 
 import DeanDashboard from './pages/dean/DeanDashboard';
 import DeanProfile from './pages/dean/Profile';
 import Analytics from './pages/dean/Analytics';
+import AcademicSemesters from './pages/dean/AcademicSemesters';
 import Departments from './pages/dean/Departments';
 import Reports from './pages/dean/Reports';
 import AuditLogs from './pages/dean/AuditLogs';
@@ -114,6 +117,8 @@ export default function App() {
             <Route path="/teacher/incidents" element={<Incidents />} />
             <Route path="/teacher/correlation" element={<Correlation />} />
             <Route path="/teacher/classes" element={<Classes />} />
+            <Route path="/teacher/class-sections" element={<ClassSections />} />
+            <Route path="/teacher/rosters" element={<StudentRosters />} />
             <Route path="/teacher/messages" element={<Messages />} />
             <Route path="/teacher/profile" element={<TeacherProfile />} />
             <Route
@@ -125,6 +130,7 @@ export default function App() {
           <Route element={<ProtectedRoute roles={[Role.DEAN]} />}>
             <Route path="/dean" element={<DeanDashboard />} />
             <Route path="/dean/analytics" element={<Analytics />} />
+            <Route path="/dean/academic-semesters" element={<AcademicSemesters />} />
             <Route path="/dean/departments" element={<Departments />} />
             <Route path="/dean/reports" element={<Reports />} />
             <Route path="/dean/audit" element={<AuditLogs />} />

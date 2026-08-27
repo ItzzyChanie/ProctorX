@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Eye, LogOut, Menu } from 'lucide-react';
+import { ChevronDown, Eye, LogOut, Menu } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { NAV } from '../../config/nav';
 import { api } from '../../lib/api';
@@ -8,6 +8,9 @@ import type { Role } from '../../types/dashboard';
 
 export function Sidebar({ role }: { role: Role }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
+    subjects: true,
+  });
   const { signOut } = useAuthStore();
   const navigate = useNavigate();
 
@@ -53,6 +56,46 @@ export function Sidebar({ role }: { role: Role }) {
         )}
         {NAV[role].map((item) => {
           const Icon = item.icon;
+          if (item.children?.length && !collapsed)
+            return (
+              <div key={item.key} className="mb-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setOpenGroups((x) => ({ ...x, [item.key]: !x[item.key] }))
+                  }
+                  className="flex w-full items-center gap-3 rounded-[12px] px-3.5 py-3 text-[14px] font-medium text-text-2 hover:bg-brand-soft hover:text-brand"
+                  aria-expanded={!!openGroups[item.key]}
+                >
+                  <Icon size={17} />
+                  <span className="flex-1 text-left">{item.label}</span>
+                  <ChevronDown
+                    size={16}
+                    className={`transition-transform ${openGroups[item.key] ? 'rotate-180' : ''}`}
+                  />
+                </button>
+                {openGroups[item.key] && (
+                  <div className="ml-5 border-l border-border pl-2">
+                    {item.children.map((child) => {
+                      const ChildIcon = child.icon;
+                      return (
+                        <NavLink
+                          key={child.key}
+                          to={child.path}
+                          end={child.path === '/teacher/classes'}
+                          className={({ isActive }) =>
+                            `mb-1 flex items-center gap-2 rounded-lg px-3 py-2.5 text-[13px] ${isActive ? 'bg-brand-soft font-semibold text-brand' : 'text-text-2 hover:bg-brand-soft hover:text-brand'}`
+                          }
+                        >
+                          <ChildIcon size={15} />
+                          <span>{child.label}</span>
+                        </NavLink>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
           return (
             <NavLink
               key={item.key}

@@ -24,6 +24,8 @@ type Exam = {
   sessionCount: number;
   subject: { code: string };
   _count: { sessions: number };
+  term?:string;
+  academicPeriod?:{id:string;academicYear:string;semester:'FIRST'|'SECOND'};
 };
 type CorrelationPair = {
   suspicion_score: number;
@@ -48,6 +50,7 @@ export default function Correlation() {
     p = useChartPalette(dark);
   const [exams, setExams] = useState<Exam[]>([]),
     [examId, setExamId] = useState(''),
+    [periodId,setPeriodId]=useState(''), [term,setTerm]=useState(''),
     [result, setResult] = useState<Result | null>(null),
     [message, setMessage] = useState('');
   useEffect(() => {
@@ -59,6 +62,8 @@ export default function Correlation() {
     const timer = window.setInterval(load, 5_000);
     return () => window.clearInterval(timer);
   }, []);
+  const periods=[...new Map(exams.filter(x=>x.academicPeriod).map(x=>[x.academicPeriod!.id,x.academicPeriod!])).values()];
+  const visibleExams=exams.filter(x=>(!periodId||x.academicPeriod?.id===periodId)&&(!term||x.term===term));
   useEffect(() => {
     if (!examId) {
       setResult(null);
@@ -87,6 +92,7 @@ export default function Correlation() {
     >
       <div className="flex flex-col gap-5">
         <Card>
+          <div className="mb-4 grid gap-2 md:grid-cols-2"><select value={periodId} onChange={e=>{setPeriodId(e.target.value);setExamId('')}} className="rounded border border-border bg-surface p-2"><option value="">All semesters</option>{periods.map(x=><option key={x.id} value={x.id}>{x.academicYear} · {x.semester==='FIRST'?'First':'Second'} Semester</option>)}</select><select value={term} onChange={e=>{setTerm(e.target.value);setExamId('')}} className="rounded border border-border bg-surface p-2"><option value="">All terms</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option></select></div>
           <label className="text-sm text-text-2">
             Exam{' '}
             <select
@@ -95,7 +101,7 @@ export default function Correlation() {
               className="ml-2 min-w-72 rounded border border-border bg-surface p-2 text-text-1"
             >
               <option value="">Select a completed, fully graded exam…</option>
-              {exams.map((exam) => (
+              {visibleExams.map((exam) => (
                 <option key={exam.id} value={exam.id}>
                   {exam.subject.code} — {exam.title}
                 </option>

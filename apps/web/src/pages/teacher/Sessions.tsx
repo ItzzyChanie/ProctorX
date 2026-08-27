@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Copy, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -15,10 +15,14 @@ type Exam = {
   status: string;
   liveSessionCount: number;
   studentCount: number;
+  term?: string;
+  academicPeriod?: { id:string; academicYear:string; semester:'FIRST'|'SECOND' };
 };
 export default function Sessions() {
   const nav = useNavigate(),
-    [toast, setToast] = useState('');
+    [toast, setToast] = useState(''),
+    [periodId,setPeriodId]=useState(''),
+    [term,setTerm]=useState('');
   const {
     data: rows = [],
     isLoading,
@@ -28,6 +32,9 @@ export default function Sessions() {
     queryFn: async () => (await api.get<Exam[]>('/teacher/exams')).data,
     refetchInterval: 5_000,
   });
+  const periodOptions=useQuery({queryKey:['academic-periods'],queryFn:async()=>(await api.get<{id:string;academicYear:string;semester:'FIRST'|'SECOND'}[]>('/academic-periods')).data});
+  const periods=periodOptions.data??[...new Map(rows.filter(x=>x.academicPeriod).map(x=>[x.academicPeriod!.id,x.academicPeriod!])).values()];
+  const visible=useMemo(()=>rows.filter(x=>(!periodId||x.academicPeriod?.id===periodId)&&(!term||x.term===term)),[rows,periodId,term]);
   const copy = async (code: string) => {
     await navigator.clipboard.writeText(code);
     setToast('Room code copied.');
@@ -60,6 +67,7 @@ export default function Sessions() {
             }
           />
         </Card>
+        <Card><div className="grid gap-3 md:grid-cols-2"><select value={periodId} onChange={e=>setPeriodId(e.target.value)} className="rounded border border-border bg-surface p-2"><option value="">All semesters</option>{periods.map(x=><option key={x.id} value={x.id}>{x.academicYear} · {x.semester==='FIRST'?'First':'Second'} Semester</option>)}</select><select value={term} onChange={e=>setTerm(e.target.value)} className="rounded border border-border bg-surface p-2"><option value="">All terms</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option></select></div></Card>
         <Card padded={false}>
           {isLoading && (
             <div className="p-5 text-sm text-text-2">Loading exams…</div>
@@ -74,7 +82,7 @@ export default function Sessions() {
               Create an exam to generate its student room code.
             </div>
           )}
-          {rows.map((r, i) => (
+          {visible.map((r, i) => (
             <div
               key={r.examId}
               className="flex items-center justify-between px-5 py-4"
@@ -84,6 +92,7 @@ export default function Sessions() {
                 <div className="font-body text-[13.5px] font-semibold text-text-1">
                   {r.subjectCode} — {r.title}
                 </div>
+                <div className="text-xs text-brand">{r.academicPeriod ? `${r.academicPeriod.academicYear} · ${r.academicPeriod.semester === 'FIRST' ? 'First Semester' : 'Second Semester'}` : 'Current semester'} · {(r.term ?? 'PRELIMINARY').replace('_',' ')}</div>
                 <div className="font-body text-[11.5px] text-text-3">
                   {r.studentCount} enrolled · {r.liveSessionCount} live
                 </div>

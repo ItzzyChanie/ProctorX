@@ -115,6 +115,8 @@ export class SessionsService {
         status: true,
         roomCode: true,
         endsAt: true,
+        term: true,
+        academicPeriod: true,
         subject: { select: { code: true, name: true } },
         _count: { select: { sessions: true } },
       },

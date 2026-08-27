@@ -13,14 +13,19 @@ import { Server, Socket } from 'socket.io';
     credentials: true,
   },
 })
-
 export class SessionsGateway {
   @WebSocketServer() server!: Server;
   private watchers = new Map<string, string>();
   private students = new Map<
     string,
-    { sessionId: string; examId?: string; connectedAt: Date }
+    {
+      sessionId: string;
+      examId?: string;
+      connectedAt: Date;
+      lastActivityAt: Date;
+    }
   >();
+  private readonly activityTimeoutMs = 20_000;
 
   @SubscribeMessage('monitor:join') monitor(
     @ConnectedSocket() c: Socket,
@@ -38,6 +43,7 @@ export class SessionsGateway {
       ...b,
       connectedAt:
         existing?.sessionId === b.sessionId ? existing.connectedAt : new Date(),
+      lastActivityAt: new Date(),
     });
 
     c.join(`student:${b.sessionId}`);
@@ -97,15 +103,15 @@ export class SessionsGateway {
     @MessageBody() b: { sessionId: string; frame: Buffer; mimeType?: string }
   ) {
     if (!c.rooms.has(`student:${b.sessionId}`)) return;
+    const student = this.students.get(c.id);
+    if (student?.sessionId === b.sessionId) student.lastActivityAt = new Date();
     const watcher = this.watchers.get(b.sessionId);
     if (watcher)
-      this.server
-        .to(watcher)
-        .emit('screen:frame', {
-          sessionId: b.sessionId,
-          frame: b.frame,
-          mimeType: b.mimeType,
-        });
+      this.server.to(watcher).emit('screen:frame', {
+        sessionId: b.sessionId,
+        frame: b.frame,
+        mimeType: b.mimeType,
+      });
   }
 
   handleDisconnect(c: Socket) {
@@ -121,15 +127,23 @@ export class SessionsGateway {
   }
 
   isStudentConnected(sessionId: string) {
+    const activeAfter = Date.now() - this.activityTimeoutMs;
     return [...this.students.values()].some(
-      (student) => student.sessionId === sessionId
+      (student) =>
+        student.sessionId === sessionId &&
+        student.lastActivityAt.getTime() >= activeAfter
     );
   }
 
   activeSessionIds(examId: string) {
+    const activeAfter = Date.now() - this.activityTimeoutMs;
     return new Set(
       [...this.students.values()]
-        .filter((student) => student.examId === examId)
+        .filter(
+          (student) =>
+            student.examId === examId &&
+            student.lastActivityAt.getTime() >= activeAfter
+        )
         .map((student) => student.sessionId)
     );
   }
@@ -170,7 +184,7 @@ export class SessionsGateway {
   warn(sessionId: string, message: string) {
     this.server.to(`student:${sessionId}`).emit('student:warn', { message });
   }
-  
+
   lock(sessionId: string, locked: boolean) {
     this.server.to(`student:${sessionId}`).emit('student:lock', { locked });
   }

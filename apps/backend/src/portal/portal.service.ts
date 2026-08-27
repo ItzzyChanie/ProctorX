@@ -7,15 +7,24 @@ import {
 import {
   AccountStatus,
   GradeStatus,
+  Prisma,
   Role,
   SessionStatus,
 } from '@prisma/client';
 import bcrypt from 'bcrypt';
+import * as XLSX from 'xlsx';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsGateway } from '../sessions/sessions.gateway';
+import {
+  CreateAcademicPeriodDto,
+  InviteProfessorDto,
+  UpdateFacultyDto,
+} from './dto/portal.dto';
 
 type DeanAnalyticsFilters = {
+  academicPeriodId?: string;
+  term?: string;
   dateFrom?: string;
   dateTo?: string;
   program?: string;
@@ -32,11 +41,147 @@ export class PortalService {
     private ai: AiService
   ) {}
 
+  async academicPeriods() {
+    return this.prisma.academicPeriod.findMany({
+      include: { _count: { select: { exams: true } } },
+      orderBy: [{ academicYear: 'desc' }, { semester: 'desc' }],
+    });
+  }
+
+  async createAcademicPeriod(deanId: string, input: CreateAcademicPeriodDto) {
+    if (
+      input.startsAt &&
+      input.endsAt &&
+      new Date(input.endsAt) <= new Date(input.startsAt)
+    )
+      throw new ConflictException(
+        'Semester end date must be after its start date'
+      );
+    if (
+      await this.prisma.academicPeriod.findFirst({
+        where: { status: 'ACTIVE' },
+      })
+    )
+      throw new ConflictException(
+        'Close the current active semester before starting another one'
+      );
+    const years = input.academicYear.split('-').map(Number);
+    if (years.length !== 2 || years[1] !== years[0]! + 1)
+      throw new ConflictException(
+        'Academic year must contain consecutive years'
+      );
+    try {
+      const period = await this.prisma.academicPeriod.create({
+        data: {
+          academicYear: input.academicYear,
+          semester: input.semester,
+          startsAt: input.startsAt ? new Date(input.startsAt) : null,
+          endsAt: input.endsAt ? new Date(input.endsAt) : null,
+        },
+      });
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: deanId,
+          action: 'ACADEMIC_PERIOD_CREATED',
+          targetType: 'AcademicPeriod',
+          targetId: period.id,
+          metadata: {
+            academicYear: period.academicYear,
+            semester: period.semester,
+          },
+        },
+      });
+      return period;
+    } catch (error) {
+      if (error instanceof ConflictException) throw error;
+      throw new ConflictException(
+        'That academic year and semester already exists'
+      );
+    }
+  }
+
+  async closeAcademicPeriod(deanId: string, id: string) {
+    const period = await this.prisma.academicPeriod.findUnique({
+      where: { id },
+      include: {
+        exams: {
+          select: {
+            id: true,
+            term: true,
+            status: true,
+            sessions: {
+              where: { status: SessionStatus.IN_PROGRESS },
+              select: { id: true },
+            },
+          },
+        },
+      },
+    });
+    if (!period) throw new NotFoundException('Academic period not found');
+    if (period.status === 'CLOSED')
+      throw new ConflictException('This semester is already closed');
+    if (
+      period.exams.some(
+        (exam) => exam.status === 'PUBLISHED' || exam.sessions.length
+      )
+    )
+      throw new ConflictException(
+        'Stop all active assessments before closing the semester'
+      );
+    if (!period.exams.some((exam) => exam.term === 'FINAL'))
+      throw new ConflictException(
+        'A Final-term assessment is required before closing the semester'
+      );
+    const saved = await this.prisma.academicPeriod.update({
+      where: { id },
+      data: { status: 'CLOSED', closedAt: new Date() },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: deanId,
+        action: 'ACADEMIC_PERIOD_CLOSED',
+        targetType: 'AcademicPeriod',
+        targetId: id,
+      },
+    });
+    return saved;
+  }
+
+  async reopenAcademicPeriod(deanId: string, id: string) {
+    const period = await this.prisma.academicPeriod.findUnique({
+      where: { id },
+    });
+    if (!period) throw new NotFoundException('Academic period not found');
+    if (period.academicYear === 'Legacy')
+      throw new ConflictException('The legacy period cannot be reopened');
+    if (
+      await this.prisma.academicPeriod.findFirst({
+        where: { status: 'ACTIVE', id: { not: id } },
+      })
+    )
+      throw new ConflictException(
+        'Close the current active semester before reopening another one'
+      );
+    const saved = await this.prisma.academicPeriod.update({
+      where: { id },
+      data: { status: 'ACTIVE', closedAt: null },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: deanId,
+        action: 'ACADEMIC_PERIOD_REOPENED',
+        targetType: 'AcademicPeriod',
+        targetId: id,
+      },
+    });
+    return saved;
+  }
+
   async studentSessions(userId: string) {
     const rows = await this.prisma.examSession.findMany({
       where: { studentId: userId },
       include: {
-        exam: { include: { subject: true } },
+        exam: { include: { subject: true, academicPeriod: true } },
         scoreHistory: { orderBy: { computedAt: 'desc' } },
         incidents: { where: { status: 'OPEN' }, select: { id: true } },
       },
@@ -47,6 +192,8 @@ export class PortalService {
       sessionId: x.id,
       examTitle: x.exam.title,
       subjectCode: x.exam.subject.code,
+      term: x.exam.term,
+      academicPeriod: x.exam.academicPeriod,
       startedAt: x.startedAt,
       endedAt: x.endedAt,
       durationSec: x.endedAt
@@ -90,7 +237,10 @@ export class PortalService {
     const [sessions, enrollments] = await Promise.all([
       this.prisma.examSession.findMany({
         where: { studentId: userId },
-        include: { exam: { include: { subject: true } }, submission: true },
+        include: {
+          exam: { include: { subject: true, academicPeriod: true } },
+          submission: true,
+        },
         orderBy: { startedAt: 'desc' },
       }),
       this.prisma.enrollment.findMany({
@@ -100,7 +250,12 @@ export class PortalService {
             include: {
               exams: {
                 where: { status: 'PUBLISHED', scheduledAt: { gt: new Date() } },
-                select: { title: true, scheduledAt: true },
+                select: {
+                  title: true,
+                  scheduledAt: true,
+                  term: true,
+                  academicPeriod: true,
+                },
               },
             },
           },
@@ -115,11 +270,18 @@ export class PortalService {
         : 'IDLE',
       upcomingSessions: enrollments
         .flatMap((e) => e.subject.exams)
-        .map((e) => ({ examTitle: e.title, startsAt: e.scheduledAt! }))
+        .map((e) => ({
+          examTitle: e.title,
+          startsAt: e.scheduledAt!,
+          term: e.term,
+          academicPeriod: e.academicPeriod,
+        }))
         .sort((a, b) => +a.startsAt - +b.startsAt),
       recentActivity: sessions.slice(0, 5).map((x) => ({
         text: `${x.status === 'IN_PROGRESS' ? 'Joined' : 'Completed'} ${x.exam.title}`,
         occurredAt: x.startedAt,
+        term: x.exam.term,
+        academicPeriod: x.exam.academicPeriod,
       })),
       scoreHistory: sessions
         .filter(
@@ -131,13 +293,18 @@ export class PortalService {
           examTitle: x.exam.title,
           score: x.submission!.totalScore!,
           maxScore: x.submission!.maxScore,
+          term: x.exam.term,
+          academicPeriod: x.exam.academicPeriod,
         })),
       sessionTimeMinutes: sessions
         .filter((x) => x.endedAt)
         .map((x) => ({
           examTitle: x.exam.title,
           minutes: Math.round((+x.endedAt! - +x.startedAt) / 60000),
+          term: x.exam.term,
+          academicPeriod: x.exam.academicPeriod,
         })),
+      academicPeriods: await this.academicPeriods(),
     };
   }
 
@@ -146,6 +313,7 @@ export class PortalService {
       where: { subject: { teacherId } },
       include: {
         subject: { include: { _count: { select: { enrollments: true } } } },
+        academicPeriod: true,
         sessions: true,
       },
       orderBy: { createdAt: 'desc' },
@@ -165,6 +333,8 @@ export class PortalService {
         examId: x.id,
         title: x.title,
         subjectCode: x.subject.code,
+        term: x.term,
+        academicPeriod: x.academicPeriod,
         roomCode: x.roomCode,
         status: ended
           ? 'Ended'
@@ -204,7 +374,7 @@ export class PortalService {
     });
 
     if (!exam) throw new NotFoundException('Exam session was not found');
-    
+
     const ended =
       exam.status !== 'PUBLISHED' ||
       (!!exam.endsAt && exam.endsAt <= new Date());
@@ -303,7 +473,7 @@ export class PortalService {
         session: {
           include: {
             student: { select: { fullName: true } },
-            exam: { select: { title: true } },
+            exam: { select: { title: true, term: true, academicPeriod: true } },
           },
         },
       },
@@ -334,33 +504,52 @@ export class PortalService {
 
   async professors() {
     const rows = await this.prisma.user.findMany({
-      where: { role: Role.TEACHER },
-      include: { taughtSubjects: true },
+      where: { role: { in: [Role.DEAN, Role.TEACHER] } },
+      include: {
+        taughtSubjects: true,
+        teacherProfile: true,
+        deanProfile: true,
+      },
       orderBy: { fullName: 'asc' },
     });
     return rows.map((x) => ({
       userId: x.id,
+      employeeId: x.teacherProfile?.employeeId ?? x.deanProfile?.employeeId,
       name: x.fullName,
+      email: x.email,
+      title: x.teacherProfile?.department ?? x.deanProfile?.college,
+      role: x.role,
+      profilePicture: (x as typeof x & { profilePicture: string | null })
+        .profilePicture,
+      status: x.status,
+      createdAt: x.createdAt,
       subjects: x.taughtSubjects.map((s) => s.code),
       lastActiveAt: x.updatedAt,
     }));
   }
 
-  async invite(deanId: string, email: string, fullName: string) {
-    const loginId = email.trim().toLowerCase();
+  async invite(deanId: string, input: InviteProfessorDto) {
+    const loginId = input.employeeId.trim().toLowerCase();
     if (await this.prisma.user.findUnique({ where: { loginId } }))
       throw new ConflictException('Account already exists');
-
+    const email = input.email.trim().toLowerCase();
+    const initialPassword = `${input.firstName.trim()[0]}${input.lastName.trim()[0]}@123`;
     const user = await this.prisma.user.create({
       data: {
         role: Role.TEACHER,
         loginId,
-        email: loginId,
-        fullName: fullName.trim(),
-        passwordHash: await bcrypt.hash(loginId, 10),
+        email,
+        fullName: `${input.firstName.trim()} ${input.lastName.trim()}`,
+        profilePicture: input.profilePicture,
+        passwordHash: await bcrypt.hash(initialPassword.toLowerCase(), 12),
         status: AccountStatus.PENDING,
         mustChangePassword: true,
-        teacherProfile: { create: {} },
+        teacherProfile: {
+          create: {
+            employeeId: input.employeeId.trim(),
+            department: input.title.trim(),
+          },
+        },
       },
     });
 
@@ -372,35 +561,228 @@ export class PortalService {
         targetId: user.id,
       },
     });
-    return { userId: user.id, email: user.email, status: user.status };
+    return {
+      userId: user.id,
+      email: user.email,
+      status: user.status,
+      initialPassword,
+    };
   }
 
-  async teacherDashboard(teacherId: string) {
+  async updateFaculty(deanId: string, id: string, input: UpdateFacultyDto) {
+    const exists = await this.prisma.user.findFirst({
+      where: { id, role: { in: [Role.DEAN, Role.TEACHER] } },
+    });
+
+    if (!exists) throw new NotFoundException('Faculty member not found');
+    const user = await this.prisma.user.update({
+      where: { id },
+      data: {
+        fullName: input.fullName.trim(),
+        email: input.email.trim().toLowerCase(),
+        ...(input.profilePicture !== undefined
+          ? { profilePicture: input.profilePicture || null }
+          : {}),
+        ...(input.newPassword
+          ? {
+              passwordHash: await bcrypt.hash(
+                input.newPassword.toLowerCase(),
+                12
+              ),
+              mustChangePassword: true,
+            }
+          : {}),
+        ...(exists.role === Role.DEAN
+          ? {
+              deanProfile: {
+                update: {
+                  college: input.title.trim(),
+                  ...(input.employeeId !== undefined
+                    ? { employeeId: input.employeeId.trim() || null }
+                    : {}),
+                },
+              },
+            }
+          : {
+              teacherProfile: {
+                update: {
+                  department: input.title.trim(),
+                  ...(input.employeeId !== undefined
+                    ? { employeeId: input.employeeId.trim() || null }
+                    : {}),
+                },
+              },
+            }),
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: deanId,
+        action: 'FACULTY_ACCOUNT_UPDATED',
+        targetType: 'User',
+        targetId: id,
+      },
+    });
+    return user;
+  }
+
+  async deleteFaculty(deanId: string, id: string) {
+    const exists = await this.prisma.user.findFirst({
+      where: { id, role: Role.TEACHER },
+      select: {
+        id: true,
+        fullName: true,
+        _count: { select: { taughtSubjects: true } },
+      },
+    });
+    if (!exists) throw new NotFoundException('Faculty member not found');
+    if (exists._count.taughtSubjects > 0) {
+      throw new ConflictException(
+        `${exists.fullName} still owns ${exists._count.taughtSubjects} subject${exists._count.taughtSubjects === 1 ? '' : 's'}. Transfer or remove those subjects before deleting this account.`
+      );
+    }
+    try {
+      await this.prisma.user.delete({ where: { id } });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2003'
+      ) {
+        throw new ConflictException(
+          'This faculty account still has related academic or activity records and cannot be deleted.'
+        );
+      }
+      throw error;
+    }
+    return { deleted: true };
+  }
+
+  async importFaculty(deanId: string, file: Express.Multer.File) {
+    if (!file?.originalname.toLowerCase().endsWith('.xlsx'))
+      throw new ConflictException('Choose an XLSX faculty file');
+    const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+
+    if (!sheetName) throw new ConflictException('The workbook has no sheets');
+    const sheet = workbook.Sheets[sheetName];
+
+    if (!sheet) throw new ConflictException('The workbook sheet is invalid');
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet);
+    let created = 0,
+      errors = 0;
+
+    for (const row of rows) {
+      try {
+        await this.invite(deanId, {
+          employeeId: String(row['Employee ID'] ?? ''),
+          firstName: String(row['First Name'] ?? ''),
+          lastName: String(row['Last Name'] ?? ''),
+          email: String(row['Email Address'] ?? ''),
+          title: String(row['Title/Position'] ?? ''),
+        });
+        created++;
+      } catch {
+        errors++;
+      }
+    }
+    return { created, errors };
+  }
+
+  async teacherDashboard(
+    teacherId: string,
+    filters: {
+      academicPeriodId?: string;
+      term?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      subjectId?: string;
+      sectionId?: string;
+      program?: string;
+      yearLevel?: string;
+    } = {}
+  ) {
+    const profileFilter = {
+      ...(filters.program ? { program: filters.program } : {}),
+      ...(filters.yearLevel ? { yearLevel: filters.yearLevel } : {}),
+      ...(filters.sectionId ? { sectionId: filters.sectionId } : {}),
+    };
     const sessions = await this.prisma.examSession.findMany({
-      where: { exam: { subject: { teacherId } } },
+      where: {
+        exam: {
+          subject: {
+            teacherId,
+            ...(filters.subjectId ? { id: filters.subjectId } : {}),
+          },
+          ...(filters.academicPeriodId
+            ? { academicPeriodId: filters.academicPeriodId }
+            : {}),
+          ...(filters.term ? { term: filters.term as any } : {}),
+        },
+        ...(filters.dateFrom || filters.dateTo
+          ? {
+              startedAt: {
+                ...(filters.dateFrom
+                  ? { gte: new Date(`${filters.dateFrom}T00:00:00`) }
+                  : {}),
+                ...(filters.dateTo
+                  ? { lte: new Date(`${filters.dateTo}T23:59:59.999`) }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(Object.keys(profileFilter).length
+          ? { student: { studentProfile: { is: profileFilter } } }
+          : {}),
+      },
       include: {
-        student: { include: { studentProfile: true } },
+        student: {
+          include: { studentProfile: { include: { section: true } } },
+        },
         exam: { include: { subject: true } },
         events: true,
         scoreHistory: { orderBy: { computedAt: 'asc' } },
       },
     });
 
+    const now = new Date();
     const active = sessions.filter(
-        (s) => s.status === SessionStatus.IN_PROGRESS
+        (s) =>
+          s.status === SessionStatus.IN_PROGRESS &&
+          s.exam.status === 'PUBLISHED' &&
+          (!s.exam.scheduledAt || s.exam.scheduledAt <= now) &&
+          (!s.exam.endsAt || s.exam.endsAt > now) &&
+          this.gateway.activeSessionIds(s.examId).has(s.id)
       ),
       latest = (s: (typeof sessions)[number]) => s.scoreHistory.at(-1),
       scores = sessions
         .map(latest)
         .map((s) => s?.score)
         .filter((x): x is number => x !== undefined),
-      sections = new Map<string, number[]>();
+      sections = new Map<
+        string,
+        { scores: number[]; sessions: number; incidents: number }
+      >(),
+      subjects = new Map<string, number[]>();
 
     for (const s of sessions) {
-      const key = s.student.studentProfile?.section ?? 'Unassigned',
+      const profile = s.student.studentProfile;
+      const key = profile
+          ? `${profile.program} · ${profile.yearLevel} Year - ${profile.section?.name ?? 'Unassigned'}`
+          : 'Unassigned',
         score = latest(s)?.score;
-      if (score !== undefined)
-        sections.set(key, [...(sections.get(key) ?? []), score]);
+      const section = sections.get(key) ?? {
+        scores: [],
+        sessions: 0,
+        incidents: 0,
+      };
+      section.sessions++;
+      if (s.events.length) section.incidents++;
+      if (score !== undefined) section.scores.push(score);
+      sections.set(key, section);
+      if (score !== undefined) {
+        const subjectKey = s.exam.subject.subjectCode ?? s.exam.subject.code;
+        subjects.set(subjectKey, [...(subjects.get(subjectKey) ?? []), score]);
+      }
     }
 
     const types = new Map<string, number>();
@@ -420,10 +802,23 @@ export class PortalService {
           .flatMap((s) => s.events)
           .filter((e) => +e.occurredAt > Date.now() - 604800000).length,
       },
-      avgSuspicionBySection: [...sections].map(([section, values]) => ({
+      avgSuspicionBySection: [...sections].map(([section, value]) => ({
         section,
+        avg: value.scores.length
+          ? Math.round(
+              value.scores.reduce((a, b) => a + b, 0) / value.scores.length
+            )
+          : 0,
+      })),
+      incidentRateBySection: [...sections].map(([section, value]) => ({
+        section,
+        rate: Math.round((value.incidents / value.sessions) * 100),
+      })),
+      avgSuspicionBySubject: [...subjects].map(([subject, values]) => ({
+        subject,
         avg: Math.round(values.reduce((a, b) => a + b, 0) / values.length),
       })),
+      termComparison: this.termComparison(sessions),
       incidentTypeBreakdown: [...types].map(([type, count]) => ({
         type,
         count,
@@ -438,84 +833,140 @@ export class PortalService {
         }))
         .sort((a, b) => b.score - a.score)
         .slice(0, 4),
+      filterOptions: await this.teacherDashboardFilters(teacherId),
     };
   }
 
-  async audit(
-    actor?: string,
-    action?: string,
-    dateFrom?: string,
-    dateTo?: string,
-    cursor?: string,
-    rawLimit?: string
-  ) {
-    const limit = Math.min(Math.max(Number(rawLimit) || 25, 1), 100);
-    let d: Date | undefined, id: string | undefined;
+  private async teacherDashboardFilters(teacherId: string) {
+    const subjects = await this.prisma.subject.findMany({
+      where: { teacherId },
+      select: {
+        id: true,
+        subjectCode: true,
+        name: true,
+        sectionAssignments: {
+          select: {
+            section: {
+              select: { id: true, name: true, program: true, yearLevel: true },
+            },
+          },
+        },
+      },
+      orderBy: { subjectCode: 'asc' },
+    });
+    const sections = [
+      ...new Map(
+        subjects
+          .flatMap((s) => s.sectionAssignments.map((x) => x.section))
+          .map((x) => [x.id, x])
+      ).values(),
+    ];
+    const periods = await this.academicPeriods();
+    return {
+      subjects: subjects.map(({ sectionAssignments: _ignored, ...s }) => s),
+      sections,
+      periods,
+    };
+  }
 
-    if (cursor) {
-      try {
-        const parts = Buffer.from(cursor, 'base64url').toString().split('|');
-        d = new Date(parts[0] ?? '');
-        id = parts[1];
-        if (Number.isNaN(+d) || !id) throw new Error();
-      } 
-      catch {
-        throw new NotFoundException('Invalid cursor');
-      }
-    }
+  private termComparison(
+    sessions: Array<{
+      exam: { term: string };
+      events: unknown[];
+      scoreHistory: Array<{ score: number }>;
+    }>
+  ) {
+    return ['PRELIMINARY', 'MIDTERM', 'SEMI_FINAL', 'FINAL'].map((term) => {
+      const rows = sessions.filter((session) => session.exam.term === term);
+      const scores = rows.flatMap(
+        (session) => session.scoreHistory.at(-1)?.score ?? []
+      );
+      return {
+        term,
+        sessions: rows.length,
+        incidentRate: rows.length
+          ? Math.round(
+              (rows.filter((session) => session.events.length).length /
+                rows.length) *
+                100
+            )
+          : 0,
+        avgSuspicion: scores.length
+          ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+          : 0,
+      };
+    });
+  }
+
+  async audit(query: {
+    role: string;
+    dateFrom?: string;
+    dateTo?: string;
+    timeFrom?: string;
+    timeTo?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const limit = Math.min(Math.max(query.limit ?? 10, 1), 100);
+    const page = Math.max(query.page ?? 1, 1);
+    const dateFrom = query.dateFrom
+      ? new Date(`${query.dateFrom}T${query.timeFrom ?? '00:00'}:00`)
+      : undefined;
+    const dateTo = query.dateTo
+      ? new Date(`${query.dateTo}T${query.timeTo ?? '23:59'}:59.999`)
+      : undefined;
     const where: any = {
-      ...(action ? { action } : {}),
-      ...(dateFrom || dateTo
+      actor: { is: { role: query.role as Role } },
+      ...(query.dateFrom || dateTo
         ? {
             createdAt: {
-              ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
+              ...(dateFrom ? { gte: dateFrom } : {}),
               ...(dateTo ? { lte: new Date(dateTo) } : {}),
             },
           }
         : {}),
-      ...(actor
-        ? {
-            actor: {
-              OR: [
-                { fullName: { contains: actor, mode: 'insensitive' } },
-                { email: { contains: actor, mode: 'insensitive' } },
-              ],
-            },
-          }
-        : {}),
-      ...(d && id
-        ? { OR: [{ createdAt: { lt: d } }, { createdAt: d, id: { lt: id } }] }
-        : {}),
     };
-    const rows = await this.prisma.auditLog.findMany({
+    const [rows, total] = await Promise.all([
+      this.prisma.auditLog.findMany({
         where,
-        include: { actor: { select: { fullName: true } } },
+        include: {
+          actor: { select: { fullName: true, email: true, role: true } },
+        },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
         take: limit,
       }),
-      last = rows.at(-1);
+      this.prisma.auditLog.count({ where }),
+    ]);
     return {
       items: rows.map((x) => ({
+        id: x.id,
         actorName: x.actor.fullName,
+        actorEmail: x.actor.email,
+        actorRole: x.actor.role,
         action: x.action,
         targetType: x.targetType,
         targetId: x.targetId,
         occurredAt: x.createdAt,
       })),
-      nextCursor:
-        rows.length === limit && last
-          ? Buffer.from(`${last.createdAt.toISOString()}|${last.id}`).toString(
-              'base64url'
-            )
-          : null,
+      total,
+      page,
+      pageCount: Math.max(1, Math.ceil(total / limit)),
     };
+  }
+
+  async deleteAuditLog(id: string) {
+    const log = await this.prisma.auditLog.findUnique({ where: { id } });
+    if (!log) throw new NotFoundException('Audit log not found');
+    await this.prisma.auditLog.delete({ where: { id } });
+    return { deleted: true };
   }
 
   private scope(f: DeanAnalyticsFilters) {
     const profile: any = {
       ...(f.program ? { program: f.program } : {}),
       ...(f.yearLevel ? { yearLevel: f.yearLevel } : {}),
-      ...(f.section ? { section: f.section } : {}),
+      ...(f.section ? { section: { is: { name: f.section } } } : {}),
     };
     return {
       ...(f.dateFrom || f.dateTo
@@ -526,7 +977,17 @@ export class PortalService {
             },
           }
         : {}),
-      ...(f.subjectCode ? { exam: { subject: { code: f.subjectCode } } } : {}),
+      ...(f.subjectCode || f.academicPeriodId || f.term
+        ? {
+            exam: {
+              ...(f.subjectCode ? { subject: { code: f.subjectCode } } : {}),
+              ...(f.academicPeriodId
+                ? { academicPeriodId: f.academicPeriodId }
+                : {}),
+              ...(f.term ? { term: f.term as any } : {}),
+            },
+          }
+        : {}),
       ...(Object.keys(profile).length
         ? { student: { studentProfile: { is: profile } } }
         : {}),
@@ -534,36 +995,76 @@ export class PortalService {
   }
 
   async deanDashboard(filters: DeanAnalyticsFilters = {}) {
-    const sessions = await this.prisma.examSession.findMany({
-      where: this.scope(filters),
-      include: {
-        student: { include: { studentProfile: true } },
-        exam: { include: { subject: true } },
-        events: true,
-        scoreHistory: { orderBy: { computedAt: 'desc' }, take: 1 },
-      },
-    });
+    const [sessions, configuredSections] = await Promise.all([
+      this.prisma.examSession.findMany({
+        where: this.scope(filters),
+        include: {
+          student: {
+            include: { studentProfile: { include: { section: true } } },
+          },
+          exam: { include: { subject: true } },
+          events: true,
+          scoreHistory: { orderBy: { computedAt: 'desc' }, take: 1 },
+        },
+      }),
+      this.prisma.studentSection.findMany({
+        where: {
+          ...(filters.program ? { program: filters.program } : {}),
+          ...(filters.yearLevel ? { yearLevel: filters.yearLevel } : {}),
+          ...(filters.section ? { name: filters.section } : {}),
+        },
+      }),
+    ]);
 
     const scores = sessions
         .map((s) => s.scoreHistory[0]?.score)
         .filter((x): x is number => x !== undefined),
-      bySection = new Map<string, [number, number]>(),
+      bySection = new Map<
+        string,
+        {
+          program: string;
+          yearLevel: string;
+          section: string;
+          total: number;
+          incidents: number;
+        }
+      >(
+        configuredSections.map((section) => [
+          section.id,
+          {
+            program: section.program,
+            yearLevel: section.yearLevel,
+            section: section.name,
+            total: 0,
+            incidents: 0,
+          },
+        ])
+      ),
       bySubject = new Map<string, [number, number]>(),
       byWeek = new Map<string, [Date, number, number]>(),
       types = new Map<string, number>();
 
     for (const s of sessions) {
       const incident = s.events.length > 0 ? 1 : 0,
-        section = s.student.studentProfile?.section ?? 'Unassigned',
+        profile = s.student.studentProfile,
+        sectionId =
+          profile?.sectionId ??
+          `unassigned:${profile?.program ?? ''}:${profile?.yearLevel ?? ''}`,
+        sectionGroup = bySection.get(sectionId) ?? {
+          program: profile?.program ?? 'Unknown',
+          yearLevel: profile?.yearLevel ?? 'Unknown',
+          section: profile?.section?.name ?? 'Unassigned',
+          total: 0,
+          incidents: 0,
+        },
         subject = s.exam.subject.name;
-
-      for (const [key, map] of [
-        [section, bySection],
-        [subject, bySubject],
-      ] as const) {
-        const current = map.get(key) ?? [0, 0];
-        map.set(key, [current[0] + 1, current[1] + incident]);
-      }
+      bySection.set(sectionId, {
+        ...sectionGroup,
+        total: sectionGroup.total + 1,
+        incidents: sectionGroup.incidents + incident,
+      });
+      const subjectGroup = bySubject.get(subject) ?? [0, 0];
+      bySubject.set(subject, [subjectGroup[0] + 1, subjectGroup[1] + incident]);
       const weekStart = new Date(
         Date.UTC(
           s.startedAt.getUTCFullYear(),
@@ -584,7 +1085,20 @@ export class PortalService {
           ? Math.round(values.reduce((a, b) => a + b, 0) / values.length)
           : 0,
       rate = ([total, incidents]: [number, number]) =>
-        total ? Math.round((incidents / total) * 100) : 0;
+        total ? Math.round((incidents / total) * 100) : 0,
+      yearLabel = (value: string) => {
+        const year = value.replace('YEAR_', '');
+        if (!['1', '2', '3', '4'].includes(year)) return value;
+        const suffix =
+          year === '1'
+            ? 'st'
+            : year === '2'
+              ? 'nd'
+              : year === '3'
+                ? 'rd'
+                : 'th';
+        return `${year}${suffix} Yr`;
+      };
     return {
       kpis: {
         monitoredSessionsThisTerm: sessions.length,
@@ -597,13 +1111,26 @@ export class PortalService {
             )
           : 0,
         sectionsAboveThreshold: [...bySection.values()].filter(
-          (v) => rate(v) >= 70
+          (v) => rate([v.total, v.incidents]) >= 70
         ).length,
       },
-      incidenceRateBySection: [...bySection].map(([section, v]) => ({
-        section,
-        rate: rate(v),
-      })),
+      incidenceRateBySection: [...bySection.values()]
+        .sort(
+          (a, b) =>
+            a.program.localeCompare(b.program) ||
+            Number(a.yearLevel.replace(/\D/g, '')) -
+              Number(b.yearLevel.replace(/\D/g, '')) ||
+            a.section.localeCompare(b.section, undefined, { numeric: true })
+        )
+        .map((group) => ({
+          program: group.program,
+          yearLevel: group.yearLevel,
+          sectionName: group.section,
+          section: `${group.program} · ${yearLabel(group.yearLevel)} - ${group.section}`,
+          sessionCount: group.total,
+          incidentSessionCount: group.incidents,
+          rate: rate([group.total, group.incidents]),
+        })),
       incidentsByType: [...types].map(([type, count]) => ({ type, count })),
       incidenceRateTrend: [...byWeek.values()]
         .sort((a, b) => +a[0] - +b[0])
@@ -619,6 +1146,8 @@ export class PortalService {
         subject,
         rate: rate(v),
       })),
+      termComparison: this.termComparison(sessions),
+      academicPeriods: await this.academicPeriods(),
     };
   }
 
@@ -649,7 +1178,7 @@ export class PortalService {
           ]
         : []
     );
-    
+
     const correlation = await this.ai.correlation(pairs);
     return {
       ...dashboard,

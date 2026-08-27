@@ -2,13 +2,8 @@ import { Monitor, ShieldCheck } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { useAuthStore } from '../../store/authStore';
-
-const fields = [
-  { label: 'Full name', value: 'Prof. Maria Santos' },
-  { label: 'Employee ID', value: 'PM-2026-001' },
-  { label: 'Department', value: 'College of Computer Studies' },
-  { label: 'Email', value: 'teacher@school.edu' },
-];
+import { ProfilePictureEditor } from '../../components/ProfilePictureEditor';
+import { ProfileFieldsEditor } from '../../components/ProfileFieldsEditor';
 
 export default function TeacherProfile() {
   const { user } = useAuthStore();
@@ -27,16 +22,8 @@ export default function TeacherProfile() {
       <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <Card>
           <CardHeader title="Profile" />
-          {fields.map((f, i) => (
-            <div key={i} className="mb-3">
-              <div className="font-body text-[11.5px] text-text-3 mb-1">
-                {f.label}
-              </div>
-              <div className="font-body text-[13.5px] text-text-1 px-3 py-2.5 rounded-[9px] bg-canvas">
-                {f.value}
-              </div>
-            </div>
-          ))}
+          <ProfilePictureEditor />
+          <ProfileFieldsEditor role="teacher" />
         </Card>
 
         <Card>

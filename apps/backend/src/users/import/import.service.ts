@@ -75,6 +75,17 @@ export class ImportService {
     const studentId = input.studentId.trim();
     const email = input.email.trim().toLowerCase();
     await this.assertAvailable(studentId, email);
+    const section = await this.prisma.studentSection.findUnique({
+      where: { id: input.sectionId },
+    });
+    if (
+      !section ||
+      section.program !== input.program ||
+      section.yearLevel !== input.yearLevel
+    )
+      throw new BadRequestException(
+        'The selected section does not match the program and year level'
+      );
     const initialPassword = generateDefaultPassword(input);
     const fullName = [input.firstName, input.middleName, input.lastName]
       .filter(Boolean)
@@ -86,6 +97,7 @@ export class ImportService {
         loginId: studentId,
         email,
         fullName,
+        profilePicture: input.profilePicture,
         passwordHash: await bcrypt.hash(
           initialPassword.toLocaleLowerCase(),
           12
@@ -97,6 +109,7 @@ export class ImportService {
             studentId,
             program: input.program.trim(),
             yearLevel: input.yearLevel.trim(),
+            sectionId: section.id,
           },
         },
       },
@@ -119,7 +132,18 @@ export class ImportService {
     return { user, initialPassword };
   }
 
-  async importStudents(file: Express.Multer.File, actorId: string) {
+  async importStudents(
+    file: Express.Multer.File,
+    actorId: string,
+    sectionId: string
+  ) {
+    const section = await this.prisma.studentSection.findUnique({
+      where: { id: sectionId },
+    });
+    if (!section)
+      throw new BadRequestException(
+        'Select a valid section before importing students'
+      );
     const rows = this.readRows(file);
     const batch = await this.prisma.studentImportBatch.create({
       data: {
@@ -144,9 +168,10 @@ export class ImportService {
         firstName: String(row['First Name'] ?? '').trim(),
         middleName: String(row['Middle Name'] ?? '').trim(),
         lastName: String(row['Last Name'] ?? '').trim(),
-        program: String(row.Program ?? '').trim(),
-        yearLevel: String(row['Year Level'] ?? '').trim(),
+        program: section.program,
+        yearLevel: section.yearLevel,
         email: String(row.Email ?? '').trim(),
+        sectionId: section.id,
       };
       try {
         await validateOrReject(input, {

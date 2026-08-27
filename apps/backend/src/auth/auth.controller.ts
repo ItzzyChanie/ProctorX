@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Req,
   Res,
   UseGuards,
@@ -14,6 +15,8 @@ import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { UpdateProfilePictureDto } from './dto/update-profile-picture.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -95,5 +98,19 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard) @Get('me') me(@Req() req: any) {
     return this.auth.me(req.user);
+  }
+
+  @UseGuards(JwtAuthGuard) @Post('profile-picture') profilePicture(
+    @Req() req: any,
+    @Body() body: UpdateProfilePictureDto
+  ) {
+    return this.auth.updateProfilePicture(req.user.id, body.profilePicture);
+  }
+  
+  @UseGuards(JwtAuthGuard) @Patch('profile') updateProfile(
+    @Req() req: any,
+    @Body() body: UpdateProfileDto
+  ) {
+    return this.auth.updateProfile(req.user.id, body);
   }
 }

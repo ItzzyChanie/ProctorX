@@ -11,6 +11,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from './email.service';
 import { AuthGateway } from './auth.gateway';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 
 const STUDENT_LEASE_MS = 2 * 60 * 1000;
 const TOKEN_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
@@ -111,6 +112,7 @@ export class AuthService {
     return {
       ...userProfile,
       employeeId: teacherProfile?.employeeId ?? deanProfile?.employeeId ?? null,
+      office: deanProfile?.college ?? teacherProfile?.department ?? null,
       studentId: studentProfile?.studentId ?? null,
       yearLevel: studentProfile?.yearLevel ?? null,
       program: studentProfile?.program ?? null,
@@ -275,6 +277,99 @@ export class AuthService {
     }
   }
   me(user: UserWithProfile) {
+    return this.profile(user);
+  }
+  async updateProfilePicture(userId: string, profilePicture: string) {
+    if (
+      profilePicture &&
+      !/^data:image\/(png|jpe?g|webp);base64,/.test(profilePicture)
+    )
+      throw new ConflictException('Choose a PNG, JPEG, or WebP image');
+    return this.profile(
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { profilePicture: profilePicture || null },
+        include: profileInclude,
+      })
+    );
+  }
+
+  async updateProfile(userId: string, input: UpdateProfileDto) {
+    const current = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+    if (!current) throw new UnauthorizedException();
+    const fullName = input.fullName.trim();
+    if (!fullName) throw new ConflictException('Full name is required');
+
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        fullName,
+        ...(input.email !== undefined
+          ? { email: input.email.trim().toLowerCase() || null }
+          : {}),
+        ...(current.role === Role.DEAN
+          ? {
+              deanProfile: {
+                upsert: {
+                  create: {
+                    employeeId: input.employeeId?.trim() || null,
+                    college: input.office?.trim() || null,
+                  },
+                  update: {
+                    ...(input.employeeId !== undefined
+                      ? { employeeId: input.employeeId.trim() || null }
+                      : {}),
+                    ...(input.office !== undefined
+                      ? { college: input.office.trim() || null }
+                      : {}),
+                  },
+                },
+              },
+            }
+          : current.role === Role.TEACHER
+            ? {
+                teacherProfile: {
+                  upsert: {
+                    create: {
+                      employeeId: input.employeeId?.trim() || null,
+                      department: input.office?.trim() || null,
+                    },
+                    update: {
+                      ...(input.employeeId !== undefined
+                        ? { employeeId: input.employeeId.trim() || null }
+                        : {}),
+                      ...(input.office !== undefined
+                        ? { department: input.office.trim() || null }
+                        : {}),
+                    },
+                  },
+                },
+              }
+            : {
+                studentProfile: {
+                  update: {
+                    ...(input.studentId !== undefined
+                      ? { studentId: input.studentId.trim() || null }
+                      : {}),
+                    ...(input.program !== undefined
+                      ? { program: input.program.trim() || null }
+                      : {}),
+                  },
+                },
+              }),
+      },
+      include: profileInclude,
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: userId,
+        action: 'PROFILE_UPDATED',
+        targetType: 'User',
+        targetId: userId,
+      },
+    });
     return this.profile(user);
   }
 

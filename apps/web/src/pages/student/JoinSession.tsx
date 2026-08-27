@@ -257,7 +257,9 @@ export default function JoinSession() {
         screenVideo.srcObject = screen
         screenVideo.muted = true
         screenVideo.playsInline = true
-        await screenVideo.play()
+        await screenVideo.play().catch((error: DOMException) => {
+          if (error.name !== "AbortError") throw error
+        })
         const screenCanvas = document.createElement("canvas")
         let frameEncoding = false
         const sendScreenFrame = () => {
@@ -308,7 +310,9 @@ export default function JoinSession() {
             form.append("chunk", event.data)
             recordingUploads.current = recordingUploads.current
               .then(() => api.post(`/sessions/${id}/recording-chunks`, form))
-              .catch(() => setNotice("A screen-recording segment could not be saved."))
+              .catch(() =>
+                setNotice("A screen-recording segment could not be saved."),
+              )
           }
         }
         mediaRecorder.start(5000)
@@ -319,7 +323,9 @@ export default function JoinSession() {
           const video = document.createElement("video")
           video.srcObject = cameraStream.current
           video.muted = true
-          await video.play()
+          await video.play().catch((error: DOMException) => {
+            if (error.name !== "AbortError") throw error
+          })
           const sample = () => {
             const canvas = document.createElement("canvas")
             canvas.width = 640
@@ -462,7 +468,11 @@ export default function JoinSession() {
     try {
       const activeRecorder = recorder.current
       if (activeRecorder && activeRecorder.state !== "inactive") {
-        const stopped = new Promise<void>((resolve) => activeRecorder.addEventListener("stop", () => resolve(), { once: true }))
+        const stopped = new Promise<void>((resolve) =>
+          activeRecorder.addEventListener("stop", () => resolve(), {
+            once: true,
+          }),
+        )
         activeRecorder.stop()
         await stopped
         await recordingUploads.current

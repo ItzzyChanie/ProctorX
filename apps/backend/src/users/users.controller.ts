@@ -57,8 +57,9 @@ export class UsersController {
         .build()
     )
     file: Express.Multer.File,
+    @Body('sectionId') sectionId: string,
     @Req() req: any
   ) {
-    return this.imports.importStudents(file, req.user.id);
+    return this.imports.importStudents(file, req.user.id, sectionId);
   }
 }

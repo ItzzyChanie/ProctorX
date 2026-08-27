@@ -4,6 +4,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
 } from 'class-validator';
 export class CreateDeanReportDto {
@@ -14,5 +15,7 @@ export class CreateDeanReportDto {
   @IsOptional() @IsString() @MaxLength(50) yearLevel?: string;
   @IsOptional() @IsString() @MaxLength(100) section?: string;
   @IsOptional() @IsString() @MaxLength(50) subjectCode?: string;
+  @IsOptional() @IsUUID() academicPeriodId?: string;
+  @IsOptional() @IsIn(['UNSPECIFIED', 'PRELIMINARY', 'MIDTERM', 'SEMI_FINAL', 'FINAL']) term?: string;
   @IsIn(['pdf', 'excel']) format!: 'pdf' | 'excel';
 }

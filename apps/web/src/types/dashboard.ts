@@ -9,6 +9,7 @@ export type NavItem = {
   icon: LucideIcon;
   /** Route path this nav item links to, e.g. "/dean/analytics". Fill in when wiring your router. */
   path: string;
+  children?: NavItem[];
 };
 
 export type RiskLevel = "Low" | "Medium" | "High";

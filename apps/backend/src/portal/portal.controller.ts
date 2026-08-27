@@ -8,20 +8,54 @@ import {
   Query,
   Req,
   Res,
+  Delete,
   UseGuards,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { PortalService } from './portal.service';
-import { InviteProfessorDto, RaiseHandDto } from './dto/portal.dto';
-import { AuditLogQueryDto, DeanAnalyticsQueryDto } from './dto/query.dto';
+import {
+  CreateAcademicPeriodDto,
+  InviteProfessorDto,
+  RaiseHandDto,
+  UpdateFacultyDto,
+} from './dto/portal.dto';
+import {
+  AuditLogQueryDto,
+  DeanAnalyticsQueryDto,
+  TeacherDashboardQueryDto,
+} from './dto/query.dto';
 
 @Controller()
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class PortalController {
   constructor(private p: PortalService) {}
+  @Get('academic-periods')
+  @Roles(Role.TEACHER, Role.DEAN, Role.STUDENT)
+  academicPeriods() {
+    return this.p.academicPeriods();
+  }
+  @Post('dean/academic-periods') @Roles(Role.DEAN) createAcademicPeriod(
+    @Req() r: any,
+    @Body() body: CreateAcademicPeriodDto
+  ) {
+    return this.p.createAcademicPeriod(r.user.id, body);
+  }
+  @Post('dean/academic-periods/:id/close')
+  @Roles(Role.DEAN)
+  closeAcademicPeriod(@Req() r: any, @Param('id') id: string) {
+    return this.p.closeAcademicPeriod(r.user.id, id);
+  }
+  @Post('dean/academic-periods/:id/reopen')
+  @Roles(Role.DEAN)
+  reopenAcademicPeriod(@Req() r: any, @Param('id') id: string) {
+    return this.p.reopenAcademicPeriod(r.user.id, id);
+  }
   @Get('students/me/sessions') @Roles(Role.STUDENT) sessions(@Req() r: any) {
     return this.p.studentSessions(r.user.id);
   }
@@ -105,13 +139,16 @@ export class PortalController {
   }
 
   @Get('teacher/dashboard') @Roles(Role.TEACHER) teacherDashboard(
-    @Req() r: any
+    @Req() r: any,
+    @Query() q: TeacherDashboardQueryDto
   ) {
-    return this.p.teacherDashboard(r.user.id);
+    return this.p.teacherDashboard(r.user.id, q);
   }
 
-  @Get('dean/dashboard') @Roles(Role.DEAN) deanDashboard() {
-    return this.p.deanDashboard();
+  @Get('dean/dashboard') @Roles(Role.DEAN) deanDashboard(
+    @Query() q: DeanAnalyticsQueryDto
+  ) {
+    return this.p.deanDashboard(q);
   }
 
   @Get('dean/analytics') @Roles(Role.DEAN) deanAnalytics(
@@ -123,14 +160,13 @@ export class PortalController {
   @Get('dean/audit-logs') @Roles(Role.DEAN) audit(
     @Query() q: AuditLogQueryDto
   ) {
-    return this.p.audit(
-      q.actor,
-      q.action,
-      q.dateFrom,
-      q.dateTo,
-      q.cursor,
-      q.limit?.toString()
-    );
+    return this.p.audit(q);
+  }
+
+  @Delete('dean/audit-logs/:id') @Roles(Role.DEAN) deleteAuditLog(
+    @Param('id') id: string
+  ) {
+    return this.p.deleteAuditLog(id);
   }
 
   @Get('dean/professors') @Roles(Role.DEAN) professors() {
@@ -141,6 +177,25 @@ export class PortalController {
     @Req() r: any,
     @Body() b: InviteProfessorDto
   ) {
-    return this.p.invite(r.user.id, b.email, b.fullName);
+    return this.p.invite(r.user.id, b);
+  }
+  @Patch('dean/professors/:id') @Roles(Role.DEAN) updateFaculty(
+    @Req() r: any,
+    @Param('id') id: string,
+    @Body() b: UpdateFacultyDto
+  ) {
+    return this.p.updateFaculty(r.user.id, id, b);
+  }
+  @Delete('dean/professors/:id') @Roles(Role.DEAN) deleteFaculty(
+    @Req() r: any,
+    @Param('id') id: string
+  ) {
+    return this.p.deleteFaculty(r.user.id, id);
+  }
+  @Post('dean/professors/import')
+  @Roles(Role.DEAN)
+  @UseInterceptors(FileInterceptor('file'))
+  importFaculty(@Req() r: any, @UploadedFile() file: Express.Multer.File) {
+    return this.p.importFaculty(r.user.id, file);
   }
 }

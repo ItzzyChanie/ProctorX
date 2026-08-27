@@ -1,8 +1,10 @@
-import type { ReactNode } from "react";
-import { Sidebar } from "./Sidebar";
-import { Topbar } from "./Topbar";
-import { useAuthStore } from "../../store/authStore";
-import type { Role } from "../../types/dashboard";
+import { useEffect, type ReactNode } from 'react';
+import type { User } from '@proctorx/shared-types';
+import { Sidebar } from './Sidebar';
+import { Topbar } from './Topbar';
+import { useAuthStore } from '../../store/authStore';
+import type { Role } from '../../types/dashboard';
+import { api } from '../../lib/api';
 
 type DashboardLayoutProps = {
   role: Role;
@@ -13,20 +15,25 @@ type DashboardLayoutProps = {
 };
 
 function roleLabel(role: Role) {
-  if (role === "student") return "Student";
-  if (role === "teacher") return "Teacher";
-  return "Dean";
+  if (role === 'student') return 'Student';
+  if (role === 'teacher') return 'Teacher';
+  return 'Dean';
 }
 
 export function DashboardLayout({
   role,
-  pageTitle = "Dashboard",
+  pageTitle = 'Dashboard',
   userName,
   userTag,
   children,
 }: DashboardLayoutProps) {
-  const { user } = useAuthStore();
-  const resolvedUserName = userName ?? user?.fullName ?? "ProctorX User";
+  const { user, updateUser } = useAuthStore();
+  useEffect(() => {
+    const refresh = () => void api.get<User>('/auth/me').then(({ data }) => updateUser(data)).catch(() => undefined);
+    const timer = window.setInterval(refresh, 5_000);
+    return () => window.clearInterval(timer);
+  }, [updateUser]);
+  const resolvedUserName = user?.fullName ?? userName ?? 'ProctorX User';
   const resolvedUserTag =
     userTag ??
     (user
@@ -42,8 +49,11 @@ export function DashboardLayout({
           pageTitle={pageTitle}
           userName={resolvedUserName}
           userTag={resolvedUserTag}
+          profilePicture={user?.profilePicture}
         />
-        <main className="app-content"><div className="app-page">{children}</div></main>
+        <main className="app-content">
+          <div className="app-page">{children}</div>
+        </main>
       </div>
     </div>
   );

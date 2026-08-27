@@ -10,7 +10,7 @@ type HandRequest = {
   id: string;
   reason: string | null;
   raisedAt: string;
-  session: { student: { fullName: string }; exam: { title: string } };
+  session: { student: { fullName: string }; exam: { title: string; term?:string; academicPeriod?:{academicYear:string;semester:'FIRST'|'SECOND'} } };
 };
 export default function Messages() {
   const client = useQueryClient(),
@@ -86,6 +86,7 @@ export default function Messages() {
                   <div className="font-body text-[13px] font-semibold text-text-1">
                     {r.session.student.fullName}
                   </div>
+                  <div className="text-[11px] text-brand">{r.session.exam.academicPeriod ? `${r.session.exam.academicPeriod.academicYear} · ${r.session.exam.academicPeriod.semester === 'FIRST' ? 'First Semester' : 'Second Semester'}` : 'Current semester'} · {(r.session.exam.term ?? 'PRELIMINARY').replace('_',' ')}</div>
                   <div className="font-body text-xs text-text-2">
                     {r.reason || 'Raised hand'} · {r.session.exam.title}
                   </div>

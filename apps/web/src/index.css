@@ -1,15 +1,15 @@
-@import url("https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap");
-@import "tailwindcss";
-@import "./styles/design-tokens.css";
+@import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import 'tailwindcss';
+@import './styles/design-tokens.css';
 
 /* Tailwind v4 reads theme values from CSS.  Keep dashboard utilities tied to
    our semantic variables so changing `.dark` updates every role consistently. */
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-  --font-head: "Space Grotesk", "Segoe UI", sans-serif;
-  --font-body: "Inter", "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "Courier New", monospace;
+  --font-head: 'Space Grotesk', 'Segoe UI', sans-serif;
+  --font-body: 'Inter', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
   --color-canvas: var(--canvas);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
@@ -52,7 +52,7 @@ html {
 }
 
 body {
-  font-family: "Inter", sans-serif;
+  font-family: 'Inter', sans-serif;
   background: var(--canvas);
   color: var(--text-1);
   overflow-x: hidden;
@@ -63,18 +63,20 @@ body {
 button:not(:disabled),
 select:not(:disabled),
 summary,
-[role="button"]:not([aria-disabled="true"]) {
+[role='button']:not([aria-disabled='true']) {
   cursor: pointer;
 }
 
 button:disabled,
 select:disabled,
-[role="button"][aria-disabled="true"] {
+[role='button'][aria-disabled='true'] {
   cursor: not-allowed;
 }
 
 .app-shell button:not(:disabled) {
-  transition-property: color, background-color, border-color, box-shadow, opacity, transform, filter;
+  transition-property:
+    color, background-color, border-color, box-shadow, opacity, transform,
+    filter;
   transition-duration: 180ms;
 }
 
@@ -88,7 +90,13 @@ select:disabled,
   display: flex;
   height: 100dvh;
   overflow: hidden;
-  background: radial-gradient(circle at 88% -10%, color-mix(in srgb, var(--brand) 8%, transparent), transparent 31%), var(--canvas);
+  background:
+    radial-gradient(
+      circle at 88% -10%,
+      color-mix(in srgb, var(--brand) 8%, transparent),
+      transparent 31%
+    ),
+    var(--canvas);
 }
 
 .app-sidebar {
@@ -122,7 +130,8 @@ select:disabled,
   box-shadow: none;
 }
 
-.app-content input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+.app-content
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):focus,
 .app-content select:focus,
 .app-content textarea:focus {
   border-color: var(--brand) !important;
@@ -130,12 +139,13 @@ select:disabled,
   outline: none;
 }
 
-.app-content [style*="grid-template-columns"] {
+.app-content [style*='grid-template-columns'] {
   min-width: 0;
 }
 
 /* Form controls use the same recessed surface as the reference dashboards. */
-.app-content input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.app-content
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
 .app-content select,
 .app-content textarea {
   background: var(--canvas);
@@ -150,6 +160,13 @@ select:disabled,
 }
 
 /* Use clear, neutral guide lines in every role's dashboard charts. */
+.app-content .recharts-responsive-container {
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  padding: 8px;
+}
+
 .app-content .recharts-cartesian-grid line {
   stroke: var(--border-strong);
   stroke-width: 1px;
@@ -157,7 +174,7 @@ select:disabled,
 }
 
 @media (max-width: 768px) {
-  .app-sidebar[data-collapsed="true"] nav {
+  .app-sidebar[data-collapsed='true'] nav {
     padding-left: 9px;
     padding-right: 9px;
   }
@@ -167,27 +184,34 @@ select:disabled,
 }
 
 @media (max-width: 980px) {
-  .app-content [style*="repeat(4, 1fr)"],
-  .app-content [style*="repeat(3, 1fr)"] {
+  .app-content [style*='repeat(4, 1fr)'],
+  .app-content [style*='repeat(3, 1fr)'] {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
-  .app-content [style*="1.4fr 1fr"],
-  .app-content [style*="1.3fr 1fr"],
-  .app-content [style*="1.1fr 1fr"],
-  .app-content [style*="2fr 1fr"] {
+  .app-content [style*='1.4fr 1fr'],
+  .app-content [style*='1.3fr 1fr'],
+  .app-content [style*='1.1fr 1fr'],
+  .app-content [style*='2fr 1fr'] {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }
 
 @media (max-width: 620px) {
-  .app-topbar > div:last-child { gap: 6px; }
-  .app-content [style*="repeat(4, 1fr)"],
-  .app-content [style*="repeat(3, 1fr)"],
-  .app-content [style*="1fr 1fr"] {
+  .app-topbar > div:last-child {
+    gap: 6px;
+  }
+  .app-content [style*='repeat(4, 1fr)'],
+  .app-content [style*='repeat(3, 1fr)'],
+  .app-content [style*='1fr 1fr'] {
     grid-template-columns: minmax(0, 1fr) !important;
   }
-  .app-content .flex.items-center.justify-between { gap: 12px; flex-wrap: wrap; }
-  .app-content .font-mono.text-\[13px\] { letter-spacing: 0; }
+  .app-content .flex.items-center.justify-between {
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .app-content .font-mono.text-\[13px\] {
+    letter-spacing: 0;
+  }
 }
 
 /* Student portal — semantic tokens keep the light/dark experience consistent. */
@@ -253,7 +277,7 @@ select:disabled,
   padding: 0 24px;
   gap: 10px;
   font:
-    600 21px "Chakra Petch",
+    600 21px 'Chakra Petch',
     sans-serif;
   letter-spacing: -0.5px;
 }
@@ -297,7 +321,7 @@ select:disabled,
   font-weight: 600;
 }
 .student-nav__item--active:before {
-  content: "";
+  content: '';
   width: 3px;
   height: 22px;
   border-radius: 0 3px 3px 0;
@@ -308,7 +332,7 @@ select:disabled,
 .student-nav__item i {
   margin-left: auto;
   font:
-    500 11px "JetBrains Mono",
+    500 11px 'JetBrains Mono',
     monospace;
   background: var(--brand-primary);
   color: #fff;
@@ -357,7 +381,7 @@ select:disabled,
 .student-user small {
   color: var(--text-tertiary);
   font:
-    10px "JetBrains Mono",
+    10px 'JetBrains Mono',
     monospace;
   margin-top: 3px;
 }
@@ -415,7 +439,7 @@ select:disabled,
 }
 .student-topbar h1 {
   font:
-    600 21px "Chakra Petch",
+    600 21px 'Chakra Petch',
     sans-serif;
   margin: 0;
 }
@@ -474,7 +498,7 @@ select:disabled,
 }
 .student-eyebrow {
   font:
-    500 10px "JetBrains Mono",
+    500 10px 'JetBrains Mono',
     monospace;
   letter-spacing: 0.11em;
   color: var(--text-tertiary);
@@ -483,7 +507,7 @@ select:disabled,
 .student-welcome h2 {
   margin: 0;
   font:
-    600 28px "Chakra Petch",
+    600 28px 'Chakra Petch',
     sans-serif;
   letter-spacing: -0.7px;
 }
@@ -555,7 +579,7 @@ select:disabled,
 }
 .student-card h3 {
   font:
-    600 17px "Chakra Petch",
+    600 17px 'Chakra Petch',
     sans-serif;
   margin: 0;
   letter-spacing: -0.25px;
@@ -572,11 +596,11 @@ select:disabled,
   border-radius: 12px;
   padding: 4px 8px;
   font:
-    500 10px "JetBrains Mono",
+    500 10px 'JetBrains Mono',
     monospace;
 }
 .student-live-dot:before {
-  content: "●";
+  content: '●';
   font-size: 8px;
   margin-right: 5px;
 }
@@ -601,7 +625,7 @@ select:disabled,
   padding: 0 13px;
   color: var(--text-primary);
   font:
-    500 14px "JetBrains Mono",
+    500 14px 'JetBrains Mono',
     monospace;
   text-transform: uppercase;
   letter-spacing: 0.07em;
@@ -669,14 +693,14 @@ select:disabled,
 }
 .student-calendar strong {
   font:
-    600 20px "JetBrains Mono",
+    600 20px 'JetBrains Mono',
     monospace;
   line-height: 20px;
 }
 .student-calendar span {
   color: var(--brand-primary);
   font:
-    600 9px "JetBrains Mono",
+    600 9px 'JetBrains Mono',
     monospace;
   letter-spacing: 0.08em;
   margin-top: 3px;
@@ -702,7 +726,7 @@ select:disabled,
   display: inline-block;
   margin-top: 9px;
   font:
-    500 10px "JetBrains Mono",
+    500 10px 'JetBrains Mono',
     monospace;
   color: var(--brand-primary);
   background: color-mix(in srgb, var(--brand-primary) 8%, transparent);
@@ -760,13 +784,13 @@ select:disabled,
 }
 .student-session__date strong {
   font:
-    500 14px "JetBrains Mono",
+    500 14px 'JetBrains Mono',
     monospace;
   line-height: 15px;
 }
 .student-session__date span {
   font:
-    600 8px "JetBrains Mono",
+    600 8px 'JetBrains Mono',
     monospace;
   color: var(--text-tertiary);
 }
@@ -816,7 +840,7 @@ select:disabled,
 .student-score strong {
   display: block;
   font:
-    500 28px "JetBrains Mono",
+    500 28px 'JetBrains Mono',
     monospace;
   letter-spacing: -1.5px;
 }
@@ -879,7 +903,7 @@ select:disabled,
   position: relative;
 }
 .student-timeline__item:not(:last-child):after {
-  content: "";
+  content: '';
   position: absolute;
   left: 14px;
   top: 31px;
@@ -911,7 +935,7 @@ select:disabled,
 }
 .student-time__value strong {
   font:
-    500 28px "JetBrains Mono",
+    500 28px 'JetBrains Mono',
     monospace;
   letter-spacing: -1.3px;
 }
@@ -1087,7 +1111,7 @@ select:disabled,
   align-items: center;
   gap: 9px;
   font:
-    600 21px "Chakra Petch",
+    600 21px 'Chakra Petch',
     sans-serif;
 }
 .analytics-brand > span {
@@ -1126,7 +1150,7 @@ select:disabled,
   background: color-mix(in srgb, var(--a-primary) 9%, transparent);
 }
 .analytics-sidebar nav a.active:before {
-  content: "";
+  content: '';
   position: absolute;
   left: -12px;
   width: 3px;
@@ -1139,7 +1163,7 @@ select:disabled,
   color: #fff;
   background: var(--a-high);
   font:
-    10px "JetBrains Mono",
+    10px 'JetBrains Mono',
     monospace;
   border-radius: 8px;
   padding: 3px 5px;
@@ -1215,7 +1239,7 @@ select:disabled,
 .analytics-main header h1 {
   margin: 0;
   font:
-    600 21px "Chakra Petch",
+    600 21px 'Chakra Petch',
     sans-serif;
 }
 .analytics-actions {
@@ -1265,14 +1289,14 @@ select:disabled,
 .analytics-intro em {
   color: var(--a-muted);
   font:
-    10px "JetBrains Mono",
+    10px 'JetBrains Mono',
     monospace;
   letter-spacing: 0.1em;
   font-style: normal;
 }
 .analytics-intro h2 {
   font:
-    600 27px "Chakra Petch",
+    600 27px 'Chakra Petch',
     sans-serif;
   letter-spacing: -0.7px;
   margin: 9px 0 0;
@@ -1354,12 +1378,12 @@ select:disabled,
   display: block;
   margin-top: 12px;
   font:
-    600 25px "Chakra Petch",
+    600 25px 'Chakra Petch',
     sans-serif;
   letter-spacing: -1px;
 }
 .analytics-kpis strong.mono {
-  font-family: "JetBrains Mono", monospace;
+  font-family: 'JetBrains Mono', monospace;
 }
 .analytics-kpis small {
   display: block;
@@ -1398,7 +1422,7 @@ select:disabled,
 .analytics-card-title h3 {
   margin: 0;
   font:
-    600 15px "Chakra Petch",
+    600 15px 'Chakra Petch',
     sans-serif;
 }
 .analytics-card-title p {
@@ -1476,7 +1500,7 @@ select:disabled,
   text-align: center;
 }
 .donut-visual > div:before {
-  content: "";
+  content: '';
   position: absolute;
   inset: 22px;
   background: var(--a-surface);
@@ -1490,7 +1514,7 @@ select:disabled,
 }
 .donut-visual b {
   font:
-    600 20px "JetBrains Mono",
+    600 20px 'JetBrains Mono',
     monospace;
 }
 .donut-visual small {
@@ -1531,7 +1555,7 @@ select:disabled,
   float: right;
   color: var(--a-text);
   font:
-    500 10px "JetBrains Mono",
+    500 10px 'JetBrains Mono',
     monospace;
   margin-left: 9px;
 }
@@ -1590,7 +1614,7 @@ select:disabled,
   background: color-mix(in srgb, var(--a-high) 11%, transparent);
   color: var(--a-high);
   font:
-    500 11px "JetBrains Mono",
+    500 11px 'JetBrains Mono',
     monospace;
   display: grid;
   place-items: center;
@@ -1625,7 +1649,7 @@ select:disabled,
 }
 .analytics-queue-row > b {
   font:
-    500 10px "JetBrains Mono",
+    500 10px 'JetBrains Mono',
     monospace;
   color: var(--a-high);
 }
@@ -1772,7 +1796,7 @@ select:disabled,
   text-decoration: none;
   color: var(--p-text);
   font:
-    600 21px "Chakra Petch",
+    600 21px 'Chakra Petch',
     sans-serif;
 }
 .portal-brand span {
@@ -1844,7 +1868,7 @@ select:disabled,
 }
 .portal-kicker {
   font:
-    10px "JetBrains Mono",
+    10px 'JetBrains Mono',
     monospace;
   letter-spacing: 0.1em;
   color: var(--p-muted);
@@ -1852,7 +1876,7 @@ select:disabled,
 }
 .portal-page h1 {
   font:
-    600 29px "Chakra Petch",
+    600 29px 'Chakra Petch',
     sans-serif;
   margin: 9px 0 6px;
 }
@@ -1869,7 +1893,7 @@ select:disabled,
 }
 .portal-card h3 {
   font:
-    600 16px "Chakra Petch",
+    600 16px 'Chakra Petch',
     sans-serif;
   margin: 0 0 16px;
 }
@@ -1910,7 +1934,7 @@ select:disabled,
 }
 .portal-join label input {
   font:
-    600 20px "JetBrains Mono",
+    600 20px 'JetBrains Mono',
     monospace;
   letter-spacing: 0.15em;
   height: 54px;
@@ -1959,7 +1983,7 @@ select:disabled,
 }
 .portal-line code {
   font:
-    10px "JetBrains Mono",
+    10px 'JetBrains Mono',
     monospace;
   color: var(--p-brand);
 }
@@ -2005,7 +2029,7 @@ select:disabled,
 }
 .meter {
   font:
-    10px "JetBrains Mono",
+    10px 'JetBrains Mono',
     monospace;
   padding: 4px 6px;
   border-radius: 4px;
@@ -2078,13 +2102,13 @@ select:disabled,
 }
 .big-mono {
   font:
-    600 34px "JetBrains Mono",
+    600 34px 'JetBrains Mono',
     monospace;
 }
 .scatter {
   color: var(--p-brand);
   font:
-    20px "JetBrains Mono",
+    20px 'JetBrains Mono',
     monospace;
   line-height: 1.5;
 }
@@ -2229,7 +2253,7 @@ select:disabled,
 
 /* Scan-line texture */
 .scanline-bg::before {
-  content: "";
+  content: '';
   position: absolute;
   inset: 0;
   background-image: repeating-linear-gradient(
@@ -2245,7 +2269,7 @@ select:disabled,
 
 /* Circuit dot pattern */
 .circuit-bg::after {
-  content: "";
+  content: '';
   position: absolute;
   inset: 0;
   background-image: radial-gradient(

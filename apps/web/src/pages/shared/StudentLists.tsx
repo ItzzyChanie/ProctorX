@@ -21,12 +21,22 @@ type Student = {
   email: string | null;
   status: string;
   createdAt: string;
+  profilePicture?: string | null;
   assessmentStatus?: 'TAKEN' | 'NOT_TAKEN';
   studentProfile: {
     studentId: string | null;
     program: string | null;
     yearLevel: string | null;
+    section?: {
+      id: string;
+      name: string;
+    } | null;
   } | null;
+};
+type Section = {
+  id: string;
+  name: string;
+  _count: { students: number };
 };
 const years = [1, 2, 3, 4];
 const createStudentSchema = z.object({
@@ -37,10 +47,14 @@ const createStudentSchema = z.object({
   email: z.string().email().max(320),
   program: z.enum(['CS', 'IT']),
   yearLevel: z.enum(['1', '2', '3', '4']),
+  sectionId: z.string().uuid(),
+  profilePicture: z.string(),
 });
 const updateStudentSchema = z.object({
   fullName: z.string().trim().min(1).max(150),
   email: z.string().email().max(320),
+  newPassword: z.string().min(6).max(128).or(z.literal('')),
+  profilePicture: z.string(),
 });
 const suffix = (year: number) =>
   year === 1 ? 'st' : year === 2 ? 'nd' : year === 3 ? 'rd' : 'th';
@@ -65,6 +79,15 @@ const formatCreatedAt = (value: string) => {
 export default function StudentLists({ role }: { role: Role }) {
   const [program, setProgram] = useState<string>();
   const [yearLevel, setYearLevel] = useState<string>();
+  const [section, setSection] = useState<Section>();
+  const [sections, setSections] = useState<Section[]>([]);
+  const [sectionsLoading, setSectionsLoading] = useState(false);
+  const [showSectionModal, setShowSectionModal] = useState(false);
+  const [sectionName, setSectionName] = useState('');
+  const [creatingSection, setCreatingSection] = useState(false);
+  const [editingSection, setEditingSection] = useState<Section>();
+  const [deletingSection, setDeletingSection] = useState<Section>();
+  const [sectionActionPending, setSectionActionPending] = useState(false);
   const [rows, setRows] = useState<Student[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -79,22 +102,30 @@ export default function StudentLists({ role }: { role: Role }) {
   const [sort, setSort] = useState<'asc' | 'desc'>('asc');
   const [pageSize, setPageSize] = useState(15);
   const [page, setPage] = useState(1);
-  const [editForm, setEditForm] = useState({ fullName: '', email: '' });
+  const [editForm, setEditForm] = useState({
+    fullName: '',
+    email: '',
+    newPassword: '',
+    profilePicture: '',
+  });
   const [form, setForm] = useState({
     studentId: '',
     firstName: '',
     middleName: '',
     lastName: '',
     email: '',
+    profilePicture: '',
   });
   const refresh = async () => {
-    if (!program || !yearLevel) return;
+    if (!program || !yearLevel || (role === 'dean' && !section)) return;
     setLoading(true);
     try {
       setRows(
         (
           await api.get<Student[]>(
-            `/students?program=${program}&yearLevel=${yearLevel}`
+            `/students?program=${program}&yearLevel=${yearLevel}${
+              section ? `&sectionId=${section.id}` : ''
+            }`
           )
         ).data
       );
@@ -104,7 +135,104 @@ export default function StudentLists({ role }: { role: Role }) {
   };
   useEffect(() => {
     void refresh();
-  }, [program, yearLevel]);
+  }, [program, yearLevel, section]);
+  useEffect(() => {
+    if (!program || !yearLevel || (role === 'dean' && !section)) return;
+    const timer = window.setInterval(() => void refresh(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [program, yearLevel, section, role]);
+  useEffect(() => {
+    if (role !== 'dean' || !program || !yearLevel) return;
+    setSectionsLoading(true);
+    api
+      .get<Section[]>(
+        `/students/sections?program=${program}&yearLevel=${yearLevel}`
+      )
+      .then(({ data }) => setSections(data))
+      .catch(() => setRequestError('Unable to load sections.'))
+      .finally(() => setSectionsLoading(false));
+  }, [program, yearLevel, role]);
+  const createSection = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!program || !yearLevel || !sectionName.trim()) return;
+    setCreatingSection(true);
+    setRequestError(null);
+    try {
+      const { data } = await api.post<Section>('/students/sections', {
+        program,
+        yearLevel,
+        name: sectionName.trim(),
+      });
+      setSections((current) =>
+        [...current, { ...data, _count: { students: 0 } }].sort((a, b) =>
+          a.name.localeCompare(b.name)
+        )
+      );
+      setSectionName('');
+      setShowSectionModal(false);
+      setToast('Section added successfully.');
+      window.setTimeout(() => setToast(null), 3500);
+    } catch (error) {
+      setRequestError(
+        axios.isAxiosError(error)
+          ? (error.response?.data?.message ?? 'Unable to create the section.')
+          : 'Unable to create the section.'
+      );
+    } finally {
+      setCreatingSection(false);
+    }
+  };
+  const updateSection = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editingSection || !sectionName.trim()) return;
+    setSectionActionPending(true);
+    setRequestError(null);
+    try {
+      const { data } = await api.patch<Section>(
+        `/students/sections/${editingSection.id}`,
+        { name: sectionName.trim() }
+      );
+      setSections((current) =>
+        current
+          .map((item) => (item.id === data.id ? data : item))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+      setEditingSection(undefined);
+      setSectionName('');
+      setToast('Section updated successfully.');
+      window.setTimeout(() => setToast(null), 3500);
+    } catch (error) {
+      setRequestError(
+        axios.isAxiosError(error)
+          ? (error.response?.data?.message ?? 'Unable to update the section.')
+          : 'Unable to update the section.'
+      );
+    } finally {
+      setSectionActionPending(false);
+    }
+  };
+  const deleteSection = async () => {
+    if (!deletingSection) return;
+    setSectionActionPending(true);
+    setRequestError(null);
+    try {
+      await api.delete(`/students/sections/${deletingSection.id}`);
+      setSections((current) =>
+        current.filter((item) => item.id !== deletingSection.id)
+      );
+      setDeletingSection(undefined);
+      setToast('Section deleted successfully.');
+      window.setTimeout(() => setToast(null), 3500);
+    } catch (error) {
+      setRequestError(
+        axios.isAxiosError(error)
+          ? (error.response?.data?.message ?? 'Unable to delete the section.')
+          : 'Unable to delete the section.'
+      );
+    } finally {
+      setSectionActionPending(false);
+    }
+  };
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     setRequestError(null);
@@ -112,6 +240,7 @@ export default function StudentLists({ role }: { role: Role }) {
       ...form,
       program,
       yearLevel,
+      sectionId: section?.id,
     });
     if (!parsed.success) {
       setRequestError(
@@ -140,6 +269,7 @@ export default function StudentLists({ role }: { role: Role }) {
       middleName: '',
       lastName: '',
       email: '',
+      profilePicture: '',
     });
     setToast('Student account added successfully.');
     window.setTimeout(() => setToast(null), 3500);
@@ -150,6 +280,9 @@ export default function StudentLists({ role }: { role: Role }) {
     setRequestError(null);
     const data = new FormData();
     data.append('file', file);
+    if (!section)
+      return setRequestError('Select a section before importing students.');
+    data.append('sectionId', section.id);
     setImporting(true);
     try {
       const response = await api.post<{
@@ -316,7 +449,7 @@ export default function StudentLists({ role }: { role: Role }) {
           </div>
         </>
       )}
-      {program && yearLevel && (
+      {program && yearLevel && role === 'dean' && !section && (
         <>
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <button
@@ -324,6 +457,86 @@ export default function StudentLists({ role }: { role: Role }) {
               className="inline-flex items-center gap-1 font-body text-sm font-medium text-brand"
             >
               <ArrowLeft size={16} /> Year levels
+            </button>
+            <button
+              onClick={() => setShowSectionModal(true)}
+              className="rounded-[10px] bg-brand px-3 py-2 font-body text-sm font-semibold text-white"
+            >
+              <Plus size={15} className="mr-1 inline" /> Create new section
+            </button>
+          </div>
+          <h2 className="mb-1 font-head text-xl font-bold text-text-1">
+            {program} · {yearLevel}
+            {suffix(Number(yearLevel))} Year Sections
+          </h2>
+          <p className="mb-6 font-body text-sm text-text-3">
+            Select a section to view and manage its students.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {sections.map((item) => (
+              <div
+                key={item.id}
+                className="relative rounded-[14px] border border-border bg-surface shadow-card transition hover:border-brand"
+              >
+                <button
+                  onClick={() => setSection(item)}
+                  className="w-full p-6 pr-20 text-left"
+                >
+                  <span className="font-head text-2xl font-bold text-brand">
+                    {item.name}
+                  </span>
+                  <p className="mt-2 font-body text-sm text-text-3">
+                    {item._count.students}{' '}
+                    {item._count.students === 1 ? 'student' : 'students'}
+                  </p>
+                </button>
+                <div className="absolute right-3 top-3 flex gap-1">
+                  <button
+                    aria-label={`Edit section ${item.name}`}
+                    title="Edit section"
+                    onClick={() => {
+                      setEditingSection(item);
+                      setSectionName(item.name);
+                    }}
+                    className="rounded-lg p-2 text-brand hover:bg-brand-soft"
+                  >
+                    <Pencil size={16} />
+                  </button>
+                  <button
+                    aria-label={`Delete section ${item.name}`}
+                    title="Delete section"
+                    onClick={() => setDeletingSection(item)}
+                    className="rounded-lg p-2 text-red-600 hover:bg-red-50"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {sectionsLoading && (
+            <p className="mt-5 text-sm text-text-3">Loading sections…</p>
+          )}
+          {!sectionsLoading && sections.length === 0 && (
+            <p className="mt-5 text-sm text-text-3">
+              No sections have been created yet.
+            </p>
+          )}
+        </>
+      )}
+      {program && yearLevel && (role !== 'dean' || section) && (
+        <>
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <button
+              onClick={() =>
+                role === 'dean'
+                  ? setSection(undefined)
+                  : setYearLevel(undefined)
+              }
+              className="inline-flex items-center gap-1 font-body text-sm font-medium text-brand"
+            >
+              <ArrowLeft size={16} />{' '}
+              {role === 'dean' ? 'Sections' : 'Year levels'}
             </button>
             {role === 'dean' && (
               <div className="flex gap-2">
@@ -350,8 +563,12 @@ export default function StudentLists({ role }: { role: Role }) {
           <Card padded={false}>
             <div className="p-5">
               <CardHeader
-                title={`${program} · ${yearLevel}${suffix(Number(yearLevel))} Year`}
-                subtitle="Student accounts filtered by program and year level"
+                title={`${program} · ${yearLevel}${suffix(Number(yearLevel))} Year${
+                  section ? ` - Section ${section.name}` : ''
+                }`}
+                subtitle={`Student accounts filtered by program, year level${
+                  section ? ' and their section' : ''
+                }`}
               />
               <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                 <label className="text-sm text-text-2">
@@ -400,6 +617,7 @@ export default function StudentLists({ role }: { role: Role }) {
                   <tr>
                     {[
                       'Student ID',
+                      'Profile',
                       'Full Name',
                       'Program',
                       'Email',
@@ -423,6 +641,18 @@ export default function StudentLists({ role }: { role: Role }) {
                       <td className="px-5 py-4 font-medium text-text-1">
                         {student.studentProfile?.studentId}
                       </td>
+                      <td className="px-5 py-4">
+                        {student.profilePicture ? (
+                          <img
+                            src={student.profilePicture}
+                            className="h-9 w-9 rounded-full object-cover"
+                          />
+                        ) : (
+                          <span className="grid h-9 w-9 place-items-center rounded-full bg-brand-soft text-xs font-bold text-brand">
+                            {student.fullName[0]}
+                          </span>
+                        )}
+                      </td>
                       <td className="px-5 py-4 text-text-1">
                         {displayName(student.fullName)}
                       </td>
@@ -443,8 +673,16 @@ export default function StudentLists({ role }: { role: Role }) {
                       </td>
                       {role === 'teacher' && (
                         <td className="px-5 py-4">
-                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${student.assessmentStatus === 'TAKEN' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
-                            {student.assessmentStatus === 'TAKEN' ? 'Exam/Quiz Taken' : 'Exam/Quiz Not yet taken'}
+                          <span
+                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                              student.assessmentStatus === 'TAKEN'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {student.assessmentStatus === 'TAKEN'
+                              ? 'Exam/Quiz Taken'
+                              : 'Exam/Quiz Not yet taken'}
                           </span>
                         </td>
                       )}
@@ -460,6 +698,8 @@ export default function StudentLists({ role }: { role: Role }) {
                               setEditForm({
                                 fullName: student.fullName,
                                 email: student.email ?? '',
+                                newPassword: '',
+                                profilePicture: student.profilePicture ?? '',
                               });
                             }}
                           >
@@ -484,7 +724,7 @@ export default function StudentLists({ role }: { role: Role }) {
                         colSpan={7}
                         className="px-5 py-10 text-center text-text-3"
                       >
-                        No students found in this year level.
+                        No students found in this section.
                       </td>
                     </tr>
                   )}
@@ -531,6 +771,129 @@ export default function StudentLists({ role }: { role: Role }) {
           </Card>
         </>
       )}
+      {showSectionModal && program && yearLevel && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">
+          <form
+            onSubmit={createSection}
+            className="w-full max-w-md rounded-[16px] bg-surface p-6 shadow-2xl"
+          >
+            <h2 className="font-head text-xl font-bold text-text-1">
+              Create new section
+            </h2>
+            <p className="mt-1 text-sm text-text-3">
+              Add a section for {program} · {yearLevel}
+              {suffix(Number(yearLevel))} Year.
+            </p>
+            <label className="mt-5 block text-sm text-text-2">
+              Section name
+              <input
+                autoFocus
+                required
+                maxLength={30}
+                value={sectionName}
+                onChange={(event) => setSectionName(event.target.value)}
+                className="mt-1 w-full rounded-[9px] border border-border bg-surface px-3 py-2 text-text-1 outline-none focus:border-brand"
+              />
+            </label>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSectionModal(false);
+                  setSectionName('');
+                }}
+                className="px-4 py-2 text-sm text-text-2"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={creatingSection}
+                className="rounded-[9px] bg-brand px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {creatingSection ? 'Adding…' : 'Add Section'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+      {editingSection && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">
+          <form
+            onSubmit={updateSection}
+            className="w-full max-w-md rounded-[16px] bg-surface p-6 shadow-2xl"
+          >
+            <h2 className="font-head text-xl font-bold text-text-1">
+              Edit section
+            </h2>
+            <p className="mt-1 text-sm text-text-3">
+              Rename section {editingSection.name}.
+            </p>
+            <label className="mt-5 block text-sm text-text-2">
+              Section name
+              <input
+                autoFocus
+                required
+                maxLength={30}
+                value={sectionName}
+                onChange={(event) => setSectionName(event.target.value)}
+                className="mt-1 w-full rounded-[9px] border border-border bg-surface px-3 py-2 text-text-1 outline-none focus:border-brand"
+              />
+            </label>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={sectionActionPending}
+                onClick={() => {
+                  setEditingSection(undefined);
+                  setSectionName('');
+                }}
+                className="px-4 py-2 text-sm text-text-2"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={sectionActionPending}
+                className="rounded-[9px] bg-brand px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {sectionActionPending ? 'Savingâ€¦' : 'Save changes'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+      {deletingSection && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4">
+          <div className="w-full max-w-md rounded-[16px] bg-surface p-6 shadow-2xl">
+            <h2 className="font-head text-xl font-bold text-text-1">
+              Delete section
+            </h2>
+            <p className="mt-2 text-sm text-text-3">
+              Are you sure you want to delete section{' '}
+              <b>{deletingSection.name}</b>? Its{' '}
+              {deletingSection._count.students}{' '}
+              {deletingSection._count.students === 1 ? 'student' : 'students'}{' '}
+              will be preserved but left unassigned. This action cannot be
+              undone.
+            </p>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                disabled={sectionActionPending}
+                onClick={() => setDeletingSection(undefined)}
+                className="px-4 py-2 text-sm text-text-2"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={sectionActionPending}
+                onClick={() => void deleteSection()}
+                className="rounded-[9px] bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {sectionActionPending ? 'Deletingâ€¦' : 'Delete section'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">
           <form
@@ -576,6 +939,32 @@ export default function StudentLists({ role }: { role: Role }) {
                   />
                 </label>
               ))}
+              <label className="sm:col-span-2">
+                <span className="mb-1 block text-xs font-medium text-text-2">
+                  Profile Picture (optional)
+                </span>
+                {form.profilePicture && (
+                  <img
+                    src={form.profilePicture}
+                    className="mb-2 h-16 w-16 rounded-full object-cover"
+                  />
+                )}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file || file.size > 2_000_000) return;
+                    const reader = new FileReader();
+                    reader.onload = () =>
+                      setForm({
+                        ...form,
+                        profilePicture: String(reader.result),
+                      });
+                    reader.readAsDataURL(file);
+                  }}
+                />
+              </label>
             </div>
             <div className="mt-6 flex justify-end gap-2">
               <button
@@ -621,6 +1010,41 @@ export default function StudentLists({ role }: { role: Role }) {
                   setEditForm({ ...editForm, fullName: e.target.value })
                 }
                 className="mt-1 w-full rounded-[9px] border border-border px-3 py-2 text-text-1"
+              />
+            </label>
+            <label className="mt-3 block text-sm text-text-2">
+              Change password (optional)
+              <input
+                type="password"
+                value={editForm.newPassword}
+                onChange={(e) =>
+                  setEditForm({ ...editForm, newPassword: e.target.value })
+                }
+                className="mt-1 w-full rounded-[9px] border border-border px-3 py-2 text-text-1"
+              />
+            </label>
+            <label className="mt-3 block text-sm text-text-2">
+              Profile Picture (optional)
+              {editForm.profilePicture && (
+                <img
+                  src={editForm.profilePicture}
+                  className="my-2 h-20 w-20 rounded-full object-cover"
+                />
+              )}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (!file || file.size > 2_000_000) return;
+                  const reader = new FileReader();
+                  reader.onload = () =>
+                    setEditForm({
+                      ...editForm,
+                      profilePicture: String(reader.result),
+                    });
+                  reader.readAsDataURL(file);
+                }}
               />
             </label>
             <label className="block text-sm text-text-2">

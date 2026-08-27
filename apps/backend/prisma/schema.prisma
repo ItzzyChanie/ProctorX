@@ -61,6 +61,24 @@ enum AssessmentType {
   QUIZ
 }
 
+enum Semester {
+  FIRST
+  SECOND
+}
+
+enum AcademicTerm {
+  UNSPECIFIED
+  PRELIMINARY
+  MIDTERM
+  SEMI_FINAL
+  FINAL
+}
+
+enum AcademicPeriodStatus {
+  ACTIVE
+  CLOSED
+}
+
 enum JoinRequestStatus {
   PENDING
   APPROVED
@@ -131,6 +149,7 @@ model User {
   email                 String?              @unique
   passwordHash          String
   fullName              String
+  profilePicture        String?              @db.Text
   mustChangePassword    Boolean              @default(true)
   isActive              Boolean              @default(true)
   status                AccountStatus        @default(ACTIVE)
@@ -197,12 +216,29 @@ model StudentProfile {
   studentId String?  @unique
   yearLevel String?
   program   String?
-  section   String?
+  sectionId String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  section   StudentSection? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
 
+  @@index([sectionId])
   @@map("student_profiles")
+}
+
+model StudentSection {
+  id           String           @id @default(uuid())
+  name         String
+  program      String
+  yearLevel    String
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  students     StudentProfile[]
+  subjectAssignments SubjectSection[]
+
+  @@unique([program, yearLevel, name])
+  @@index([program, yearLevel])
+  @@map("student_sections")
 }
 model GeneratedReport {
   id String @id @default(uuid())
@@ -299,6 +335,7 @@ model Subject {
   enrollments Enrollment[]
   joinRequests SubjectJoinRequest[]
   exams       Exam[]
+  sectionAssignments SubjectSection[]
 
   @@index([teacherId])
   @@unique([teacherId, subjectCode])
@@ -334,9 +371,24 @@ model Enrollment {
   @@map("enrollments")
 }
 
+model SubjectSection {
+  id        String         @id @default(uuid())
+  subjectId String
+  sectionId String
+  createdAt DateTime       @default(now())
+  subject   Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  section   StudentSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectId, sectionId])
+  @@index([sectionId])
+  @@map("subject_sections")
+}
+
 model Exam {
   id                String        @id @default(uuid())
   subjectId         String
+  academicPeriodId  String
+  term               AcademicTerm
   title             String
   assessmentType    AssessmentType @default(EXAM)
   instructions      String?
@@ -354,11 +406,29 @@ model Exam {
   externalFormUrl    String?
   createdAt         DateTime      @default(now())
   subject           Subject       @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  academicPeriod    AcademicPeriod @relation(fields: [academicPeriodId], references: [id])
   questions         Question[]
   sessions          ExamSession[]
 
   @@index([subjectId])
+  @@index([academicPeriodId, term])
   @@map("exams")
+}
+
+model AcademicPeriod {
+  id           String               @id @default(uuid())
+  academicYear String
+  semester     Semester
+  status       AcademicPeriodStatus @default(ACTIVE)
+  startsAt     DateTime?
+  endsAt       DateTime?
+  closedAt     DateTime?
+  createdAt    DateTime             @default(now())
+  exams        Exam[]
+
+  @@unique([academicYear, semester])
+  @@index([status])
+  @@map("academic_periods")
 }
 
 model Question {

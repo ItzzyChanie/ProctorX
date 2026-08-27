@@ -53,7 +53,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
     });
 
     if (!session) throw new NotFoundException('Session not found');
-    
+
     if (session.exam.subject.teacherId !== teacherId)
       throw new ForbiddenException();
     const snapshot = session.scoreHistory[0];
@@ -94,8 +94,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
 
     try {
       return { buffer: await readFile(path), filename: basename(path) };
-    } 
-    catch {
+    } catch {
       throw new NotFoundException('Generated PDF file could not be found');
     }
   }
@@ -107,7 +106,14 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
         id: true,
         startedAt: true,
         student: { select: { id: true, fullName: true } },
-        exam: { select: { title: true, subject: { select: { code: true } } } },
+        exam: {
+          select: {
+            title: true,
+            term: true,
+            academicPeriod: true,
+            subject: { select: { code: true } },
+          },
+        },
         events: { orderBy: { occurredAt: 'desc' } },
         scoreHistory: {
           orderBy: { computedAt: 'desc' },
@@ -240,8 +246,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
             errorMessage: String(job.result ?? 'Celery report job failed'),
           },
         });
-    } 
-    catch {
+    } catch {
       /* retain PROCESSING while the AI worker/result backend is unavailable */
     }
   }
@@ -294,6 +299,8 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       yearLevel?: string;
       section?: string;
       subjectCode?: string;
+      academicPeriodId?: string;
+      term?: string;
       format: 'pdf' | 'excel';
     }
   ) {
@@ -309,6 +316,8 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       yearLevel: body.yearLevel,
       section: body.section,
       subjectCode: body.subjectCode,
+      academicPeriodId: body.academicPeriodId,
+      term: body.term,
     };
     const record = await this.prisma.generatedReport.create({
       data: {
@@ -326,13 +335,23 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       const profile: any = {
         ...(body.program ? { program: body.program } : {}),
         ...(body.yearLevel ? { yearLevel: body.yearLevel } : {}),
-        ...(body.section ? { section: body.section } : {}),
+        ...(body.section ? { section: { is: { name: body.section } } } : {}),
       };
       const sessions = await this.prisma.examSession.findMany({
         where: {
           startedAt: { gte: dateFrom, lte: dateTo },
-          ...(body.subjectCode
-            ? { exam: { subject: { code: body.subjectCode } } }
+          ...(body.subjectCode || body.academicPeriodId || body.term
+            ? {
+                exam: {
+                  ...(body.subjectCode
+                    ? { subject: { code: body.subjectCode } }
+                    : {}),
+                  ...(body.academicPeriodId
+                    ? { academicPeriodId: body.academicPeriodId }
+                    : {}),
+                  ...(body.term ? { term: body.term as any } : {}),
+                },
+              }
             : {}),
           ...(Object.keys(profile).length
             ? { student: { studentProfile: { is: profile } } }
@@ -379,8 +398,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
           filters: { ...filters, jobId: job.job_id },
         },
       });
-    } 
-    catch (error) {
+    } catch (error) {
       await this.prisma.generatedReport.update({
         where: { id: record.id },
         data: {

@@ -8,6 +8,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   Min,
   ValidateNested,
@@ -24,6 +25,10 @@ export class JoinSubjectDto {
 }
 export class ReviewJoinRequestDto {
   @IsIn(['APPROVED', 'DECLINED']) status!: 'APPROVED' | 'DECLINED';
+}
+export class AssignSectionDto {
+  @IsUUID() sectionId!: string;
+  @IsBoolean() enrollCurrentStudents!: boolean;
 }
 export class QuestionOptionDto {
   @IsString() @IsNotEmpty() @MaxLength(500) label!: string;
@@ -47,12 +52,20 @@ export class QuestionDto {
   options?: QuestionOptionDto[];
 }
 export class CreateExamDto {
+  @IsUUID() academicPeriodId!: string;
+  @IsIn(['PRELIMINARY', 'MIDTERM', 'SEMI_FINAL', 'FINAL']) term!:
+    | 'PRELIMINARY'
+    | 'MIDTERM'
+    | 'SEMI_FINAL'
+    | 'FINAL';
   @IsIn(['EXAM', 'QUIZ']) assessmentType!: 'EXAM' | 'QUIZ';
   @IsString() @IsNotEmpty() @MaxLength(200) title!: string;
   @IsOptional() @IsString() @MaxLength(10000) instructions?: string;
   @IsOptional() @IsISO8601() scheduledAt?: string;
   @IsOptional() @IsISO8601() endsAt?: string;
-  @IsOptional() @IsIn(['MANUAL', 'AI_GENERATED', 'GOOGLE_FORMS_IMPORT']) sourceType?: 'MANUAL' | 'AI_GENERATED' | 'GOOGLE_FORMS_IMPORT';
+  @IsOptional()
+  @IsIn(['MANUAL', 'AI_GENERATED', 'GOOGLE_FORMS_IMPORT'])
+  sourceType?: 'MANUAL' | 'AI_GENERATED' | 'GOOGLE_FORMS_IMPORT';
   @IsOptional() @IsString() @MaxLength(2000) externalFormUrl?: string;
   @IsInt() @Min(1) durationMinutes!: number;
   @IsBoolean() requireCamera!: boolean;

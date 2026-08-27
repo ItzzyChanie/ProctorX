@@ -1,8 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Role } from '@prisma/client';
+import bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { StudentQueryDto } from './dto/student-query.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
+import { CreateSectionDto } from './dto/create-section.dto';
+import { UpdateSectionDto } from './dto/update-section.dto';
 
 @Injectable()
 export class UsersService {
@@ -12,7 +19,11 @@ export class UsersService {
       where: {
         role: Role.STUDENT,
         studentProfile: {
-          is: { program: query.program, yearLevel: query.yearLevel },
+          is: {
+            program: query.program,
+            yearLevel: query.yearLevel,
+            ...(query.sectionId ? { sectionId: query.sectionId } : {}),
+          },
         },
       },
       select: {
@@ -21,8 +32,14 @@ export class UsersService {
         email: true,
         status: true,
         createdAt: true,
+        profilePicture: true,
         studentProfile: {
-          select: { studentId: true, program: true, yearLevel: true },
+          select: {
+            studentId: true,
+            program: true,
+            yearLevel: true,
+            section: true,
+          },
         },
       },
       orderBy: { createdAt: 'desc' },
@@ -87,6 +104,82 @@ export class UsersService {
     });
   }
 
+  sections(program: string, yearLevel: string) {
+    return this.prisma.studentSection.findMany({
+      where: { program, yearLevel },
+      include: { _count: { select: { students: true } } },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async createSection(input: CreateSectionDto, actorId: string) {
+    const name = input.name.trim();
+    try {
+      const section = await this.prisma.studentSection.create({
+        data: { name, program: input.program, yearLevel: input.yearLevel },
+      });
+      await this.prisma.auditLog.create({
+        data: {
+          actorId,
+          action: 'STUDENT_SECTION_CREATED',
+          targetType: 'StudentSection',
+          targetId: section.id,
+        },
+      });
+      return section;
+    } catch {
+      throw new ConflictException(
+        'A section with this name already exists for this program and year level'
+      );
+    }
+  }
+
+  async updateSection(id: string, input: UpdateSectionDto, actorId: string) {
+    const existing = await this.prisma.studentSection.findUnique({
+      where: { id },
+    });
+    if (!existing) throw new NotFoundException('Section not found');
+    try {
+      const section = await this.prisma.studentSection.update({
+        where: { id },
+        data: { name: input.name.trim() },
+        include: { _count: { select: { students: true } } },
+      });
+      await this.prisma.auditLog.create({
+        data: {
+          actorId,
+          action: 'STUDENT_SECTION_UPDATED',
+          targetType: 'StudentSection',
+          targetId: id,
+        },
+      });
+      return section;
+    } catch {
+      throw new ConflictException(
+        'A section with this name already exists for this program and year level'
+      );
+    }
+  }
+
+  async deleteSection(id: string, actorId: string) {
+    const existing = await this.prisma.studentSection.findUnique({
+      where: { id },
+    });
+    if (!existing) throw new NotFoundException('Section not found');
+    await this.prisma.$transaction([
+      this.prisma.studentSection.delete({ where: { id } }),
+      this.prisma.auditLog.create({
+        data: {
+          actorId,
+          action: 'STUDENT_SECTION_DELETED',
+          targetType: 'StudentSection',
+          targetId: id,
+        },
+      }),
+    ]);
+    return { deleted: true };
+  }
+
   async updateStudent(id: string, input: UpdateStudentDto, actorId: string) {
     const exists = await this.prisma.user.findFirst({
       where: { id, role: Role.STUDENT },
@@ -98,6 +191,18 @@ export class UsersService {
       data: {
         fullName: input.fullName,
         email: input.email?.toLowerCase(),
+        ...(input.profilePicture !== undefined
+          ? { profilePicture: input.profilePicture || null }
+          : {}),
+        ...(input.newPassword
+          ? {
+              passwordHash: await bcrypt.hash(
+                input.newPassword.toLowerCase(),
+                12
+              ),
+              mustChangePassword: true,
+            }
+          : {}),
         studentProfile: {
           update: { program: input.program, yearLevel: input.yearLevel },
         },
@@ -123,7 +228,7 @@ export class UsersService {
     if (!exists) throw new NotFoundException('Student not found');
 
     await this.prisma.user.delete({ where: { id } });
-    
+
     await this.prisma.auditLog.create({
       data: {
         actorId,

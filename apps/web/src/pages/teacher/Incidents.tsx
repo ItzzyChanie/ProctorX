@@ -11,7 +11,7 @@ type IncidentEvent = { id: string; type: string; intensity: number | null; occur
 type IncidentReport = {
   id: string; startedAt: string; eventCount: number; latestEventAt: string;
   student: { id: string; fullName: string };
-  exam: { title: string; subject: { code: string } };
+  exam: { title: string; term?:string; academicPeriod?:{id:string;academicYear:string;semester:'FIRST'|'SECOND'}; subject: { code: string } };
   events: IncidentEvent[];
   scoreHistory: { score: number; tier: string }[];
 };
@@ -33,16 +33,20 @@ const formatDateTime = (value: string) => new Intl.DateTimeFormat('en-US', { mon
 
 export default function Incidents() {
   const [search, setSearch] = useState('');
+  const [periodId,setPeriodId]=useState('');
+  const [term,setTerm]=useState('');
   const [selected, setSelected] = useState<IncidentReport | null>(null);
   const [pendingDelete, setPendingDelete] = useState<IncidentReport | null>(null);
   const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
   const timers = useRef<number[]>([]);
   const queryClient = useQueryClient();
   const { data: reports = [], isLoading, isError } = useQuery({ queryKey: ['incidents'], queryFn: async () => (await api.get<IncidentReport[]>('/reports/incidents')).data, refetchInterval: 2_000 });
+  const periodOptions=useQuery({queryKey:['academic-periods'],queryFn:async()=>(await api.get<{id:string;academicYear:string;semester:'FIRST'|'SECOND'}[]>('/academic-periods')).data});
   const visibleReports = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return query ? reports.filter((report) => [report.student.fullName, report.exam.title, report.exam.subject.code].some((value) => value.toLowerCase().includes(query))) : reports;
-  }, [reports, search]);
+    return reports.filter((report) => (!periodId||report.exam.academicPeriod?.id===periodId)&&(!term||report.exam.term===term)&&(!query||[report.student.fullName, report.exam.title, report.exam.subject.code].some((value) => value.toLowerCase().includes(query))));
+  }, [reports, search, periodId, term]);
+  const periods=periodOptions.data??[...new Map(reports.filter(x=>x.exam.academicPeriod).map(x=>[x.exam.academicPeriod!.id,x.exam.academicPeriod!])).values()];
   const notify = (message: string, error = false) => { setToast({ message, error }); window.setTimeout(() => setToast(null), 3500); };
   const exportReport = useMutation({
     mutationFn: async (sessionId: string) => {
@@ -105,6 +109,7 @@ export default function Incidents() {
         <label className="flex w-full items-center gap-2 rounded-[10px] border border-border bg-surface px-3 py-2.5 text-text-3 sm:w-80"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search student, exam, or subject…" className="min-w-0 flex-1 bg-transparent text-sm text-text-1 outline-none placeholder:text-text-3" /></label>
       </div>
       {isLoading && <div className="border-t border-border p-5 text-sm text-text-2">Loading incident reports…</div>}
+      <div className="grid gap-2 border-t border-border p-4 sm:grid-cols-2"><select value={periodId} onChange={e=>setPeriodId(e.target.value)} className="rounded border border-border bg-surface p-2 text-sm"><option value="">All semesters</option>{periods.map(x=><option key={x.id} value={x.id}>{x.academicYear} · {x.semester==='FIRST'?'First':'Second'} Semester</option>)}</select><select value={term} onChange={e=>setTerm(e.target.value)} className="rounded border border-border bg-surface p-2 text-sm"><option value="">All terms</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option></select></div>
       {isError && <div className="border-t border-border p-5 text-sm text-risk-high">Could not load incident reports.</div>}
       {!isLoading && !isError && !reports.length && <div className="border-t border-border p-5 text-sm text-text-2">No incident events have been recorded for your sessions.</div>}
       {!isLoading && !isError && reports.length > 0 && !visibleReports.length && <div className="border-t border-border p-8 text-center text-sm text-text-3">No incident reports match “{search}”.</div>}

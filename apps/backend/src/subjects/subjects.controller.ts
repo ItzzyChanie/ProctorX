@@ -22,6 +22,7 @@ import {
   JoinSubjectDto,
   ReviewJoinRequestDto,
   UpdateSubjectDto,
+  AssignSectionDto,
 } from './dto/subjects.dto';
 import { SubjectsService } from './subjects.service';
 import type { QuestionCounts } from '../ai/ai.service';
@@ -57,6 +58,22 @@ export class SubjectsController {
   ) {
     return this.subjects.students(id, req.user.id);
   }
+  @Delete(':id/students/:studentId') @Roles(Role.TEACHER) removeStudent(
+    @Param('id') id: string,
+    @Param('studentId') studentId: string,
+    @Req() req: any
+  ) {
+    return this.subjects.removeStudent(id, studentId, req.user.id);
+  }
+  @Get('section-assignments/overview') @Roles(Role.TEACHER) sectionAssignments(
+    @Req() req: any
+  ) { return this.subjects.sectionAssignments(req.user.id); }
+  @Post(':id/sections') @Roles(Role.TEACHER) assignSection(
+    @Param('id') id: string, @Body() body: AssignSectionDto, @Req() req: any
+  ) { return this.subjects.assignSection(id, body.sectionId, body.enrollCurrentStudents, req.user.id); }
+  @Delete(':id/sections/:sectionId') @Roles(Role.TEACHER) unassignSection(
+    @Param('id') id: string, @Param('sectionId') sectionId: string, @Req() req: any
+  ) { return this.subjects.unassignSection(id, sectionId, req.user.id); }
   @Post('join') @Roles(Role.STUDENT) join(
     @Req() req: any,
     @Body() body: JoinSubjectDto

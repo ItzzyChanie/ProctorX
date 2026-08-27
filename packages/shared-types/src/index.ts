@@ -9,6 +9,7 @@ export interface User {
   loginId: string
   email?: string | null
   fullName: string
+  profilePicture?: string | null
   role: Role
   mustChangePassword: boolean
   isActive: boolean
@@ -18,6 +19,7 @@ export interface User {
   yearLevel?: string | null
   program?: string | null
   employeeId?: string | null
+  office?: string | null
 }
 
 export interface LoginRequest { loginId: string; password: string }

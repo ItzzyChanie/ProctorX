@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -23,32 +24,37 @@ import { useAuthStore } from '../../store/authStore';
 import { api } from '../../lib/api';
 type Dashboard = {
   monitoringClientStatus: string;
-  upcomingSessions: { examTitle: string; startsAt: string }[];
-  recentActivity: { text: string; occurredAt: string }[];
-  scoreHistory: { examTitle: string; score: number; maxScore: number }[];
-  sessionTimeMinutes: { examTitle: string; minutes: number }[];
+  upcomingSessions: ({ examTitle: string; startsAt: string } & PeriodMeta)[];
+  recentActivity: ({ text: string; occurredAt: string } & PeriodMeta)[];
+  scoreHistory: ({ examTitle: string; score: number; maxScore: number } & PeriodMeta)[];
+  sessionTimeMinutes: ({ examTitle: string; minutes: number } & PeriodMeta)[];
+  academicPeriods:{id:string;academicYear:string;semester:'FIRST'|'SECOND';status:string}[];
 };
+type PeriodMeta={term?:string;academicPeriod?:{id:string;academicYear:string;semester:'FIRST'|'SECOND'}};
 export default function StudentDashboard() {
   const { dark } = useTheme(),
     p = useChartPalette(dark),
     { user } = useAuthStore(),
     navigate = useNavigate();
+  const [periodId,setPeriodId]=useState(''),[term,setTerm]=useState('');
   const { data, isLoading, isError } = useQuery({
     queryKey: ['student-dashboard'],
     queryFn: async () =>
       (await api.get<Dashboard>('/students/me/dashboard')).data,
     refetchInterval: 5_000,
   });
+  const inScope=(x:PeriodMeta)=>(!periodId||x.academicPeriod?.id===periodId)&&(!term||x.term===term);
   const scores =
-    data?.scoreHistory.map((x, i) => ({
-      term: `#${i + 1}`,
+    data?.scoreHistory.filter(inScope).map((x) => ({
+      term: `${(x.term ?? 'PRELIMINARY').replace('_',' ')} · ${x.examTitle}`,
       score: Math.round((x.score / x.maxScore) * 100),
     })) ?? [];
   const time =
-    data?.sessionTimeMinutes.map((x) => ({
+    data?.sessionTimeMinutes.filter(inScope).map((x) => ({
       session: x.examTitle,
       mins: x.minutes,
     })) ?? [];
+  const upcoming=data?.upcomingSessions.filter(inScope)??[], recent=data?.recentActivity.filter(inScope)??[];
   return (
     <DashboardLayout
       role="student"
@@ -68,7 +74,7 @@ export default function StudentDashboard() {
         <HeroBanner
           eyebrow="Welcome back"
           title={
-            data?.upcomingSessions[0]?.examTitle ??
+            upcoming[0]?.examTitle ??
             'Ready for your next assessment'
           }
           subtitle={`Monitoring client: ${data?.monitoringClientStatus ?? 'checking'}`}
@@ -85,6 +91,7 @@ export default function StudentDashboard() {
             </Button>
           }
         />
+        <Card><CardHeader title="Academic period scope" subtitle="Scores, session time, upcoming assessments, and recent activity use this selection."/><div className="grid gap-2 sm:grid-cols-2"><select value={periodId} onChange={e=>setPeriodId(e.target.value)} className="rounded border border-border bg-surface p-2"><option value="">All semesters</option>{data?.academicPeriods?.map(x=><option key={x.id} value={x.id}>{x.academicYear} · {x.semester==='FIRST'?'First':'Second'} Semester{x.status==='CLOSED'?' (Closed)':''}</option>)}</select><select value={term} onChange={e=>setTerm(e.target.value)} className="rounded border border-border bg-surface p-2"><option value="">All terms</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option></select></div></Card>
         <div className="grid gap-5" style={{ gridTemplateColumns: '2fr 1fr' }}>
           <div className="flex flex-col gap-5">
             <Card>
@@ -153,9 +160,9 @@ export default function StudentDashboard() {
           <div className="flex flex-col gap-5">
             <Card>
               <CardHeader title="Upcoming sessions" />
-              {data?.upcomingSessions.length ? (
+              {upcoming.length ? (
                 <>
-                  {data.upcomingSessions.map((x) => (
+                  {upcoming.map((x) => (
                     <div
                       key={x.examTitle}
                       className="flex justify-between py-2"
@@ -171,8 +178,8 @@ export default function StudentDashboard() {
             </Card>
             <Card>
               <CardHeader title="Recent activity" />
-              {data?.recentActivity.length ? (
-                data.recentActivity.map((x) => (
+              {recent.length ? (
+                recent.map((x) => (
                   <div
                     key={`${x.text}${x.occurredAt}`}
                     className="py-2 text-sm"

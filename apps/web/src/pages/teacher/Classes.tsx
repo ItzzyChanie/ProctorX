@@ -17,6 +17,8 @@ type Subject = {
     id: string;
     title: string;
     assessmentType: 'EXAM' | 'QUIZ';
+    term: 'UNSPECIFIED' | 'PRELIMINARY' | 'MIDTERM' | 'SEMI_FINAL' | 'FINAL';
+    academicPeriod: { academicYear: string; semester: 'FIRST' | 'SECOND' };
     scheduledAt: string | null;
     endsAt: string | null;
   }[];
@@ -41,8 +43,15 @@ type Enrollment = {
       studentId?: string;
       yearLevel?: string;
       program?: string;
+      section?: { id: string; name: string };
     };
   };
+};
+type AcademicPeriod = {
+  id: string;
+  academicYear: string;
+  semester: 'FIRST' | 'SECOND';
+  status: 'ACTIVE' | 'CLOSED';
 };
 type QType = 'MULTIPLE_CHOICE' | 'ENUMERATION' | 'IDENTIFICATION' | 'ESSAY';
 type Question = {
@@ -97,7 +106,10 @@ export default function Classes() {
     [deleting, setDeleting] = useState<Subject>(),
     [stopping, setStopping] = useState<Subject>(),
     [rosterSubject, setRosterSubject] = useState<Subject>(),
+    [removingStudent, setRemovingStudent] = useState<Enrollment>(),
     [notice, setNotice] = useState(''),
+    [academicPeriodId, setAcademicPeriodId] = useState(''),
+    [term, setTerm] = useState(''),
     [active, setActive] = useState<{
       subject: Subject;
       kind: 'EXAM' | 'QUIZ';
@@ -132,6 +144,11 @@ export default function Classes() {
     queryFn: async () => (await api.get<Subject[]>('/subjects/mine')).data,
     refetchInterval: 15_000,
   });
+  const periods = useQuery({
+    queryKey: ['academic-periods'],
+    queryFn: async () => (await api.get<AcademicPeriod[]>('/academic-periods')).data,
+  });
+  const activePeriods = periods.data?.filter((period) => period.status === 'ACTIVE') ?? [];
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(''), 4500);
@@ -143,11 +160,16 @@ export default function Classes() {
       (await api.get<Request[]>('/subjects/join-requests/pending')).data,
   });
   const roster = useQuery({
-    queryKey: ['subject-roster', rosterSubject?.id],
+    queryKey: ['classes-subject-roster', rosterSubject?.id],
     enabled: !!rosterSubject,
-    queryFn: async () =>
-      (await api.get<Enrollment[]>(`/subjects/${rosterSubject!.id}/students`))
-        .data,
+    queryFn: async () => {
+      const rows = (
+        await api.get<Enrollment[]>(`/subjects/${rosterSubject!.id}/students`)
+      ).data;
+      return rows.filter(
+        (row): row is Enrollment => Boolean(row?.student?.id)
+      );
+    },
   });
   const createSubject = useMutation({
     mutationFn: () => api.post<Subject>('/subjects', subjectForm),
@@ -184,6 +206,24 @@ export default function Classes() {
     },
     onError: () => setNotice('Could not delete the subject.'),
   });
+  const removeStudent = useMutation({
+    mutationFn: ({
+      subjectId,
+      studentId,
+    }: {
+      subjectId: string;
+      studentId: string;
+    }) => api.delete(`/subjects/${subjectId}/students/${studentId}`),
+    onSuccess: () => {
+      setRemovingStudent(undefined);
+      setNotice('Student removed from the subject successfully.');
+      void qc.invalidateQueries({
+        queryKey: ['classes-subject-roster', rosterSubject?.id],
+      });
+      void qc.invalidateQueries({ queryKey: ['subjects'] });
+    },
+    onError: () => setNotice('Could not remove the student from the subject.'),
+  });
   const stopExam = useMutation({
     mutationFn: (subject: Subject) =>
       api.post(`/subjects/${subject.id}/exams/${subject.exams[0].id}/stop`),
@@ -214,6 +254,8 @@ export default function Classes() {
     setSource('');
     setSourceFile(undefined);
     setDraftGenerated(false);
+    setAcademicPeriodId('');
+    setTerm('');
     setForm({
       title: '',
       instructions: '',
@@ -229,6 +271,8 @@ export default function Classes() {
   const save = useMutation({
     mutationFn: () =>
       api.post(`/subjects/${active!.subject.id}/exams`, {
+        academicPeriodId,
+        term,
         assessmentType: active!.kind,
         title:
           mode === 'google'
@@ -293,6 +337,8 @@ export default function Classes() {
     setQuestions((v) => v.map((q, n) => (n === i ? { ...q, ...p } : q)));
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!academicPeriodId || !term)
+      return setNotice('Choose an active semester and examination term.');
     if (
       !form.scheduledAt ||
       !form.endsAt ||
@@ -498,7 +544,9 @@ export default function Classes() {
                       <span
                         className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${s.exams[0] ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}
                       >
-                        {s.exams[0] ? 'Active' : 'Not Active'}
+                        {s.exams[0]
+                          ? `Active · ${s.exams[0].term.replace('_', ' ')}`
+                          : 'Not Active'}
                       </span>
                     </td>
                     <td className="p-4">
@@ -512,9 +560,12 @@ export default function Classes() {
                           </Button>
                         ) : (
                           <Button
-                            onClick={() =>
-                              setActive({ subject: s, kind: 'EXAM' })
-                            }
+                            disabled={!activePeriods.length}
+                            title={!activePeriods.length ? 'The Dean must create an active semester first' : undefined}
+                            onClick={() => {
+                              setAcademicPeriodId(activePeriods[0]?.id ?? '');
+                              setActive({ subject: s, kind: 'EXAM' });
+                            }}
                           >
                             Create Exam/Quiz
                           </Button>
@@ -673,6 +724,19 @@ export default function Classes() {
                 className="space-y-4 rounded-xl border border-border p-5"
                 onSubmit={submit}
               >
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="text-xs font-semibold">Academic semester
+                    <select className={`${input} mt-1`} value={academicPeriodId} onChange={(e)=>setAcademicPeriodId(e.target.value)} required>
+                      <option value="">Select semester</option>
+                      {activePeriods.map((period)=><option key={period.id} value={period.id}>{period.academicYear} · {period.semester === 'FIRST' ? 'First Semester' : 'Second Semester'}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold">Term
+                    <select className={`${input} mt-1`} value={term} onChange={(e)=>setTerm(e.target.value)} required>
+                      <option value="">Select term</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option>
+                    </select>
+                  </label>
+                </div>
                 <label className="block text-sm font-semibold">
                   Google Form link
                   <input
@@ -689,6 +753,20 @@ export default function Classes() {
               </form>
             ) : (
               <form className="space-y-5" onSubmit={submit}>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="text-xs font-semibold">Academic semester
+                    <select className={`${input} mt-1`} value={academicPeriodId} onChange={(e)=>setAcademicPeriodId(e.target.value)} required>
+                      <option value="">Select semester</option>
+                      {activePeriods.map((period)=><option key={period.id} value={period.id}>{period.academicYear} · {period.semester === 'FIRST' ? 'First Semester' : 'Second Semester'}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold">Term
+                    <select className={`${input} mt-1`} value={term} onChange={(e)=>setTerm(e.target.value)} required>
+                      <option value="">Select term</option>
+                      <option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option>
+                    </select>
+                  </label>
+                </div>
                 <div className="grid gap-3 md:grid-cols-3">
                   <input
                     className={`${input} md:col-span-2`}
@@ -1099,8 +1177,10 @@ export default function Classes() {
                     <th className="p-3">Full name</th>
                     <th className="p-3">Year level</th>
                     <th className="p-3">Program</th>
+                    <th className="p-3">Section</th>
                     <th className="p-3">Assessment status</th>
                     <th className="p-3">Enrolled at</th>
+                    <th className="p-3 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1122,6 +1202,10 @@ export default function Classes() {
                         {row.student.studentProfile?.program || '—'}
                       </td>
                       <td className="p-3">
+                        {row.student.studentProfile?.section?.name ||
+                          'Unassigned'}
+                      </td>
+                      <td className="p-3">
                         <span
                           className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${row.assessmentStatus === 'TAKEN' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}
                         >
@@ -1132,6 +1216,15 @@ export default function Classes() {
                       </td>
                       <td className="p-3 whitespace-nowrap">
                         {enrollmentDate(row.enrolledAt)}
+                      </td>
+                      <td className="p-3 text-center">
+                        <Button
+                          variant="danger"
+                          icon={Trash2}
+                          aria-label={`Remove ${row.student.fullName}`}
+                          title="Remove student"
+                          onClick={() => setRemovingStudent(row)}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -1147,7 +1240,50 @@ export default function Classes() {
               )}
             </div>
             <div className="mt-5 flex justify-end">
-              <Button onClick={() => setRosterSubject(undefined)}>Close</Button>
+              <Button
+                onClick={() => {
+                  setRemovingStudent(undefined);
+                  setRosterSubject(undefined);
+                }}
+              >
+                Close
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+      {rosterSubject && removingStudent && (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/50 p-4">
+          <Card className="w-full max-w-md">
+            <CardHeader
+              title="Remove Student"
+              subtitle={`Remove this student from ${rosterSubject.subjectCode}?`}
+            />
+            <p className="mb-5 text-sm">
+              Are you sure you want to remove{' '}
+              <b>{displayName(removingStudent.student.fullName)}</b> from this
+              subject? The student will no longer have access to it.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                disabled={removeStudent.isPending}
+                onClick={() => setRemovingStudent(undefined)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                disabled={removeStudent.isPending}
+                onClick={() =>
+                  removeStudent.mutate({
+                    subjectId: rosterSubject.id,
+                    studentId: removingStudent.student.id,
+                  })
+                }
+              >
+                {removeStudent.isPending ? 'Removing…' : 'Remove student'}
+              </Button>
             </div>
           </Card>
         </div>
