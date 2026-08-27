@@ -10,6 +10,8 @@ lerna-debug.log*
 # Keep local secrets out of Git while retaining the local files
 .env
 .env.*
+!.env.example
+!**/.env.example
 
 # Local database seeding configuration
 apps/backend/prisma/seed.ts
@@ -20,6 +22,10 @@ dist-ssr
 *.local
 apps/ai-service/.venv/
 apps/ai-service/__pycache__/
+
+# Runtime recordings and generated incident reports
+apps/backend/storage/recordings/
+apps/storage/reports/
 
 # Editor directories and files
 .vscode/*
