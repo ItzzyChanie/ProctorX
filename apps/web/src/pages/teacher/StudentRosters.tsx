@@ -223,7 +223,21 @@ export default function StudentRosters() {
                     <td className="px-3">
                       {s.studentProfile?.section?.name ?? 'Unassigned'}
                     </td>
-                    <td className="px-3">{s.status}</td>
+                    <td className="px-3">
+                      <span
+                        className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                          s.status === 'ACTIVE'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : s.status === 'PENDING'
+                              ? 'bg-amber-100 text-amber-800'
+                              : s.status === 'DISABLED'
+                                ? 'bg-red-100 text-red-700'
+                                : 'bg-slate-100 text-slate-700'
+                        }`}
+                      >
+                        {s.status}
+                      </span>
+                    </td>
                     <td className="px-3">
                       {new Date(s.enrolledAt).toLocaleString()}
                     </td>
@@ -287,8 +301,12 @@ export default function StudentRosters() {
               <Button variant="ghost" onClick={() => setRemove(null)}>
                 Cancel
               </Button>
-              <Button disabled={del.isPending} onClick={() => del.mutate()}>
-                Remove student
+              <Button
+                variant="danger"
+                disabled={del.isPending}
+                onClick={() => del.mutate()}
+              >
+                {del.isPending ? 'Removing…' : 'Remove student'}
               </Button>
             </div>
           </div>

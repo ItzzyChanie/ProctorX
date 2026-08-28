@@ -37,8 +37,8 @@ export class PortalController {
   constructor(private p: PortalService) {}
   @Get('academic-periods')
   @Roles(Role.TEACHER, Role.DEAN, Role.STUDENT)
-  academicPeriods() {
-    return this.p.academicPeriods();
+  academicPeriods(@Req() r: any) {
+    return this.p.academicPeriods(r.user.institutionId);
   }
   @Post('dean/academic-periods') @Roles(Role.DEAN) createAcademicPeriod(
     @Req() r: any,
@@ -146,31 +146,35 @@ export class PortalController {
   }
 
   @Get('dean/dashboard') @Roles(Role.DEAN) deanDashboard(
+    @Req() r: any,
     @Query() q: DeanAnalyticsQueryDto
   ) {
-    return this.p.deanDashboard(q);
+    return this.p.deanDashboard(r.user.institutionId, q);
   }
 
   @Get('dean/analytics') @Roles(Role.DEAN) deanAnalytics(
+    @Req() r: any,
     @Query() q: DeanAnalyticsQueryDto
   ) {
-    return this.p.deanAnalytics(q);
+    return this.p.deanAnalytics(r.user.institutionId, q);
   }
 
   @Get('dean/audit-logs') @Roles(Role.DEAN) audit(
+    @Req() r: any,
     @Query() q: AuditLogQueryDto
   ) {
-    return this.p.audit(q);
+    return this.p.audit(r.user.institutionId, q);
   }
 
   @Delete('dean/audit-logs/:id') @Roles(Role.DEAN) deleteAuditLog(
+    @Req() r: any,
     @Param('id') id: string
   ) {
-    return this.p.deleteAuditLog(id);
+    return this.p.deleteAuditLog(r.user.institutionId, id);
   }
 
-  @Get('dean/professors') @Roles(Role.DEAN) professors() {
-    return this.p.professors();
+  @Get('dean/professors') @Roles(Role.DEAN) professors(@Req() r: any) {
+    return this.p.professors(r.user.institutionId);
   }
 
   @Post('dean/professors/invite') @Roles(Role.DEAN) invite(

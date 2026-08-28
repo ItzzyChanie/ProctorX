@@ -23,8 +23,11 @@ import { UsersService } from './users.service';
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class StudentsController {
   constructor(private users: UsersService) {}
-  @Get('sections') @Roles(Role.DEAN) sections(@Query() q: StudentQueryDto) {
-    return this.users.sections(q.program, q.yearLevel);
+  @Get('sections') @Roles(Role.DEAN) sections(
+    @Query() q: StudentQueryDto,
+    @Req() req: any
+  ) {
+    return this.users.sections(q.program, q.yearLevel, req.user.id);
   }
 
   @Post('sections') @Roles(Role.DEAN) createSection(

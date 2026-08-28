@@ -41,14 +41,16 @@ export class PortalService {
     private ai: AiService
   ) {}
 
-  async academicPeriods() {
+  async academicPeriods(institutionId?: string | null) {
     return this.prisma.academicPeriod.findMany({
+      where: { institutionId },
       include: { _count: { select: { exams: true } } },
       orderBy: [{ academicYear: 'desc' }, { semester: 'desc' }],
     });
   }
 
   async createAcademicPeriod(deanId: string, input: CreateAcademicPeriodDto) {
+    const institutionId = await this.institutionFor(deanId);
     if (
       input.startsAt &&
       input.endsAt &&
@@ -59,7 +61,7 @@ export class PortalService {
       );
     if (
       await this.prisma.academicPeriod.findFirst({
-        where: { status: 'ACTIVE' },
+        where: { status: 'ACTIVE', institutionId },
       })
     )
       throw new ConflictException(
@@ -73,6 +75,7 @@ export class PortalService {
     try {
       const period = await this.prisma.academicPeriod.create({
         data: {
+          institutionId,
           academicYear: input.academicYear,
           semester: input.semester,
           startsAt: input.startsAt ? new Date(input.startsAt) : null,
@@ -101,8 +104,9 @@ export class PortalService {
   }
 
   async closeAcademicPeriod(deanId: string, id: string) {
-    const period = await this.prisma.academicPeriod.findUnique({
-      where: { id },
+    const institutionId = await this.institutionFor(deanId);
+    const period = await this.prisma.academicPeriod.findFirst({
+      where: { id, institutionId },
       include: {
         exams: {
           select: {
@@ -148,15 +152,16 @@ export class PortalService {
   }
 
   async reopenAcademicPeriod(deanId: string, id: string) {
-    const period = await this.prisma.academicPeriod.findUnique({
-      where: { id },
+    const institutionId = await this.institutionFor(deanId);
+    const period = await this.prisma.academicPeriod.findFirst({
+      where: { id, institutionId },
     });
     if (!period) throw new NotFoundException('Academic period not found');
     if (period.academicYear === 'Legacy')
       throw new ConflictException('The legacy period cannot be reopened');
     if (
       await this.prisma.academicPeriod.findFirst({
-        where: { status: 'ACTIVE', id: { not: id } },
+        where: { status: 'ACTIVE', id: { not: id }, institutionId },
       })
     )
       throw new ConflictException(
@@ -304,7 +309,7 @@ export class PortalService {
           term: x.exam.term,
           academicPeriod: x.exam.academicPeriod,
         })),
-      academicPeriods: await this.academicPeriods(),
+      academicPeriods: await this.academicPeriods(await this.institutionFor(userId)),
     };
   }
 
@@ -502,9 +507,18 @@ export class PortalService {
     return saved;
   }
 
-  async professors() {
+  private async institutionFor(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { institutionId: true },
+    });
+    if (!user?.institutionId) throw new ForbiddenException('Institution is not configured');
+    return user.institutionId;
+  }
+
+  async professors(institutionId: string) {
     const rows = await this.prisma.user.findMany({
-      where: { role: { in: [Role.DEAN, Role.TEACHER] } },
+      where: { institutionId, role: { in: [Role.DEAN, Role.TEACHER] } },
       include: {
         taughtSubjects: true,
         teacherProfile: true,
@@ -529,6 +543,7 @@ export class PortalService {
   }
 
   async invite(deanId: string, input: InviteProfessorDto) {
+    const institutionId = await this.institutionFor(deanId);
     const loginId = input.employeeId.trim().toLowerCase();
     if (await this.prisma.user.findUnique({ where: { loginId } }))
       throw new ConflictException('Account already exists');
@@ -536,6 +551,7 @@ export class PortalService {
     const initialPassword = `${input.firstName.trim()[0]}${input.lastName.trim()[0]}@123`;
     const user = await this.prisma.user.create({
       data: {
+        institutionId,
         role: Role.TEACHER,
         loginId,
         email,
@@ -570,8 +586,9 @@ export class PortalService {
   }
 
   async updateFaculty(deanId: string, id: string, input: UpdateFacultyDto) {
+    const institutionId = await this.institutionFor(deanId);
     const exists = await this.prisma.user.findFirst({
-      where: { id, role: { in: [Role.DEAN, Role.TEACHER] } },
+      where: { id, institutionId, role: { in: [Role.DEAN, Role.TEACHER] } },
     });
 
     if (!exists) throw new NotFoundException('Faculty member not found');
@@ -627,8 +644,9 @@ export class PortalService {
   }
 
   async deleteFaculty(deanId: string, id: string) {
+    const institutionId = await this.institutionFor(deanId);
     const exists = await this.prisma.user.findFirst({
-      where: { id, role: Role.TEACHER },
+      where: { id, institutionId, role: Role.TEACHER },
       select: {
         id: true,
         fullName: true,
@@ -861,7 +879,8 @@ export class PortalService {
           .map((x) => [x.id, x])
       ).values(),
     ];
-    const periods = await this.academicPeriods();
+    const institutionId = await this.institutionFor(teacherId);
+    const periods = await this.academicPeriods(institutionId);
     return {
       subjects: subjects.map(({ sectionAssignments: _ignored, ...s }) => s),
       sections,
@@ -898,7 +917,7 @@ export class PortalService {
     });
   }
 
-  async audit(query: {
+  async audit(institutionId: string, query: {
     role: string;
     dateFrom?: string;
     dateTo?: string;
@@ -916,7 +935,7 @@ export class PortalService {
       ? new Date(`${query.dateTo}T${query.timeTo ?? '23:59'}:59.999`)
       : undefined;
     const where: any = {
-      actor: { is: { role: query.role as Role } },
+      actor: { is: { institutionId, role: query.role as Role } },
       ...(query.dateFrom || dateTo
         ? {
             createdAt: {
@@ -955,14 +974,16 @@ export class PortalService {
     };
   }
 
-  async deleteAuditLog(id: string) {
-    const log = await this.prisma.auditLog.findUnique({ where: { id } });
+  async deleteAuditLog(institutionId: string, id: string) {
+    const log = await this.prisma.auditLog.findFirst({
+      where: { id, actor: { institutionId } },
+    });
     if (!log) throw new NotFoundException('Audit log not found');
     await this.prisma.auditLog.delete({ where: { id } });
     return { deleted: true };
   }
 
-  private scope(f: DeanAnalyticsFilters) {
+  private scope(institutionId: string, f: DeanAnalyticsFilters) {
     const profile: any = {
       ...(f.program ? { program: f.program } : {}),
       ...(f.yearLevel ? { yearLevel: f.yearLevel } : {}),
@@ -977,27 +998,26 @@ export class PortalService {
             },
           }
         : {}),
-      ...(f.subjectCode || f.academicPeriodId || f.term
-        ? {
-            exam: {
-              ...(f.subjectCode ? { subject: { code: f.subjectCode } } : {}),
-              ...(f.academicPeriodId
-                ? { academicPeriodId: f.academicPeriodId }
-                : {}),
-              ...(f.term ? { term: f.term as any } : {}),
-            },
-          }
-        : {}),
+      exam: {
+        subject: {
+          teacher: { institutionId },
+          ...(f.subjectCode ? { code: f.subjectCode } : {}),
+        },
+        ...(f.academicPeriodId
+          ? { academicPeriodId: f.academicPeriodId }
+          : {}),
+        ...(f.term ? { term: f.term as any } : {}),
+      },
       ...(Object.keys(profile).length
         ? { student: { studentProfile: { is: profile } } }
         : {}),
     };
   }
 
-  async deanDashboard(filters: DeanAnalyticsFilters = {}) {
+  async deanDashboard(institutionId: string, filters: DeanAnalyticsFilters = {}) {
     const [sessions, configuredSections] = await Promise.all([
       this.prisma.examSession.findMany({
-        where: this.scope(filters),
+        where: this.scope(institutionId, filters),
         include: {
           student: {
             include: { studentProfile: { include: { section: true } } },
@@ -1009,6 +1029,7 @@ export class PortalService {
       }),
       this.prisma.studentSection.findMany({
         where: {
+          institutionId,
           ...(filters.program ? { program: filters.program } : {}),
           ...(filters.yearLevel ? { yearLevel: filters.yearLevel } : {}),
           ...(filters.section ? { name: filters.section } : {}),
@@ -1025,8 +1046,8 @@ export class PortalService {
           program: string;
           yearLevel: string;
           section: string;
-          total: number;
-          incidents: number;
+          participants: Set<string>;
+          flaggedStudents: Set<string>;
         }
       >(
         configuredSections.map((section) => [
@@ -1035,8 +1056,8 @@ export class PortalService {
             program: section.program,
             yearLevel: section.yearLevel,
             section: section.name,
-            total: 0,
-            incidents: 0,
+            participants: new Set<string>(),
+            flaggedStudents: new Set<string>(),
           },
         ])
       ),
@@ -1054,15 +1075,13 @@ export class PortalService {
           program: profile?.program ?? 'Unknown',
           yearLevel: profile?.yearLevel ?? 'Unknown',
           section: profile?.section?.name ?? 'Unassigned',
-          total: 0,
-          incidents: 0,
+          participants: new Set<string>(),
+          flaggedStudents: new Set<string>(),
         },
         subject = s.exam.subject.name;
-      bySection.set(sectionId, {
-        ...sectionGroup,
-        total: sectionGroup.total + 1,
-        incidents: sectionGroup.incidents + incident,
-      });
+      sectionGroup.participants.add(s.studentId);
+      if (incident) sectionGroup.flaggedStudents.add(s.studentId);
+      bySection.set(sectionId, sectionGroup);
       const subjectGroup = bySubject.get(subject) ?? [0, 0];
       bySubject.set(subject, [subjectGroup[0] + 1, subjectGroup[1] + incident]);
       const weekStart = new Date(
@@ -1111,7 +1130,8 @@ export class PortalService {
             )
           : 0,
         sectionsAboveThreshold: [...bySection.values()].filter(
-          (v) => rate([v.total, v.incidents]) >= 70
+          (v) =>
+            rate([v.participants.size, v.flaggedStudents.size]) >= 70
         ).length,
       },
       incidenceRateBySection: [...bySection.values()]
@@ -1127,9 +1147,9 @@ export class PortalService {
           yearLevel: group.yearLevel,
           sectionName: group.section,
           section: `${group.program} · ${yearLabel(group.yearLevel)} - ${group.section}`,
-          sessionCount: group.total,
-          incidentSessionCount: group.incidents,
-          rate: rate([group.total, group.incidents]),
+          participantCount: group.participants.size,
+          flaggedStudentCount: group.flaggedStudents.size,
+          rate: rate([group.participants.size, group.flaggedStudents.size]),
         })),
       incidentsByType: [...types].map(([type, count]) => ({ type, count })),
       incidenceRateTrend: [...byWeek.values()]
@@ -1147,17 +1167,17 @@ export class PortalService {
         rate: rate(v),
       })),
       termComparison: this.termComparison(sessions),
-      academicPeriods: await this.academicPeriods(),
+      academicPeriods: await this.academicPeriods(institutionId),
     };
   }
 
-  async deanAnalytics(filters: DeanAnalyticsFilters = {}) {
-    const dashboard = await this.deanDashboard(filters);
+  async deanAnalytics(institutionId: string, filters: DeanAnalyticsFilters = {}) {
+    const dashboard = await this.deanDashboard(institutionId, filters);
     const submissions = await this.prisma.submission.findMany({
       where: {
         gradeStatus: GradeStatus.TEACHER_CONFIRMED,
         totalScore: { not: null },
-        session: this.scope(filters),
+        session: this.scope(institutionId, filters),
       },
       include: {
         session: {

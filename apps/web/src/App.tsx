@@ -6,6 +6,7 @@ import {
   ProtectedRoute,
 } from './components/ProtectedRoute';
 import ChangePasswordPage from './pages/auth/ChangePasswordPage';
+import GetStartedPage from './pages/public/GetStartedPage';
 
 import StudentDashboard from './pages/student/StudentDashboard';
 import JoinSession from './pages/student/JoinSession';
@@ -96,6 +97,7 @@ export default function App() {
       <SessionBootstrap>
         <Routes>
           <Route path="/" element={<HomeRoute />} />
+          <Route path="/get-started" element={<GetStartedPage />} />
           <Route element={<ChangePasswordRoute />}>
             <Route path="/change-password" element={<ChangePasswordPage />} />
           </Route>

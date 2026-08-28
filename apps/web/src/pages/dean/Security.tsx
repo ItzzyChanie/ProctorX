@@ -2,6 +2,8 @@ import { Lock, Shield, Users } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { KPI } from '../../components/ui/KPI';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../../lib/api';
 
 const rbac = [
   { role: 'Student', perms: 'View own sessions, join rooms' },
@@ -16,13 +18,17 @@ const rbac = [
 ];
 
 export default function Security() {
+  const { data } = useQuery({
+    queryKey: ['dean-security-summary'],
+    queryFn: async () =>
+      (
+        await api.get<{
+          kpis: { monitoredSessionsThisTerm: number };
+        }>('/dean/dashboard')
+      ).data,
+  });
   return (
-    <DashboardLayout
-      role="dean"
-      pageTitle="Security & Access"
-      userName="Dean R. Villanueva"
-      userTag="School of Computer Studies"
-    >
+    <DashboardLayout role="dean" pageTitle="Security & Access">
       <div className="flex flex-col gap-5">
         <div
           className="grid gap-4"
@@ -42,7 +48,12 @@ export default function Security() {
             icon={Lock}
             accent={2}
           />
-          <KPI label="Active sessions" value="142" icon={Users} accent={1} />
+          <KPI
+            label="Monitored sessions"
+            value={data?.kpis.monitoredSessionsThisTerm ?? 0}
+            icon={Users}
+            accent={1}
+          />
         </div>
         <Card padded={false}>
           <div className="p-5">

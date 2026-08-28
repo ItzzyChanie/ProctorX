@@ -17,10 +17,19 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { UpdateProfilePictureDto } from './dto/update-profile-picture.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { InstitutionRegistrationService } from './institution-registration.service';
+import {
+  CreateInstitutionRegistrationDto,
+  ResendInstitutionCodeDto,
+  VerifyInstitutionEmailDto,
+} from './dto/institution-registration.dto';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private auth: AuthService) {}
+  constructor(
+    private auth: AuthService,
+    private institutionRegistration: InstitutionRegistrationService
+  ) {}
   private cookieOptions() {
     const configuredMaxAge = Number(process.env.AUTH_COOKIE_MAX_AGE_MS);
     return {
@@ -33,6 +42,36 @@ export class AuthController {
           ? configuredMaxAge
           : 7 * 24 * 60 * 60 * 1000,
     };
+  }
+
+  @Post('institution-registration')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  registerInstitution(@Body() body: CreateInstitutionRegistrationDto) {
+    return this.institutionRegistration.create(body);
+  }
+
+  @Post('institution-registration/verify')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async verifyInstitutionEmail(
+    @Body() body: VerifyInstitutionEmailDto,
+    @Res({ passthrough: true }) response: Response
+  ) {
+    const application = await this.institutionRegistration.verify(
+      body.referenceNumber,
+      body.code
+    );
+    const session = await this.auth.createSessionForUser(application.userId);
+    response.cookie('proctorx_session', session.accessToken, this.cookieOptions());
+    return { ...application, user: session.user };
+  }
+
+  @Post('institution-registration/resend')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 2, ttl: 60_000 } })
+  resendInstitutionCode(@Body() body: ResendInstitutionCodeDto) {
+    return this.institutionRegistration.resend(body.referenceNumber);
   }
 
   @Post('login')

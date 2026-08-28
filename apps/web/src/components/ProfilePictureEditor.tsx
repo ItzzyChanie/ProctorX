@@ -47,7 +47,13 @@ export function ProfilePictureEditor() {
           <Camera size={32} />
         )}
       </div>
-      <label className="cursor-pointer rounded-lg border border-border px-3 py-2 text-sm font-medium text-text-2 hover:bg-brand-soft hover:text-brand">
+      <label
+        className={`cursor-pointer rounded-lg px-3 py-2 text-sm font-semibold transition-all duration-200 ${
+          savedPicture
+            ? 'bg-brand text-white shadow-rest hover:-translate-y-px hover:bg-brand/90 hover:shadow-glow'
+            : 'border border-border text-text-2 hover:bg-brand-soft hover:text-brand'
+        }`}
+      >
         {savedPicture ? 'Update Picture' : 'Choose Picture'}
         <input
           type="file"

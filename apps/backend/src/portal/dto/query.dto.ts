@@ -13,7 +13,7 @@ import {
 } from 'class-validator';
 
 export class DeanAnalyticsQueryDto {
-  @IsOptional() @IsUUID() academicPeriodId?: string;
+  @IsOptional() @IsString() @MaxLength(80) academicPeriodId?: string;
   @IsOptional() @IsIn(['UNSPECIFIED', 'PRELIMINARY', 'MIDTERM', 'SEMI_FINAL', 'FINAL']) term?: string;
   @IsOptional() @IsDateString() dateFrom?: string;
   @IsOptional() @IsDateString() dateTo?: string;
@@ -24,7 +24,7 @@ export class DeanAnalyticsQueryDto {
 }
 
 export class TeacherDashboardQueryDto {
-  @IsOptional() @IsUUID() academicPeriodId?: string;
+  @IsOptional() @IsString() @MaxLength(80) academicPeriodId?: string;
   @IsOptional() @IsIn(['UNSPECIFIED', 'PRELIMINARY', 'MIDTERM', 'SEMI_FINAL', 'FINAL']) term?: string;
   @IsOptional() @IsDateString() dateFrom?: string;
   @IsOptional() @IsDateString() dateTo?: string;

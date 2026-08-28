@@ -14,10 +14,20 @@ import { UpdateSectionDto } from './dto/update-section.dto';
 @Injectable()
 export class UsersService {
   constructor(private prisma: PrismaService) {}
+  private async institutionFor(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { institutionId: true },
+    });
+    if (!user?.institutionId) throw new NotFoundException('Institution not found');
+    return user.institutionId;
+  }
   async listStudents(query: StudentQueryDto, actorId: string, actorRole: Role) {
+    const institutionId = await this.institutionFor(actorId);
     const students = await this.prisma.user.findMany({
       where: {
         role: Role.STUDENT,
+        institutionId,
         studentProfile: {
           is: {
             program: query.program,
@@ -104,19 +114,21 @@ export class UsersService {
     });
   }
 
-  sections(program: string, yearLevel: string) {
+  async sections(program: string, yearLevel: string, actorId: string) {
+    const institutionId = await this.institutionFor(actorId);
     return this.prisma.studentSection.findMany({
-      where: { program, yearLevel },
+      where: { institutionId, program, yearLevel },
       include: { _count: { select: { students: true } } },
       orderBy: { name: 'asc' },
     });
   }
 
   async createSection(input: CreateSectionDto, actorId: string) {
+    const institutionId = await this.institutionFor(actorId);
     const name = input.name.trim();
     try {
       const section = await this.prisma.studentSection.create({
-        data: { name, program: input.program, yearLevel: input.yearLevel },
+        data: { institutionId, name, program: input.program, yearLevel: input.yearLevel },
       });
       await this.prisma.auditLog.create({
         data: {
@@ -135,8 +147,9 @@ export class UsersService {
   }
 
   async updateSection(id: string, input: UpdateSectionDto, actorId: string) {
-    const existing = await this.prisma.studentSection.findUnique({
-      where: { id },
+    const institutionId = await this.institutionFor(actorId);
+    const existing = await this.prisma.studentSection.findFirst({
+      where: { id, institutionId },
     });
     if (!existing) throw new NotFoundException('Section not found');
     try {
@@ -162,8 +175,9 @@ export class UsersService {
   }
 
   async deleteSection(id: string, actorId: string) {
-    const existing = await this.prisma.studentSection.findUnique({
-      where: { id },
+    const institutionId = await this.institutionFor(actorId);
+    const existing = await this.prisma.studentSection.findFirst({
+      where: { id, institutionId },
     });
     if (!existing) throw new NotFoundException('Section not found');
     await this.prisma.$transaction([
@@ -181,8 +195,9 @@ export class UsersService {
   }
 
   async updateStudent(id: string, input: UpdateStudentDto, actorId: string) {
+    const institutionId = await this.institutionFor(actorId);
     const exists = await this.prisma.user.findFirst({
-      where: { id, role: Role.STUDENT },
+      where: { id, institutionId, role: Role.STUDENT },
     });
 
     if (!exists) throw new NotFoundException('Student not found');
@@ -221,8 +236,9 @@ export class UsersService {
   }
 
   async deleteStudent(id: string, actorId: string) {
+    const institutionId = await this.institutionFor(actorId);
     const exists = await this.prisma.user.findFirst({
-      where: { id, role: Role.STUDENT },
+      where: { id, institutionId, role: Role.STUDENT },
     });
 
     if (!exists) throw new NotFoundException('Student not found');

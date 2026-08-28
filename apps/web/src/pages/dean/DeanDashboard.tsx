@@ -47,8 +47,8 @@ type Data = {
     yearLevel: string
     sectionName: string
     section: string
-    sessionCount: number
-    incidentSessionCount: number
+    participantCount: number
+    flaggedStudentCount: number
     rate: number
   }[]
   incidentsByType: Array<{
@@ -100,8 +100,8 @@ export default function DeanDashboard() {
     return (
       <Card className="h-full">
         <CardHeader
-          title={`${title} Incident rate by Year level & section`}
-          subtitle="A session is counted once when it contains one or more incidents."
+          title={`${title} Flagged student rate by Year level & section`}
+          subtitle="Percentage of participating students with one or more recorded incidents. Each student is counted once."
         />
         {rows.length ? (
           <div className="max-h-[520px] overflow-y-auto pr-2">
@@ -130,7 +130,10 @@ export default function DeanDashboard() {
                 />
                 <Tooltip
                   {...tooltipProps(p)}
-                  formatter={(value) => [`${value}%`, "Incident rate"]}
+                  formatter={(value, _name, item) => [
+                    `${value}% (${item.payload.flaggedStudentCount} of ${item.payload.participantCount} students)`,
+                    "Flagged student rate",
+                  ]}
                 />
                 <Bar dataKey="rate" fill={p.violet} />
               </BarChart>

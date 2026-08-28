@@ -113,6 +113,7 @@ export class AuthService {
       ...userProfile,
       employeeId: teacherProfile?.employeeId ?? deanProfile?.employeeId ?? null,
       office: deanProfile?.college ?? teacherProfile?.department ?? null,
+      officialTitle: deanProfile?.title ?? null,
       studentId: studentProfile?.studentId ?? null,
       yearLevel: studentProfile?.yearLevel ?? null,
       program: studentProfile?.program ?? null,
@@ -120,8 +121,9 @@ export class AuthService {
   }
   async login(loginId: string, password: string) {
     try {
-      const user = await this.prisma.user.findUnique({
-        where: { loginId: loginId.trim().toLowerCase() },
+      const identifier = loginId.trim().toLowerCase();
+      const user = await this.prisma.user.findFirst({
+        where: { OR: [{ loginId: identifier }, { email: identifier }] },
         include: profileInclude,
       });
       if (
@@ -183,6 +185,19 @@ export class AuthService {
         throw error;
       throw error;
     }
+  }
+
+  async createSessionForUser(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: profileInclude,
+    });
+    if (!user || !user.isActive || user.status !== AccountStatus.ACTIVE)
+      throw new UnauthorizedException('Account is not active.');
+    return {
+      accessToken: await this.issueToken(user),
+      user: this.profile(user),
+    };
   }
   async verifyActivation(loginId: string, code: string) {
     const user = await this.prisma.user.findUnique({

@@ -26,6 +26,15 @@ type SpreadsheetRow = Record<(typeof columns)[number], unknown>;
 export class ImportService {
   constructor(private prisma: PrismaService) {}
 
+  private async institutionFor(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { institutionId: true },
+    });
+    if (!user?.institutionId) throw new BadRequestException('Institution not found');
+    return user.institutionId;
+  }
+
   template(): Buffer {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(
@@ -72,11 +81,12 @@ export class ImportService {
   }
 
   async createStudent(input: CreateStudentDto, actorId: string) {
+    const institutionId = await this.institutionFor(actorId);
     const studentId = input.studentId.trim();
     const email = input.email.trim().toLowerCase();
     await this.assertAvailable(studentId, email);
-    const section = await this.prisma.studentSection.findUnique({
-      where: { id: input.sectionId },
+    const section = await this.prisma.studentSection.findFirst({
+      where: { id: input.sectionId, institutionId },
     });
     if (
       !section ||
@@ -93,6 +103,7 @@ export class ImportService {
       .join(' ');
     const user = await this.prisma.user.create({
       data: {
+        institutionId,
         role: Role.STUDENT,
         loginId: studentId,
         email,
@@ -137,8 +148,9 @@ export class ImportService {
     actorId: string,
     sectionId: string
   ) {
-    const section = await this.prisma.studentSection.findUnique({
-      where: { id: sectionId },
+    const institutionId = await this.institutionFor(actorId);
+    const section = await this.prisma.studentSection.findFirst({
+      where: { id: sectionId, institutionId },
     });
     if (!section)
       throw new BadRequestException(

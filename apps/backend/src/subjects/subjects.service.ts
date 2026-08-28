@@ -44,6 +44,14 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
   onModuleDestroy() {
     if (this.expiryTimer) clearInterval(this.expiryTimer);
   }
+  private async institutionFor(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { institutionId: true },
+    });
+    if (!user?.institutionId) throw new ForbiddenException('Institution is not configured');
+    return user.institutionId;
+  }
   private async closeExpiredExams() {
     const expired = await this.prisma.exam.findMany({
       where: { status: ExamStatus.PUBLISHED, endsAt: { lte: new Date() } },
@@ -107,6 +115,7 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     return url.toString();
   }
   async create(teacherId: string, dto: CreateSubjectDto) {
+    const institutionId = await this.institutionFor(teacherId);
     let subject;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
@@ -139,7 +148,7 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       },
     });
     const deans = await this.prisma.user.findMany({
-      where: { role: Role.DEAN },
+      where: { institutionId, role: Role.DEAN },
       select: { id: true },
     });
     if (deans.length)
@@ -195,8 +204,12 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     return { deleted: true };
   }
   async requestJoin(code: string, studentId: string) {
-    const subject = await this.prisma.subject.findUnique({
-      where: { code: code.trim().toUpperCase() },
+    const institutionId = await this.institutionFor(studentId);
+    const subject = await this.prisma.subject.findFirst({
+      where: {
+        code: code.trim().toUpperCase(),
+        teacher: { institutionId },
+      },
     });
     if (!subject) throw new NotFoundException('No subject matches this code');
     const enrolled = await this.prisma.enrollment.findUnique({
@@ -456,6 +469,7 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     return { deleted: true, studentName: enrollment.student.fullName };
   }
   async sectionAssignments(teacherId: string) {
+    const institutionId = await this.institutionFor(teacherId);
     const [subjects, sections] = await Promise.all([
       this.prisma.subject.findMany({
         where: { teacherId },
@@ -467,6 +481,7 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
         orderBy: { subjectCode: 'asc' },
       }),
       this.prisma.studentSection.findMany({
+        where: { institutionId },
         include: { _count: { select: { students: true } } },
         orderBy: [{ program: 'asc' }, { yearLevel: 'asc' }, { name: 'asc' }],
       }),
@@ -475,8 +490,9 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
   }
   async assignSection(subjectId: string, sectionId: string, enrollStudents: boolean, teacherId: string) {
     await this.owned(subjectId, teacherId);
-    const section = await this.prisma.studentSection.findUnique({
-      where: { id: sectionId }, include: { students: { select: { userId: true } } },
+    const institutionId = await this.institutionFor(teacherId);
+    const section = await this.prisma.studentSection.findFirst({
+      where: { id: sectionId, institutionId }, include: { students: { select: { userId: true } } },
     });
     if (!section) throw new NotFoundException('Section not found');
     const result = await this.prisma.$transaction(async (tx) => {
@@ -512,9 +528,11 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
   }
   async availableStudents(subjectId: string, teacherId: string, search = '') {
     await this.owned(subjectId, teacherId);
+    const institutionId = await this.institutionFor(teacherId);
     return this.prisma.user.findMany({
       where: {
         role: Role.STUDENT,
+        institutionId,
         enrollments: { none: { subjectId } },
         OR: [
           { fullName: { contains: search, mode: 'insensitive' } },
@@ -539,8 +557,9 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
   }
   async enroll(subjectId: string, studentId: string, teacherId: string) {
     await this.owned(subjectId, teacherId);
+    const institutionId = await this.institutionFor(teacherId);
     const student = await this.prisma.user.findFirst({
-      where: { id: studentId, role: Role.STUDENT },
+      where: { id: studentId, institutionId, role: Role.STUDENT },
     });
     if (!student) throw new NotFoundException('Student not found');
     try {
@@ -553,8 +572,9 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
   }
   async createExam(subjectId: string, teacherId: string, dto: CreateExamDto) {
     const subject = await this.owned(subjectId, teacherId);
-    const academicPeriod = await this.prisma.academicPeriod.findUnique({
-      where: { id: dto.academicPeriodId },
+    const institutionId = await this.institutionFor(teacherId);
+    const academicPeriod = await this.prisma.academicPeriod.findFirst({
+      where: { id: dto.academicPeriodId, institutionId },
     });
     if (!academicPeriod)
       throw new NotFoundException('Academic period not found');

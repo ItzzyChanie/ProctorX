@@ -304,6 +304,11 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       format: 'pdf' | 'excel';
     }
   ) {
+    const dean = await this.prisma.user.findUnique({
+      where: { id: deanId },
+      select: { institutionId: true },
+    });
+    if (!dean?.institutionId) throw new NotFoundException('Institution not found');
     const format =
       body.format === 'excel' ? ReportFormat.EXCEL : ReportFormat.PDF;
     const dateFrom = new Date(body.dateFrom),
@@ -340,19 +345,16 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       const sessions = await this.prisma.examSession.findMany({
         where: {
           startedAt: { gte: dateFrom, lte: dateTo },
-          ...(body.subjectCode || body.academicPeriodId || body.term
-            ? {
-                exam: {
-                  ...(body.subjectCode
-                    ? { subject: { code: body.subjectCode } }
-                    : {}),
+          exam: {
+                  subject: {
+                    teacher: { institutionId: dean.institutionId },
+                    ...(body.subjectCode ? { code: body.subjectCode } : {}),
+                  },
                   ...(body.academicPeriodId
                     ? { academicPeriodId: body.academicPeriodId }
                     : {}),
                   ...(body.term ? { term: body.term as any } : {}),
-                },
-              }
-            : {}),
+          },
           ...(Object.keys(profile).length
             ? { student: { studentProfile: { is: profile } } }
             : {}),

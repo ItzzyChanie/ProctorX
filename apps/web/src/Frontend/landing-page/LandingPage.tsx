@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import type { LucideIcon } from 'lucide-react';
 import {
   Activity,
@@ -140,7 +141,13 @@ function Button({
     </button>
   );
 }
-function Navbar({ openAccess }: { openAccess: () => void }) {
+function Navbar({
+  openAccess,
+  getStarted,
+}: {
+  openAccess: () => void;
+  getStarted: () => void;
+}) {
   const [menu, setMenu] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
@@ -162,7 +169,7 @@ function Navbar({ openAccess }: { openAccess: () => void }) {
         </div>
         <div className="lp-actions">
           <button onClick={openAccess}>Sign in</button>
-          <Button onClick={openAccess}>
+          <Button onClick={getStarted}>
             Get started <ArrowRight size={15} />
           </Button>
         </div>
@@ -183,7 +190,7 @@ function Navbar({ openAccess }: { openAccess: () => void }) {
             </a>
           ))}
           <button onClick={openAccess}>Sign in</button>
-          <Button onClick={openAccess}>
+          <Button onClick={getStarted}>
             Get started <ArrowRight size={15} />
           </Button>
         </div>
@@ -354,7 +361,7 @@ function Heading({
     </div>
   );
 }
-function Hero({ openAccess }: { openAccess: () => void }) {
+function Hero({ getStarted }: { getStarted: () => void }) {
   return (
     <section className="lp-hero" id="top">
       <div className="lp-container">
@@ -373,7 +380,7 @@ function Hero({ openAccess }: { openAccess: () => void }) {
             and institution-wide insights into one clear academic workspace.
           </p>
           <div>
-            <Button onClick={openAccess}>
+            <Button onClick={getStarted}>
               Get started <ArrowRight size={17} />
             </Button>
             <a className="lp-btn secondary" href="#workflow">
@@ -671,7 +678,13 @@ function Institutions() {
     </section>
   );
 }
-function Footer({ openAccess }: { openAccess: () => void }) {
+function Footer({
+  openAccess,
+  getStarted,
+}: {
+  openAccess: () => void;
+  getStarted: () => void;
+}) {
   return (
     <footer className="lp-footer">
       <div className="lp-container">
@@ -698,7 +711,7 @@ function Footer({ openAccess }: { openAccess: () => void }) {
           <div>
             <b>Institutions</b>
             <a href="#institutions">Overview</a>
-            <button onClick={openAccess}>Get started</button>
+            <button onClick={getStarted}>Get started</button>
           </div>
         </div>
         <div className="lp-copyright">
@@ -710,13 +723,22 @@ function Footer({ openAccess }: { openAccess: () => void }) {
 }
 export default function LandingPage() {
   useReveal();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [signIn, setSignIn] = useState(false);
   const openAccess = () => setSignIn(true);
+  const getStarted = () => navigate('/get-started');
+  useEffect(() => {
+    if ((location.state as { signIn?: boolean } | null)?.signIn) {
+      setSignIn(true);
+      navigate('/', { replace: true, state: null });
+    }
+  }, [location.state, navigate]);
   return (
     <div className="landing-page">
-      <Navbar openAccess={openAccess} />
+      <Navbar openAccess={openAccess} getStarted={getStarted} />
       <main>
-        <Hero openAccess={openAccess} />
+        <Hero getStarted={getStarted} />
         <div className="lp-values">
           <div className="lp-container">
             {[
@@ -746,7 +768,7 @@ export default function LandingPage() {
                 part of exam monitoring into one clear platform.
               </p>
               <span>
-                <Button onClick={openAccess}>
+                <Button onClick={getStarted}>
                   Get started <ArrowRight size={17} />
                 </Button>
                 <button className="lp-btn outline" onClick={openAccess}>
@@ -757,7 +779,7 @@ export default function LandingPage() {
           </div>
         </section>
       </main>
-      <Footer openAccess={openAccess} />
+      <Footer openAccess={openAccess} getStarted={getStarted} />
       <BackToTop />
       <SignInModal open={signIn} onClose={() => setSignIn(false)} />
     </div>

@@ -34,7 +34,16 @@ export function DashboardLayout({
     return () => window.clearInterval(timer);
   }, [updateUser]);
   const resolvedUserName = user?.fullName ?? userName ?? 'ProctorX User';
+  const roleIdentityTag =
+    role === 'teacher'
+      ? `${user?.employeeId || 'Employee ID'} - Teacher`
+      : role === 'dean'
+        ? [user?.officialTitle || 'Dean', user?.employeeId ? `ID: ${user.employeeId}` : null]
+            .filter(Boolean)
+            .join(' · ')
+        : undefined;
   const resolvedUserTag =
+    roleIdentityTag ??
     userTag ??
     (user
       ? `${user.program ?? user.employeeId ?? roleLabel(role)} • ${roleLabel(role)}`

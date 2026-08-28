@@ -6,6 +6,7 @@ export enum Role {
 
 export interface User {
   id: string
+  institutionId?: string | null
   loginId: string
   email?: string | null
   fullName: string
@@ -20,6 +21,7 @@ export interface User {
   program?: string | null
   employeeId?: string | null
   office?: string | null
+  officialTitle?: string | null
 }
 
 export interface LoginRequest { loginId: string; password: string }

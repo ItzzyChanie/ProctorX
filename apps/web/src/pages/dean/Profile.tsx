@@ -18,6 +18,7 @@ export default function DeanProfile() {
   })
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState("")
+  const [messageError, setMessageError] = useState(false)
 
   useEffect(
     () =>
@@ -37,10 +38,12 @@ export default function DeanProfile() {
       const { data } = await api.patch<User>("/auth/profile", form)
       updateUser(data)
       setMessage("Profile updated successfully.")
+      setMessageError(false)
     } catch {
       setMessage(
         "Could not update profile. Check that the email and employee ID are unique.",
       )
+      setMessageError(true)
     } finally {
       setBusy(false)
     }
@@ -65,7 +68,7 @@ export default function DeanProfile() {
             {([
               ["fullName", "Full name", "text"],
               ["employeeId", "Employee ID", "text"],
-              ["office", "Office", "text"],
+              ["office", "Department", "text"],
               ["email", "Email", "email"],
             ] as const).map(([key, label, type]) => (
               <label key={key} className="block">
@@ -74,12 +77,17 @@ export default function DeanProfile() {
                 </span>
                 <input
                   required={key === "fullName" || key === "email"}
+                  readOnly={key === "employeeId" || key === "email"}
                   type={type}
                   value={form[key]}
                   onChange={(event) =>
                     setForm({ ...form, [key]: event.target.value })
                   }
-                  className="w-full rounded-[9px] border border-border bg-canvas px-3 py-2.5 text-[13.5px] text-text-1 outline-none focus:border-brand"
+                  className={`w-full rounded-[9px] border border-border px-3 py-2.5 text-[13.5px] text-text-1 outline-none focus:border-brand ${
+                    key === "employeeId" || key === "email"
+                      ? "cursor-not-allowed bg-slate-100 opacity-75 dark:bg-slate-800"
+                      : "bg-canvas"
+                  }`}
                 />
               </label>
             ))}
@@ -88,7 +96,11 @@ export default function DeanProfile() {
                 {busy ? "Saving…" : "Save profile"}
               </Button>}
               {message && (
-                <span className="text-xs text-text-2">{message}</span>
+                <span className={`rounded-lg px-3 py-2 text-xs font-medium ${
+                  messageError
+                    ? "bg-red-100 text-red-700"
+                    : "bg-emerald-100 text-emerald-800"
+                }`}>{message}</span>
               )}
             </div>}
           </form>

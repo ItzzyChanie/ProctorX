@@ -7,9 +7,10 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuthStore } from "../store/authStore";
 import { Role, type LoginResponse } from "../types";
+import { useQueryClient } from "@tanstack/react-query";
 type PendingActivationResponse = { activationRequired: true };
 const schema = z.object({
-  loginId: z.string().trim().min(1, "Enter your Student ID or Dean email.").max(320),
+  loginId: z.string().trim().min(1, "Enter your ID or institutional email.").max(320),
   password: z.string().min(1, "Enter your password."),
 });
 const otpSchema = z.object({ loginId: z.string().trim().min(1).max(320), code: z.string().regex(/^\d{6}$/, "Enter the six-digit activation code.") });
@@ -26,6 +27,7 @@ export function SignInModal({
   onClose: () => void;
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const dialog = useRef<HTMLDivElement>(null);
   const [error, setError] = useState("");
   const [activation, setActivation] = useState<{ loginId: string } | null>(null);
@@ -56,6 +58,7 @@ export function SignInModal({
         setActivation({ loginId: values.loginId });
         return;
       }
+      queryClient.clear();
       setAuth(data.user);
       onClose();
       navigate(
@@ -81,7 +84,7 @@ export function SignInModal({
 
     try {
       const { data } = await api.post("/auth/verify-activation", parsed.data);
-      setAuth(data.user); onClose(); navigate("/change-password");
+      queryClient.clear(); setAuth(data.user); onClose(); navigate("/change-password");
     }
     catch { setError("The activation code is invalid or expired."); }
   };
@@ -117,8 +120,8 @@ export function SignInModal({
           Sign in to ProctorX
         </h2>
         <p className="mt-2 text-sm leading-6 text-slate-500">
-          Students use their Student ID. Teachers and Deans use their school
-          email.
+          Students use their Student ID. Teachers and Deans can use their
+          Employee ID or institutional email.
         </p>
         {activation ? <form className="mt-7 space-y-4" onSubmit={verifyActivation}>
           <p className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">Enter the 6-digit activation code sent to your registered email address.</p>
@@ -128,7 +131,7 @@ export function SignInModal({
           <button type="button" className="w-full text-sm text-blue-600" onClick={() => { setActivation(null); setOtp(""); }}>Back to sign in</button>
         </form> : <form className="mt-7 space-y-4" onSubmit={handleSubmit(submit)}>
           <label className="block text-sm font-medium text-slate-700">
-            Student ID or Dean email
+            Student ID, Employee ID, or institutional email
             <input
               autoComplete="username"
               {...register("loginId")}

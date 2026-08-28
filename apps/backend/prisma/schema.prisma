@@ -19,6 +19,13 @@ enum AccountStatus {
   DISABLED
 }
 
+enum InstitutionRegistrationStatus {
+  EMAIL_VERIFICATION_PENDING
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
 enum ImportRowResult {
   CREATED
   SKIPPED_DUPLICATE
@@ -144,6 +151,7 @@ enum IncidentStatus {
 
 model User {
   id                    String               @id @default(uuid())
+  institutionId         String?
   role                  Role
   loginId               String               @unique
   email                 String?              @unique
@@ -171,6 +179,7 @@ model User {
   requestedReports      GeneratedReport[]
 
   @@map("users")
+  @@index([institutionId, role])
 }
 
 model StudentLoginSession {
@@ -196,6 +205,34 @@ model DeanProfile {
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("dean_profiles")
+}
+
+model InstitutionRegistration {
+  id                    String                        @id @default(uuid())
+  referenceNumber       String                        @unique
+  institutionName       String
+  collegeDepartmentName String
+  schoolType            String
+  firstName             String
+  lastName              String
+  employeeId            String?
+  officialTitle         String
+  email                 String                        @unique
+  passwordHash          String
+  internalRole          String                        @default("INSTITUTION_ADMINISTRATOR")
+  status                InstitutionRegistrationStatus @default(EMAIL_VERIFICATION_PENDING)
+  authorityConfirmed    Boolean                       @default(false)
+  termsAccepted         Boolean                       @default(false)
+  privacyAccepted       Boolean                       @default(false)
+  verificationCodeHash  String?
+  verificationExpiresAt DateTime?
+  verificationAttempts  Int                          @default(0)
+  emailVerifiedAt       DateTime?
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
+
+  @@index([status, createdAt])
+  @@map("institution_registrations")
 }
 
 model TeacherProfile {
@@ -228,6 +265,7 @@ model StudentProfile {
 
 model StudentSection {
   id           String           @id @default(uuid())
+  institutionId String?
   name         String
   program      String
   yearLevel    String
@@ -236,7 +274,8 @@ model StudentSection {
   students     StudentProfile[]
   subjectAssignments SubjectSection[]
 
-  @@unique([program, yearLevel, name])
+  @@unique([institutionId, program, yearLevel, name])
+  @@index([institutionId])
   @@index([program, yearLevel])
   @@map("student_sections")
 }
@@ -417,6 +456,7 @@ model Exam {
 
 model AcademicPeriod {
   id           String               @id @default(uuid())
+  institutionId String?
   academicYear String
   semester     Semester
   status       AcademicPeriodStatus @default(ACTIVE)
@@ -426,7 +466,8 @@ model AcademicPeriod {
   createdAt    DateTime             @default(now())
   exams        Exam[]
 
-  @@unique([academicYear, semester])
+  @@unique([institutionId, academicYear, semester])
+  @@index([institutionId])
   @@index([status])
   @@map("academic_periods")
 }

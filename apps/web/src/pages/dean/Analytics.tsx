@@ -25,6 +25,8 @@ type Data = {
   incidenceRateBySection: Array<{
     section: string
     rate: number
+    participantCount: number
+    flaggedStudentCount: number
   }>
   correlation: {
     points: Array<{
@@ -150,7 +152,10 @@ export default function Analytics() {
           )}
         </Card>
         <Card>
-          <CardHeader title="Incident rate by Year level & section" />
+          <CardHeader
+            title="Flagged student rate by Year level & section"
+            subtitle="Percentage of participating students with one or more recorded incidents. Each student is counted once."
+          />
           {data?.incidenceRateBySection.length ? (
             <ResponsiveContainer
               width="100%"
@@ -171,7 +176,13 @@ export default function Analytics() {
                   interval={0}
                   {...axisProps(p)}
                 />
-                <Tooltip {...tooltipProps(p)} />
+                <Tooltip
+                  {...tooltipProps(p)}
+                  formatter={(value, _name, item) => [
+                    `${value}% (${item.payload.flaggedStudentCount} of ${item.payload.participantCount} students)`,
+                    "Flagged student rate",
+                  ]}
+                />
                 <Bar dataKey="rate">
                   {data.incidenceRateBySection.map((d, i) => (
                     <Cell key={i} fill={riskTier(d.rate, p).color} />

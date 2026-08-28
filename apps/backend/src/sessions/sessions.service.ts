@@ -20,11 +20,19 @@ export class SessionsService {
   ) {}
 
   private async availableExam(code: string, studentId: string) {
+    const student = await this.prisma.user.findUnique({
+      where: { id: studentId },
+      select: { institutionId: true },
+    });
+    if (!student?.institutionId) throw new ForbiddenException('Institution is not configured');
     const exam = await this.prisma.exam.findFirst({
       where: {
         roomCode: code.trim().toUpperCase(),
         status: 'PUBLISHED',
-        subject: { enrollments: { some: { studentId } } },
+        subject: {
+          teacher: { institutionId: student.institutionId },
+          enrollments: { some: { studentId } },
+        },
       },
       include: {
         questions: {

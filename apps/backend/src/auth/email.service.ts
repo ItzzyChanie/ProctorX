@@ -5,7 +5,7 @@ import nodemailer from 'nodemailer';
 @Injectable()
 export class EmailService {
   constructor(private config: ConfigService) {}
-  async sendActivationCode(to: string, code: string) {
+  private transporter() {
     const host = this.config.get<string>('SMTP_HOST');
     const user = this.config.get<string>('SMTP_USER');
     const pass = this.config.get<string>('SMTP_PASS');
@@ -16,18 +16,47 @@ export class EmailService {
       );
     }
     const port = Number(this.config.get<string>('SMTP_PORT') ?? 587);
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: port === 465,
-      auth: { user, pass },
-      connectionTimeout: 10_000,
-      greetingTimeout: 10_000,
-      socketTimeout: 20_000,
-    });
+    return {
+      from,
+      transport: nodemailer.createTransport({
+        host,
+        port,
+        secure: port === 465,
+        auth: { user, pass },
+        connectionTimeout: 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 20_000,
+      }),
+    };
+  }
+
+  async sendInstitutionVerificationCode(
+    to: string,
+    code: string,
+    institutionName: string
+  ) {
+    const { from, transport } = this.transporter();
+    try {
+      await transport.sendMail({
+        from,
+        to,
+        subject: 'Verify your ProctorX institutional application',
+        text: `Your ProctorX verification code for ${institutionName} is ${code}. It expires in 10 minutes. Do not share this code with anyone.`,
+        html: `<div style="font-family:Arial,sans-serif;color:#111827;max-width:520px"><h2 style="color:#4f46e5">Verify your institutional email</h2><p>Use this code to verify the ProctorX application for <strong>${institutionName}</strong>.</p><div style="font-size:30px;font-weight:700;letter-spacing:8px;padding:18px 0">${code}</div><p style="color:#64748b">The code expires in 10 minutes. Do not share it with anyone.</p></div>`,
+      });
+    } catch (error) {
+      console.error('Institution verification email delivery failed', error);
+      throw new ServiceUnavailableException(
+        'We could not send the verification email. Check the address and try again.'
+      );
+    }
+  }
+
+  async sendActivationCode(to: string, code: string) {
+    const { from, transport } = this.transporter();
 
     try {
-      await transporter.sendMail({
+      await transport.sendMail({
         from,
         to,
         subject: 'Your ProctorX activation code',
