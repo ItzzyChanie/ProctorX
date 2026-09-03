@@ -24,6 +24,7 @@ import Correlation from './pages/teacher/Correlation';
 import Classes from './pages/teacher/Classes';
 import ClassSections from './pages/teacher/ClassSections';
 import StudentRosters from './pages/teacher/StudentRosters';
+import SubmittedExams from './pages/teacher/SubmittedExams';
 import Messages from './pages/teacher/Messages';
 
 import DeanDashboard from './pages/dean/DeanDashboard';
@@ -121,6 +122,7 @@ export default function App() {
             <Route path="/teacher/classes" element={<Classes />} />
             <Route path="/teacher/class-sections" element={<ClassSections />} />
             <Route path="/teacher/rosters" element={<StudentRosters />} />
+            <Route path="/teacher/submitted-exams" element={<SubmittedExams />} />
             <Route path="/teacher/messages" element={<Messages />} />
             <Route path="/teacher/profile" element={<TeacherProfile />} />
             <Route

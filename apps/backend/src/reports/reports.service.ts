@@ -105,7 +105,9 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       select: {
         id: true,
         startedAt: true,
-        student: { select: { id: true, fullName: true } },
+        student: {
+          select: { id: true, fullName: true, profilePicture: true },
+        },
         exam: {
           select: {
             title: true,
@@ -308,7 +310,8 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       where: { id: deanId },
       select: { institutionId: true },
     });
-    if (!dean?.institutionId) throw new NotFoundException('Institution not found');
+    if (!dean?.institutionId)
+      throw new NotFoundException('Institution not found');
     const format =
       body.format === 'excel' ? ReportFormat.EXCEL : ReportFormat.PDF;
     const dateFrom = new Date(body.dateFrom),
@@ -346,14 +349,14 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
         where: {
           startedAt: { gte: dateFrom, lte: dateTo },
           exam: {
-                  subject: {
-                    teacher: { institutionId: dean.institutionId },
-                    ...(body.subjectCode ? { code: body.subjectCode } : {}),
-                  },
-                  ...(body.academicPeriodId
-                    ? { academicPeriodId: body.academicPeriodId }
-                    : {}),
-                  ...(body.term ? { term: body.term as any } : {}),
+            subject: {
+              teacher: { institutionId: dean.institutionId },
+              ...(body.subjectCode ? { code: body.subjectCode } : {}),
+            },
+            ...(body.academicPeriodId
+              ? { academicPeriodId: body.academicPeriodId }
+              : {}),
+            ...(body.term ? { term: body.term as any } : {}),
           },
           ...(Object.keys(profile).length
             ? { student: { studentProfile: { is: profile } } }

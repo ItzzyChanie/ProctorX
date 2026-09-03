@@ -135,6 +135,7 @@ export default function Classes() {
       blockThirdPartyApps: true,
     }),
     [questions, setQuestions] = useState<Question[]>([blank()]);
+  const [assessmentClock, setAssessmentClock] = useState(() => Date.now());
   const noticeIsError =
     /could not|cannot|check|enter|choose|set at least|complete the|need|invalid|required|declined|failed|error|unsupported|exceed|unavailable|rate limit/i.test(
       notice
@@ -142,13 +143,42 @@ export default function Classes() {
   const subjects = useQuery({
     queryKey: ['subjects'],
     queryFn: async () => (await api.get<Subject[]>('/subjects/mine')).data,
-    refetchInterval: 15_000,
+    refetchInterval: 3_000,
+    refetchIntervalInBackground: true,
   });
+  const activeExamFor = (subject: Subject) =>
+    subject.exams.find(
+      (exam) =>
+        !exam.endsAt || new Date(exam.endsAt).getTime() > assessmentClock
+    );
+  useEffect(() => {
+    const deadlines =
+      subjects.data
+        ?.flatMap((subject) => subject.exams)
+        .map((exam) => (exam.endsAt ? new Date(exam.endsAt).getTime() : NaN))
+        .filter(
+          (deadline) => Number.isFinite(deadline) && deadline > Date.now()
+        ) ?? [];
+    if (!deadlines.length) return;
+    const nextDeadline = Math.min(...deadlines);
+    const timer = window.setTimeout(
+      () => {
+        setAssessmentClock(Date.now());
+        setStopping(undefined);
+        void qc.invalidateQueries({ queryKey: ['subjects'] });
+      },
+      Math.max(0, nextDeadline - Date.now() + 100)
+    );
+    return () => window.clearTimeout(timer);
+  }, [subjects.data, qc, assessmentClock]);
+
   const periods = useQuery({
     queryKey: ['academic-periods'],
-    queryFn: async () => (await api.get<AcademicPeriod[]>('/academic-periods')).data,
+    queryFn: async () =>
+      (await api.get<AcademicPeriod[]>('/academic-periods')).data,
   });
-  const activePeriods = periods.data?.filter((period) => period.status === 'ACTIVE') ?? [];
+  const activePeriods =
+    periods.data?.filter((period) => period.status === 'ACTIVE') ?? [];
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(''), 4500);
@@ -166,9 +196,7 @@ export default function Classes() {
       const rows = (
         await api.get<Enrollment[]>(`/subjects/${rosterSubject!.id}/students`)
       ).data;
-      return rows.filter(
-        (row): row is Enrollment => Boolean(row?.student?.id)
-      );
+      return rows.filter((row): row is Enrollment => Boolean(row?.student?.id));
     },
   });
   const createSubject = useMutation({
@@ -226,7 +254,9 @@ export default function Classes() {
   });
   const stopExam = useMutation({
     mutationFn: (subject: Subject) =>
-      api.post(`/subjects/${subject.id}/exams/${subject.exams[0].id}/stop`),
+      api.post(
+        `/subjects/${subject.id}/exams/${activeExamFor(subject)!.id}/stop`
+      ),
     onSuccess: () => {
       setStopping(undefined);
       setNotice(
@@ -330,8 +360,17 @@ export default function Classes() {
       void qc.invalidateQueries({ queryKey: ['subjects'] });
       close();
     },
-    onError: () =>
-      setNotice('Could not save. Check every question and answer.'),
+    onError: (error: any) => {
+      const responseMessage = error?.response?.data?.message;
+      const detail = Array.isArray(responseMessage)
+        ? responseMessage.join(' ')
+        : responseMessage;
+      setNotice(
+        typeof detail === 'string' && detail
+          ? `Could not save: ${detail}`
+          : 'Could not save. Check every question and answer.'
+      );
+    },
   });
   const patchQ = (i: number, p: Partial<Question>) =>
     setQuestions((v) => v.map((q, n) => (n === i ? { ...q, ...p } : q)));
@@ -354,9 +393,13 @@ export default function Classes() {
     if (
       !form.title.trim() ||
       form.durationMinutes < 1 ||
-      questions.some((q) => !q.prompt.trim())
+      questions.some(
+        (q) => !q.prompt.trim() || !Number.isInteger(q.points) || q.points < 1
+      )
     )
-      return setNotice('Complete the title, duration, and every question.');
+      return setNotice(
+        'Complete the title and every question, using at least 1 point per item.'
+      );
     if (
       questions.some(
         (q) =>
@@ -542,16 +585,16 @@ export default function Classes() {
                     <td className="p-4">{s._count.exams}</td>
                     <td className="p-4">
                       <span
-                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${s.exams[0] ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${activeExamFor(s) ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}
                       >
-                        {s.exams[0]
+                        {activeExamFor(s)
                           ? `Active · ${s.exams[0].term.replace('_', ' ')}`
                           : 'Not Active'}
                       </span>
                     </td>
                     <td className="p-4">
                       <div className="flex gap-2">
-                        {s.exams[0] ? (
+                        {activeExamFor(s) ? (
                           <Button
                             variant="danger"
                             onClick={() => setStopping(s)}
@@ -561,7 +604,11 @@ export default function Classes() {
                         ) : (
                           <Button
                             disabled={!activePeriods.length}
-                            title={!activePeriods.length ? 'The Dean must create an active semester first' : undefined}
+                            title={
+                              !activePeriods.length
+                                ? 'The Dean must create an active semester first'
+                                : undefined
+                            }
                             onClick={() => {
                               setAcademicPeriodId(activePeriods[0]?.id ?? '');
                               setActive({ subject: s, kind: 'EXAM' });
@@ -725,15 +772,38 @@ export default function Classes() {
                 onSubmit={submit}
               >
                 <div className="grid gap-3 md:grid-cols-2">
-                  <label className="text-xs font-semibold">Academic semester
-                    <select className={`${input} mt-1`} value={academicPeriodId} onChange={(e)=>setAcademicPeriodId(e.target.value)} required>
+                  <label className="text-xs font-semibold">
+                    Academic semester
+                    <select
+                      className={`${input} mt-1`}
+                      value={academicPeriodId}
+                      onChange={(e) => setAcademicPeriodId(e.target.value)}
+                      required
+                    >
                       <option value="">Select semester</option>
-                      {activePeriods.map((period)=><option key={period.id} value={period.id}>{period.academicYear} · {period.semester === 'FIRST' ? 'First Semester' : 'Second Semester'}</option>)}
+                      {activePeriods.map((period) => (
+                        <option key={period.id} value={period.id}>
+                          {period.academicYear} ·{' '}
+                          {period.semester === 'FIRST'
+                            ? 'First Semester'
+                            : 'Second Semester'}
+                        </option>
+                      ))}
                     </select>
                   </label>
-                  <label className="text-xs font-semibold">Term
-                    <select className={`${input} mt-1`} value={term} onChange={(e)=>setTerm(e.target.value)} required>
-                      <option value="">Select term</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option>
+                  <label className="text-xs font-semibold">
+                    Term
+                    <select
+                      className={`${input} mt-1`}
+                      value={term}
+                      onChange={(e) => setTerm(e.target.value)}
+                      required
+                    >
+                      <option value="">Select term</option>
+                      <option value="PRELIMINARY">Preliminary</option>
+                      <option value="MIDTERM">Midterm</option>
+                      <option value="SEMI_FINAL">Semi-final</option>
+                      <option value="FINAL">Final</option>
                     </select>
                   </label>
                 </div>
@@ -747,23 +817,73 @@ export default function Classes() {
                     placeholder="https://docs.google.com/forms/..."
                   />
                 </label>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="text-xs font-semibold">
+                    Start date and time
+                    <input
+                      className={`${input} mt-1`}
+                      type="datetime-local"
+                      value={form.scheduledAt}
+                      onChange={(e) =>
+                        setForm({ ...form, scheduledAt: e.target.value })
+                      }
+                      required
+                    />
+                  </label>
+                  <label className="text-xs font-semibold">
+                    End date and time
+                    <input
+                      className={`${input} mt-1`}
+                      type="datetime-local"
+                      value={form.endsAt}
+                      onChange={(e) =>
+                        setForm({ ...form, endsAt: e.target.value })
+                      }
+                      required
+                    />
+                  </label>
+                </div>
                 <div className="flex justify-end">
-                  <Button disabled={save.isPending}>Save</Button>
+                  <Button disabled={save.isPending}>
+                    {save.isPending ? 'Publishing…' : 'Save and Publish Exam'}
+                  </Button>
                 </div>
               </form>
             ) : (
               <form className="space-y-5" onSubmit={submit}>
                 <div className="grid gap-3 md:grid-cols-2">
-                  <label className="text-xs font-semibold">Academic semester
-                    <select className={`${input} mt-1`} value={academicPeriodId} onChange={(e)=>setAcademicPeriodId(e.target.value)} required>
+                  <label className="text-xs font-semibold">
+                    Academic semester
+                    <select
+                      className={`${input} mt-1`}
+                      value={academicPeriodId}
+                      onChange={(e) => setAcademicPeriodId(e.target.value)}
+                      required
+                    >
                       <option value="">Select semester</option>
-                      {activePeriods.map((period)=><option key={period.id} value={period.id}>{period.academicYear} · {period.semester === 'FIRST' ? 'First Semester' : 'Second Semester'}</option>)}
+                      {activePeriods.map((period) => (
+                        <option key={period.id} value={period.id}>
+                          {period.academicYear} ·{' '}
+                          {period.semester === 'FIRST'
+                            ? 'First Semester'
+                            : 'Second Semester'}
+                        </option>
+                      ))}
                     </select>
                   </label>
-                  <label className="text-xs font-semibold">Term
-                    <select className={`${input} mt-1`} value={term} onChange={(e)=>setTerm(e.target.value)} required>
+                  <label className="text-xs font-semibold">
+                    Term
+                    <select
+                      className={`${input} mt-1`}
+                      value={term}
+                      onChange={(e) => setTerm(e.target.value)}
+                      required
+                    >
                       <option value="">Select term</option>
-                      <option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option>
+                      <option value="PRELIMINARY">Preliminary</option>
+                      <option value="MIDTERM">Midterm</option>
+                      <option value="SEMI_FINAL">Semi-final</option>
+                      <option value="FINAL">Final</option>
                     </select>
                   </label>
                 </div>
@@ -1144,8 +1264,9 @@ export default function Classes() {
               subtitle="Students will no longer be able to join this assessment."
             />
             <p className="mb-5 text-sm">
-              Are you sure you want to stop <b>{stopping.exams[0]?.title}</b>{' '}
-              early? This action cannot be undone.
+              Are you sure you want to stop{' '}
+              <b>{activeExamFor(stopping)?.title}</b> early? This action cannot
+              be undone.
             </p>
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={() => setStopping(undefined)}>

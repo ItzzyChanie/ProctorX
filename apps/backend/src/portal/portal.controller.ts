@@ -118,12 +118,22 @@ export class PortalController {
     return this.p.playback(r.user.id, id);
   }
 
+  @Get('teacher/evidence-clips/:id') @Roles(Role.TEACHER) async evidenceClip(
+    @Req() r: any,
+    @Param('id') id: string,
+    @Res() response: Response
+  ) {
+    const path = await this.p.evidenceClipFile(r.user.id, id);
+    response.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    return response.sendFile(path);
+  }
   @Get('teacher/sessions/:id/recording') @Roles(Role.TEACHER) async recording(
     @Req() r: any,
     @Param('id') id: string,
     @Res() response: Response
   ) {
     const path = await this.p.recordingFile(r.user.id, id);
+    response.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     return response.sendFile(path);
   }
 

@@ -1,11 +1,13 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseEnumPipe,
   ParseFilePipeBuilder,
   Post,
+  Query,
   Req,
   UploadedFile,
   UseGuards,
@@ -18,7 +20,9 @@ import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import {
   ConfirmGradeDto,
   EventDto,
+  EvidenceClipDto,
   JoinExamDto,
+  SaveDraftDto,
   SubmitDto,
   TeacherSessionAction,
 } from './dto/sessions.dto';
@@ -58,7 +62,42 @@ export class SessionsController {
   ) {
     return this.grading.submit(id, r.user.id, body.answers);
   }
-  @Get('exam/:examId/submissions') @Roles(Role.TEACHER) submissions(
+  @Post(':id/draft') @Roles(Role.STUDENT) saveDraft(
+    @Req() r: any,
+    @Param('id') id: string,
+    @Body() body: SaveDraftDto
+  ) {
+    return this.grading.saveDraft(id, r.user.id, body.answers);
+  }
+  @Post(':id/heartbeat') @Roles(Role.STUDENT) heartbeat(
+    @Req() r: any,
+    @Param('id') id: string
+  ) {
+    return this.grading.heartbeat(id, r.user.id);
+  }
+  @Get('submissions') @Roles(Role.TEACHER) submitted(
+    @Req() r: any,
+    @Query() query: Record<string, string | undefined>
+  ) {
+    return this.grading.submitted(r.user.id, query);
+  }
+  @Get('submissions/:submissionId') @Roles(Role.TEACHER) submissionDetail(
+    @Req() r: any,
+    @Param('submissionId') submissionId: string
+  ) {
+    return this.grading.submissionDetail(submissionId, r.user.id);
+  }
+  @Post('submissions/:submissionId/restore') @Roles(Role.TEACHER) restoreSubmission(
+    @Req() r: any,
+    @Param('submissionId') submissionId: string
+  ) {
+    return this.grading.restoreSubmission(submissionId, r.user.id);
+  }  @Delete('submissions/:submissionId') @Roles(Role.TEACHER) removeSubmission(
+    @Req() r: any,
+    @Param('submissionId') submissionId: string
+  ) {
+    return this.grading.removeSubmission(submissionId, r.user.id);
+  }  @Get('exam/:examId/submissions') @Roles(Role.TEACHER) submissions(
     @Req() r: any,
     @Param('examId') examId: string
   ) {
@@ -111,6 +150,23 @@ export class SessionsController {
   ) {
     return this.s.event(id, r.user.id, b.type as any, b.metadata);
   }
+  @Post(':id/evidence-clips')
+  @Roles(Role.STUDENT)
+  @UseInterceptors(FileInterceptor('clip'))
+  evidenceClip(
+    @Req() r: any,
+    @Param('id') id: string,
+    @Body() body: EvidenceClipDto,
+    @UploadedFile(
+      new ParseFilePipeBuilder()
+        .addFileTypeValidator({ fileType: /^video\/webm(?:;.*)?$/i })
+        .addMaxSizeValidator({ maxSize: 10_000_000 })
+        .build()
+    )
+    file: Express.Multer.File
+  ) {
+    return this.s.evidenceClip(id, r.user.id, body as any, file.buffer);
+  }
   @Post(':id/recording-chunks')
   @Roles(Role.STUDENT)
   @UseInterceptors(FileInterceptor('chunk'))
@@ -119,7 +175,7 @@ export class SessionsController {
     @Param('id') id: string,
     @UploadedFile(
       new ParseFilePipeBuilder()
-        .addFileTypeValidator({ fileType: /^video\/webm$/ })
+        .addFileTypeValidator({ fileType: /^video\/webm(?:;.*)?$/i })
         .addMaxSizeValidator({ maxSize: 25_000_000 })
         .build()
     )

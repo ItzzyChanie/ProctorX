@@ -29,7 +29,11 @@ export function DashboardLayout({
 }: DashboardLayoutProps) {
   const { user, updateUser } = useAuthStore();
   useEffect(() => {
-    const refresh = () => void api.get<User>('/auth/me').then(({ data }) => updateUser(data)).catch(() => undefined);
+    const refresh = () =>
+      void api
+        .get<User>('/auth/me')
+        .then(({ data }) => updateUser(data))
+        .catch(() => undefined);
     const timer = window.setInterval(refresh, 5_000);
     return () => window.clearInterval(timer);
   }, [updateUser]);
@@ -38,10 +42,17 @@ export function DashboardLayout({
     role === 'teacher'
       ? `${user?.employeeId || 'Employee ID'} - Teacher`
       : role === 'dean'
-        ? [user?.officialTitle || 'Dean', user?.employeeId ? `ID: ${user.employeeId}` : null]
+        ? [
+            user?.officialTitle || 'Dean',
+            user?.employeeId ? `ID: ${user.employeeId}` : null,
+          ]
             .filter(Boolean)
             .join(' · ')
-        : undefined;
+        : user
+          ? `${user.program === 'CS' ? 'BSCS' : user.program === 'IT' ? 'BSIT' : user.program || 'Student'}${
+              user.sectionName ? `-${user.sectionName}` : ''
+            } · Student`
+          : undefined;
   const resolvedUserTag =
     roleIdentityTag ??
     userTag ??

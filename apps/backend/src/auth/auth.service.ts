@@ -19,7 +19,7 @@ const TOKEN_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const profileInclude = {
   deanProfile: true,
   teacherProfile: true,
-  studentProfile: true,
+  studentProfile: { include: { section: true } },
 } satisfies Prisma.UserInclude;
 
 type UserWithProfile = Prisma.UserGetPayload<{
@@ -117,6 +117,7 @@ export class AuthService {
       studentId: studentProfile?.studentId ?? null,
       yearLevel: studentProfile?.yearLevel ?? null,
       program: studentProfile?.program ?? null,
+      sectionName: studentProfile?.section?.name ?? null,
     };
   }
   async login(loginId: string, password: string) {
@@ -321,21 +322,14 @@ export class AuthService {
       where: { id: userId },
       data: {
         fullName,
-        ...(input.email !== undefined
-          ? { email: input.email.trim().toLowerCase() || null }
-          : {}),
         ...(current.role === Role.DEAN
           ? {
               deanProfile: {
                 upsert: {
                   create: {
-                    employeeId: input.employeeId?.trim() || null,
                     college: input.office?.trim() || null,
                   },
                   update: {
-                    ...(input.employeeId !== undefined
-                      ? { employeeId: input.employeeId.trim() || null }
-                      : {}),
                     ...(input.office !== undefined
                       ? { college: input.office.trim() || null }
                       : {}),
@@ -348,13 +342,9 @@ export class AuthService {
                 teacherProfile: {
                   upsert: {
                     create: {
-                      employeeId: input.employeeId?.trim() || null,
                       department: input.office?.trim() || null,
                     },
                     update: {
-                      ...(input.employeeId !== undefined
-                        ? { employeeId: input.employeeId.trim() || null }
-                        : {}),
                       ...(input.office !== undefined
                         ? { department: input.office.trim() || null }
                         : {}),
@@ -362,18 +352,7 @@ export class AuthService {
                   },
                 },
               }
-            : {
-                studentProfile: {
-                  update: {
-                    ...(input.studentId !== undefined
-                      ? { studentId: input.studentId.trim() || null }
-                      : {}),
-                    ...(input.program !== undefined
-                      ? { program: input.program.trim() || null }
-                      : {}),
-                  },
-                },
-              }),
+            : {}),
       },
       include: profileInclude,
     });

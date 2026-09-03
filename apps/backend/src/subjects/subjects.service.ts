@@ -49,7 +49,8 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       where: { id: userId },
       select: { institutionId: true },
     });
-    if (!user?.institutionId) throw new ForbiddenException('Institution is not configured');
+    if (!user?.institutionId)
+      throw new ForbiddenException('Institution is not configured');
     return user.institutionId;
   }
   private async closeExpiredExams() {
@@ -319,11 +320,35 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
   async mine(userId: string, role: Role) {
     if (role === Role.TEACHER) {
       const now = new Date();
+      const published = await this.prisma.exam.findMany({
+        where: { subject: { teacherId: userId }, status: ExamStatus.PUBLISHED },
+        select: {
+          id: true,
+          subject: { select: { enrollments: { select: { studentId: true } } } },
+          sessions: { select: { studentId: true, status: true } },
+        },
+      });
+      const completedIds = published
+        .filter(
+          (exam) =>
+            exam.subject.enrollments.length > 0 &&
+            exam.subject.enrollments.every((enrollment) =>
+              exam.sessions.some(
+                (session) =>
+                  session.studentId === enrollment.studentId &&
+                  session.status === SessionStatus.COMPLETED
+              )
+            )
+        )
+        .map((exam) => exam.id);
       await this.prisma.exam.updateMany({
         where: {
           subject: { teacherId: userId },
           status: ExamStatus.PUBLISHED,
-          endsAt: { lte: now },
+          OR: [
+            { endsAt: { lte: now } },
+            ...(completedIds.length ? [{ id: { in: completedIds } }] : []),
+          ],
         },
         data: { status: ExamStatus.ARCHIVED },
       });
@@ -341,7 +366,9 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
               title: true,
               assessmentType: true,
               term: true,
-              academicPeriod: { select: { academicYear: true, semester: true } },
+              academicPeriod: {
+                select: { academicYear: true, semester: true },
+              },
               scheduledAt: true,
               endsAt: true,
             },
@@ -404,7 +431,12 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
               profilePicture: true,
               status: true,
               studentProfile: {
-                select: { studentId: true, program: true, yearLevel: true, section: { select: { id: true, name: true } } },
+                select: {
+                  studentId: true,
+                  program: true,
+                  yearLevel: true,
+                  section: { select: { id: true, name: true } },
+                },
               },
             },
           },
@@ -474,8 +506,15 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       this.prisma.subject.findMany({
         where: { teacherId },
         select: {
-          id: true, subjectCode: true, name: true, schedule: true,
-          sectionAssignments: { include: { section: { include: { _count: { select: { students: true } } } } } },
+          id: true,
+          subjectCode: true,
+          name: true,
+          schedule: true,
+          sectionAssignments: {
+            include: {
+              section: { include: { _count: { select: { students: true } } } },
+            },
+          },
           _count: { select: { enrollments: true } },
         },
         orderBy: { subjectCode: 'asc' },
@@ -488,33 +527,67 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     ]);
     return { subjects, sections };
   }
-  async assignSection(subjectId: string, sectionId: string, enrollStudents: boolean, teacherId: string) {
+  async assignSection(
+    subjectId: string,
+    sectionId: string,
+    enrollStudents: boolean,
+    teacherId: string
+  ) {
     await this.owned(subjectId, teacherId);
     const institutionId = await this.institutionFor(teacherId);
     const section = await this.prisma.studentSection.findFirst({
-      where: { id: sectionId, institutionId }, include: { students: { select: { userId: true } } },
+      where: { id: sectionId, institutionId },
+      include: { students: { select: { userId: true } } },
     });
     if (!section) throw new NotFoundException('Section not found');
     const result = await this.prisma.$transaction(async (tx) => {
       const assignment = await tx.subjectSection.upsert({
         where: { subjectId_sectionId: { subjectId, sectionId } },
-        create: { subjectId, sectionId }, update: {},
+        create: { subjectId, sectionId },
+        update: {},
       });
       if (enrollStudents && section.students.length)
         await tx.enrollment.createMany({
-          data: section.students.map(({ userId }) => ({ subjectId, studentId: userId })),
+          data: section.students.map(({ userId }) => ({
+            subjectId,
+            studentId: userId,
+          })),
           skipDuplicates: true,
         });
       return assignment;
     });
-    await this.prisma.auditLog.create({ data: { actorId: teacherId, action: 'SECTION_ASSIGNED_TO_SUBJECT', targetType: 'StudentSection', targetId: sectionId } });
-    return { assignment: result, enrolledCount: enrollStudents ? section.students.length : 0 };
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: 'SECTION_ASSIGNED_TO_SUBJECT',
+        targetType: 'StudentSection',
+        targetId: sectionId,
+      },
+    });
+    return {
+      assignment: result,
+      enrolledCount: enrollStudents ? section.students.length : 0,
+    };
   }
-  async unassignSection(subjectId: string, sectionId: string, teacherId: string) {
+  async unassignSection(
+    subjectId: string,
+    sectionId: string,
+    teacherId: string
+  ) {
     await this.owned(subjectId, teacherId);
-    const result = await this.prisma.subjectSection.deleteMany({ where: { subjectId, sectionId } });
-    if (!result.count) throw new NotFoundException('Section assignment not found');
-    await this.prisma.auditLog.create({ data: { actorId: teacherId, action: 'SECTION_REMOVED_FROM_SUBJECT', targetType: 'StudentSection', targetId: sectionId } });
+    const result = await this.prisma.subjectSection.deleteMany({
+      where: { subjectId, sectionId },
+    });
+    if (!result.count)
+      throw new NotFoundException('Section assignment not found');
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: 'SECTION_REMOVED_FROM_SUBJECT',
+        targetType: 'StudentSection',
+        targetId: sectionId,
+      },
+    });
     return { deleted: true };
   }
   async generateQuestions(
@@ -524,7 +597,41 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     counts: QuestionCounts
   ) {
     await this.owned(subjectId, teacherId);
-    return this.ai.generateQuestions(file, counts);
+    const generated = await this.ai.generateQuestions(file, counts);
+    return {
+      ...generated,
+      questions: (generated.questions ?? []).map((question: any) => {
+        if (question.type !== 'MULTIPLE_CHOICE' || !question.options?.length)
+          return question;
+        const options = [...question.options];
+        for (let index = options.length - 1; index > 0; index--) {
+          const swapIndex = Math.floor(Math.random() * (index + 1));
+          [options[index], options[swapIndex]] = [
+            options[swapIndex],
+            options[index],
+          ];
+        }
+        // AI providers commonly put the correct suggestion first. If a random
+        // shuffle leaves it there, move it so a generated draft never teaches
+        // students that A is predictably correct.
+        if (
+          options.length > 1 &&
+          options[0]?.isCorrect &&
+          options.some((option: any) => !option.isCorrect)
+        ) {
+          const nonCorrectIndexes = options
+            .map((option: any, index: number) => ({ option, index }))
+            .filter(({ option }: any) => !option.isCorrect)
+            .map(({ index }: any) => index);
+          const swapIndex =
+            nonCorrectIndexes[
+              Math.floor(Math.random() * nonCorrectIndexes.length)
+            ];
+          [options[0], options[swapIndex]] = [options[swapIndex], options[0]];
+        }
+        return { ...question, options };
+      }),
+    };
   }
   async availableStudents(subjectId: string, teacherId: string, search = '') {
     await this.owned(subjectId, teacherId);
@@ -709,11 +816,32 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     const subject = await this.owned(subjectId, teacherId);
     const exam = await this.prisma.exam.findFirst({
       where: { id: examId, subjectId },
+      include: {
+        subject: { select: { enrollments: { select: { studentId: true } } } },
+        sessions: { select: { studentId: true, status: true } },
+      },
     });
     if (!exam) throw new NotFoundException('Exam or quiz not found');
-    if (exam.status !== ExamStatus.PUBLISHED)
-      throw new ConflictException('This exam or quiz is already inactive');
     const endedAt = new Date();
+    const naturallyEnded =
+      exam.status !== ExamStatus.PUBLISHED ||
+      (!!exam.endsAt && exam.endsAt <= endedAt) ||
+      (exam.subject.enrollments.length > 0 &&
+        exam.subject.enrollments.every((enrollment) =>
+          exam.sessions.some(
+            (session) =>
+              session.studentId === enrollment.studentId &&
+              session.status === SessionStatus.COMPLETED
+          )
+        ));
+    if (naturallyEnded) {
+      if (exam.status === ExamStatus.PUBLISHED)
+        await this.prisma.exam.update({
+          where: { id: examId },
+          data: { status: ExamStatus.ARCHIVED },
+        });
+      return { ...exam, status: ExamStatus.ARCHIVED, alreadyInactive: true };
+    }
     const stopped = await this.prisma.$transaction(async (tx) => {
       const saved = await tx.exam.update({
         where: { id: examId },

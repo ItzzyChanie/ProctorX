@@ -104,6 +104,11 @@ enum GradeStatus {
   TEACHER_CONFIRMED
 }
 
+enum SubmissionMode {
+  MANUAL
+  AUTO_TIMEOUT
+}
+
 enum SessionStatus {
   IN_PROGRESS
   COMPLETED
@@ -134,16 +139,34 @@ enum RecordingStatus {
   COMPLETE
   FAILED
 }
+
+enum EvidenceClipStatus {
+  UPLOADING
+  COMPLETE
+  FAILED
+}
+
+enum EvidenceClipPhase {
+  BEFORE
+  AFTER
+  PREVIOUS
+  INCIDENT
+  FOLLOWING
+  CENTERED
+}
+
 enum ReportFormat {
   PDF
   EXCEL
 }
+
 enum ReportJobStatus {
   PENDING
   PROCESSING
   COMPLETE
   FAILED
 }
+
 enum IncidentStatus {
   OPEN
   RESOLVED
@@ -178,8 +201,8 @@ model User {
   studentLoginSession   StudentLoginSession?
   requestedReports      GeneratedReport[]
 
-  @@map("users")
   @@index([institutionId, role])
+  @@map("users")
 }
 
 model StudentLoginSession {
@@ -226,7 +249,7 @@ model InstitutionRegistration {
   privacyAccepted       Boolean                       @default(false)
   verificationCodeHash  String?
   verificationExpiresAt DateTime?
-  verificationAttempts  Int                          @default(0)
+  verificationAttempts  Int                           @default(0)
   emailVerifiedAt       DateTime?
   createdAt             DateTime                      @default(now())
   updatedAt             DateTime                      @updatedAt
@@ -248,15 +271,15 @@ model TeacherProfile {
 }
 
 model StudentProfile {
-  id        String   @id @default(uuid())
-  userId    String   @unique
-  studentId String?  @unique
+  id        String          @id @default(uuid())
+  userId    String          @unique
+  studentId String?         @unique
   yearLevel String?
   program   String?
   sectionId String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   section   StudentSection? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
 
   @@index([sectionId])
@@ -264,14 +287,14 @@ model StudentProfile {
 }
 
 model StudentSection {
-  id           String           @id @default(uuid())
-  institutionId String?
-  name         String
-  program      String
-  yearLevel    String
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
-  students     StudentProfile[]
+  id                 String           @id @default(uuid())
+  institutionId      String?
+  name               String
+  program            String
+  yearLevel          String
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  students           StudentProfile[]
   subjectAssignments SubjectSection[]
 
   @@unique([institutionId, program, yearLevel, name])
@@ -279,20 +302,22 @@ model StudentSection {
   @@index([program, yearLevel])
   @@map("student_sections")
 }
+
 model GeneratedReport {
-  id String @id @default(uuid())
+  id            String          @id @default(uuid())
   requestedById String
-  name String
-  format ReportFormat
-  dateFrom DateTime
-  dateTo DateTime
-  filters Json?
-  status ReportJobStatus @default(PENDING)
-  downloadPath String?
-  errorMessage String?
-  createdAt DateTime @default(now())
-  requestedBy User @relation(fields:[requestedById],references:[id])
-  @@index([requestedById,createdAt])
+  name          String
+  format        ReportFormat
+  dateFrom      DateTime
+  dateTo        DateTime
+  filters       Json?
+  status        ReportJobStatus @default(PENDING)
+  downloadPath  String?
+  errorMessage  String?
+  createdAt     DateTime        @default(now())
+  requestedBy   User            @relation(fields: [requestedById], references: [id])
+
+  @@index([requestedById, createdAt])
   @@map("generated_reports")
 }
 
@@ -363,21 +388,21 @@ model StudentImportRow {
 }
 
 model Subject {
-  id          String       @id @default(uuid())
-  code        String       @unique
-  subjectCode String?
-  schedule    String?
-  name        String
-  teacherId   String
-  createdAt   DateTime     @default(now())
-  teacher     User         @relation("SubjectTeacher", fields: [teacherId], references: [id])
-  enrollments Enrollment[]
-  joinRequests SubjectJoinRequest[]
-  exams       Exam[]
+  id                 String               @id @default(uuid())
+  code               String               @unique
+  subjectCode        String?
+  schedule           String?
+  name               String
+  teacherId          String
+  createdAt          DateTime             @default(now())
+  teacher            User                 @relation("SubjectTeacher", fields: [teacherId], references: [id])
+  enrollments        Enrollment[]
+  joinRequests       SubjectJoinRequest[]
+  exams              Exam[]
   sectionAssignments SubjectSection[]
 
-  @@index([teacherId])
   @@unique([teacherId, subjectCode])
+  @@index([teacherId])
   @@map("subjects")
 }
 
@@ -424,27 +449,27 @@ model SubjectSection {
 }
 
 model Exam {
-  id                String        @id @default(uuid())
+  id                String         @id @default(uuid())
   subjectId         String
   academicPeriodId  String
-  term               AcademicTerm
+  term              AcademicTerm
   title             String
   assessmentType    AssessmentType @default(EXAM)
   instructions      String?
   totalPoints       Int
   durationMinutes   Int
-  roomCode          String        @unique
-  requireCamera     Boolean       @default(false)
-  requireMicrophone Boolean       @default(false)
-  appPolicyMode     AppPolicyMode @default(BLACKLIST)
-  appPolicyList     String[]      @default([])
-  status            ExamStatus    @default(DRAFT)
-  scheduledAt        DateTime?
-  endsAt             DateTime?
-  sourceType         ExamSourceType @default(MANUAL)
-  externalFormUrl    String?
-  createdAt         DateTime      @default(now())
-  subject           Subject       @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  roomCode          String         @unique
+  requireCamera     Boolean        @default(false)
+  requireMicrophone Boolean        @default(false)
+  appPolicyMode     AppPolicyMode  @default(BLACKLIST)
+  appPolicyList     String[]       @default([])
+  status            ExamStatus     @default(DRAFT)
+  scheduledAt       DateTime?
+  endsAt            DateTime?
+  sourceType        ExamSourceType @default(MANUAL)
+  externalFormUrl   String?
+  createdAt         DateTime       @default(now())
+  subject           Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   academicPeriod    AcademicPeriod @relation(fields: [academicPeriodId], references: [id])
   questions         Question[]
   sessions          ExamSession[]
@@ -455,16 +480,16 @@ model Exam {
 }
 
 model AcademicPeriod {
-  id           String               @id @default(uuid())
+  id            String               @id @default(uuid())
   institutionId String?
-  academicYear String
-  semester     Semester
-  status       AcademicPeriodStatus @default(ACTIVE)
-  startsAt     DateTime?
-  endsAt       DateTime?
-  closedAt     DateTime?
-  createdAt    DateTime             @default(now())
-  exams        Exam[]
+  academicYear  String
+  semester      Semester
+  status        AcademicPeriodStatus @default(ACTIVE)
+  startsAt      DateTime?
+  endsAt        DateTime?
+  closedAt      DateTime?
+  createdAt     DateTime             @default(now())
+  exams         Exam[]
 
   @@unique([institutionId, academicYear, semester])
   @@index([institutionId])
@@ -504,15 +529,18 @@ model QuestionOption {
 }
 
 model Submission {
-  id          String      @id @default(uuid())
-  sessionId   String      @unique
+  id          String         @id @default(uuid())
+  sessionId   String         @unique
   submittedAt DateTime?
   totalScore  Int?
   maxScore    Int
-  gradeStatus GradeStatus @default(UNGRADED)
-  session     ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  gradeStatus GradeStatus    @default(UNGRADED)
+  mode        SubmissionMode @default(MANUAL)
+  deletedAt   DateTime?
+  session     ExamSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   answers     Answer[]
 
+  @@index([deletedAt, submittedAt])
   @@map("submissions")
 }
 
@@ -535,35 +563,42 @@ model Answer {
 }
 
 model ExamSession {
-  id           String                   @id @default(uuid())
-  examId       String
-  studentId    String
-  startedAt    DateTime
-  endedAt      DateTime?
-  status       SessionStatus
-  exam         Exam                     @relation(fields: [examId], references: [id], onDelete: Cascade)
-  student      User                     @relation(fields: [studentId], references: [id])
-  recording    Recording?
-  submission   Submission?
-  events       ProctoringEvent[]
-  scoreHistory SuspicionScoreSnapshot[]
+  id                String                   @id @default(uuid())
+  examId            String
+  studentId         String
+  startedAt         DateTime
+  endedAt           DateTime?
+  status            SessionStatus
+  timerStartedAt    DateTime?
+  activeStartedAt   DateTime?
+  lastHeartbeatAt   DateTime?
+  remainingSeconds  Int?
+  exam              Exam                     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student           User                     @relation(fields: [studentId], references: [id])
+  recording         Recording?
+  submission        Submission?
+  events            ProctoringEvent[]
+  scoreHistory      SuspicionScoreSnapshot[]
   raiseHandRequests RaiseHandRequest[]
-  incidents Incident[]
+  incidents         Incident[]
+  evidenceClips     EvidenceClip[]
 
   @@unique([examId, studentId])
   @@index([studentId])
+  @@index([status, lastHeartbeatAt])
   @@map("exam_sessions")
 }
 
 model Incident {
-  id String @id @default(uuid())
-  sessionId String
-  eventId String? @unique
-  status IncidentStatus @default(OPEN)
-  createdAt DateTime @default(now())
+  id         String         @id @default(uuid())
+  sessionId  String
+  eventId    String?        @unique
+  status     IncidentStatus @default(OPEN)
+  createdAt  DateTime       @default(now())
   resolvedAt DateTime?
-  session ExamSession @relation(fields:[sessionId], references:[id], onDelete:Cascade)
-  @@index([sessionId,status])
+  session    ExamSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, status])
   @@map("incidents")
 }
 
@@ -574,6 +609,7 @@ model RaiseHandRequest {
   raisedAt   DateTime    @default(now())
   resolvedAt DateTime?
   session    ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
   @@index([sessionId, resolvedAt])
   @@map("raise_hand_requests")
 }
@@ -591,17 +627,37 @@ model Recording {
 }
 
 model ProctoringEvent {
-  id           String      @id @default(uuid())
-  sessionId    String
-  type         EventType
-  intensity    Float?
-  metadata     Json?
-  evidencePath String?
-  occurredAt   DateTime
-  session      ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  id            String         @id @default(uuid())
+  sessionId     String
+  type          EventType
+  intensity     Float?
+  metadata      Json?
+  evidencePath  String?
+  occurredAt    DateTime
+  session       ExamSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  evidenceClips EvidenceClip[]
 
   @@index([sessionId, occurredAt])
   @@map("proctoring_events")
+}
+
+model EvidenceClip {
+  id            String             @id @default(uuid())
+  sessionId     String
+  eventId       String
+  phase         EvidenceClipPhase
+  storagePath   String
+  startedAt     DateTime
+  endedAt       DateTime
+  fileSizeBytes BigInt
+  status        EvidenceClipStatus @default(UPLOADING)
+  createdAt     DateTime           @default(now())
+  session       ExamSession        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  event         ProctoringEvent    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, phase])
+  @@index([sessionId, startedAt])
+  @@map("evidence_clips")
 }
 
 model SuspicionScoreSnapshot {

@@ -52,7 +52,7 @@ export class QuestionDto {
   options?: QuestionOptionDto[];
 }
 export class CreateExamDto {
-  @IsUUID() academicPeriodId!: string;
+  @IsString() @IsNotEmpty() @MaxLength(80) academicPeriodId!: string;
   @IsIn(['PRELIMINARY', 'MIDTERM', 'SEMI_FINAL', 'FINAL']) term!:
     | 'PRELIMINARY'
     | 'MIDTERM'

@@ -44,19 +44,55 @@ type Data = {
   incidentTypeBreakdown: { type: string; count: number }[];
   liveSuspicionTrend: { sampledAt: string; score: number }[];
   highestRiskRightNow: { studentName: string; score: number }[];
-  termComparison: { term: string; sessions: number; incidentRate: number; avgSuspicion: number }[];
-  filterOptions: { subjects: { id: string; subjectCode: string; name: string }[]; sections: { id: string; name: string; program: string; yearLevel: string }[]; periods: { id:string; academicYear:string; semester:'FIRST'|'SECOND'; status:'ACTIVE'|'CLOSED' }[] };
+  termComparison: {
+    term: string;
+    sessions: number;
+    incidentRate: number;
+    avgSuspicion: number;
+  }[];
+  filterOptions: {
+    subjects: { id: string; subjectCode: string; name: string }[];
+    sections: {
+      id: string;
+      name: string;
+      program: string;
+      yearLevel: string;
+    }[];
+    periods: {
+      id: string;
+      academicYear: string;
+      semester: 'FIRST' | 'SECOND';
+      status: 'ACTIVE' | 'CLOSED';
+    }[];
+  };
 };
 export default function TeacherDashboard() {
   const { dark } = useTheme(),
     p = useChartPalette(dark),
     nav = useNavigate(),
     client = useQueryClient();
-  const [filters, setFilters] = useState({ academicPeriodId: '', term: '', subjectId: '', program: '', yearLevel: '', sectionId: '', dateFrom: '', dateTo: '' });
-  const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([,v]) => v)).toString(), [filters]);
+  const [filters, setFilters] = useState({
+    academicPeriodId: '',
+    term: '',
+    subjectId: '',
+    program: '',
+    yearLevel: '',
+    sectionId: '',
+    dateFrom: '',
+    dateTo: '',
+  });
+  const query = useMemo(
+    () =>
+      new URLSearchParams(
+        Object.entries(filters).filter(([, v]) => v)
+      ).toString(),
+    [filters]
+  );
   const { data, isLoading, isError } = useQuery({
     queryKey: ['teacher-dashboard', query],
-    queryFn: async () => (await api.get<Data>(`/teacher/dashboard${query ? `?${query}` : ''}`)).data,
+    queryFn: async () =>
+      (await api.get<Data>(`/teacher/dashboard${query ? `?${query}` : ''}`))
+        .data,
     refetchInterval: 5_000,
   });
   useEffect(() => {
@@ -108,17 +144,144 @@ export default function TeacherDashboard() {
           }
         />
         <Card>
-          <CardHeader title="Dashboard scope" subtitle="All overview totals and charts use these same filters." />
+          <CardHeader
+            title="Dashboard scope"
+            subtitle="All overview totals and charts use these same filters."
+          />
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Filter label="Academic semester" value={filters.academicPeriodId} onChange={(v)=>setFilters(x=>({...x,academicPeriodId:v}))}><option value="">All semesters</option>{data?.filterOptions.periods.map(x=><option key={x.id} value={x.id}>{x.academicYear} · {x.semester === 'FIRST' ? 'First' : 'Second'} Semester{x.status === 'CLOSED' ? ' (Closed)' : ''}</option>)}</Filter>
-            <Filter label="Term" value={filters.term} onChange={(v)=>setFilters(x=>({...x,term:v}))}><option value="">All terms</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option><option value="UNSPECIFIED">Legacy / Unspecified</option></Filter>
-            <Filter label="Subject" value={filters.subjectId} onChange={(v)=>setFilters(x=>({...x,subjectId:v}))}><option value="">All subjects</option>{data?.filterOptions.subjects.map(x=><option key={x.id} value={x.id}>{x.subjectCode}</option>)}</Filter>
-            <Filter label="Program" value={filters.program} onChange={(v)=>setFilters(x=>({...x,program:v,sectionId:''}))}><option value="">All programs</option>{[...new Set(['CS', 'IT', ...(data?.filterOptions.sections.map(x=>x.program)??[])])].map(x=><option key={x} value={x}>{x}</option>)}</Filter>
-            <Filter label="Year level" value={filters.yearLevel} onChange={(v)=>setFilters(x=>({...x,yearLevel:v,sectionId:''}))}><option value="">All years</option>{['1st','2nd','3rd','4th'].map(x=><option key={x}>{x}</option>)}</Filter>
-            <Filter label="Section" value={filters.sectionId} onChange={(v)=>setFilters(x=>({...x,sectionId:v}))}><option value="">All sections</option>{data?.filterOptions.sections.filter(x=>(!filters.program||x.program===filters.program)&&(!filters.yearLevel||x.yearLevel===filters.yearLevel)).map(x=><option key={x.id} value={x.id}>{x.program} · {x.yearLevel} - {x.name}</option>)}</Filter>
-            <label className="text-xs font-semibold text-text-2">From<input type="date" value={filters.dateFrom} onChange={e=>setFilters(x=>({...x,dateFrom:e.target.value}))} className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2"/></label>
-            <label className="text-xs font-semibold text-text-2">To<input type="date" value={filters.dateTo} min={filters.dateFrom} onChange={e=>setFilters(x=>({...x,dateTo:e.target.value}))} className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2"/></label>
-          </div><div className="mt-3 flex justify-end"><Button variant="ghost" onClick={()=>setFilters({academicPeriodId:'',term:'',subjectId:'',program:'',yearLevel:'',sectionId:'',dateFrom:'',dateTo:''})}>Clear filters</Button></div>
+            <Filter
+              label="Academic semester"
+              value={filters.academicPeriodId}
+              onChange={(v) =>
+                setFilters((x) => ({ ...x, academicPeriodId: v }))
+              }
+            >
+              <option value="">All semesters</option>
+              {data?.filterOptions.periods.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.academicYear} ·{' '}
+                  {x.semester === 'FIRST' ? 'First' : 'Second'} Semester
+                  {x.status === 'CLOSED' ? ' (Closed)' : ''}
+                </option>
+              ))}
+            </Filter>
+            <Filter
+              label="Term"
+              value={filters.term}
+              onChange={(v) => setFilters((x) => ({ ...x, term: v }))}
+            >
+              <option value="">All terms</option>
+              <option value="PRELIMINARY">Preliminary</option>
+              <option value="MIDTERM">Midterm</option>
+              <option value="SEMI_FINAL">Semi-final</option>
+              <option value="FINAL">Final</option>
+              <option value="UNSPECIFIED">Legacy / Unspecified</option>
+            </Filter>
+            <Filter
+              label="Subject"
+              value={filters.subjectId}
+              onChange={(v) => setFilters((x) => ({ ...x, subjectId: v }))}
+            >
+              <option value="">All subjects</option>
+              {data?.filterOptions.subjects.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.subjectCode}
+                </option>
+              ))}
+            </Filter>
+            <Filter
+              label="Program"
+              value={filters.program}
+              onChange={(v) =>
+                setFilters((x) => ({ ...x, program: v, sectionId: '' }))
+              }
+            >
+              <option value="">All programs</option>
+              {[
+                ...new Set([
+                  'CS',
+                  'IT',
+                  ...(data?.filterOptions.sections.map((x) => x.program) ?? []),
+                ]),
+              ].map((x) => (
+                <option key={x} value={x}>
+                  {x}
+                </option>
+              ))}
+            </Filter>
+            <Filter
+              label="Year level"
+              value={filters.yearLevel}
+              onChange={(v) =>
+                setFilters((x) => ({ ...x, yearLevel: v, sectionId: '' }))
+              }
+            >
+              <option value="">All years</option>
+              {['1st', '2nd', '3rd', '4th'].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </Filter>
+            <Filter
+              label="Section"
+              value={filters.sectionId}
+              onChange={(v) => setFilters((x) => ({ ...x, sectionId: v }))}
+            >
+              <option value="">All sections</option>
+              {data?.filterOptions.sections
+                .filter(
+                  (x) =>
+                    (!filters.program || x.program === filters.program) &&
+                    (!filters.yearLevel || x.yearLevel === filters.yearLevel)
+                )
+                .map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.program} · {x.yearLevel} - {x.name}
+                  </option>
+                ))}
+            </Filter>
+            <label className="text-xs font-semibold text-text-2">
+              From
+              <input
+                type="date"
+                value={filters.dateFrom}
+                onChange={(e) =>
+                  setFilters((x) => ({ ...x, dateFrom: e.target.value }))
+                }
+                className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2"
+              />
+            </label>
+            <label className="text-xs font-semibold text-text-2">
+              To
+              <input
+                type="date"
+                value={filters.dateTo}
+                min={filters.dateFrom}
+                onChange={(e) =>
+                  setFilters((x) => ({ ...x, dateTo: e.target.value }))
+                }
+                className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2"
+              />
+            </label>
+          </div>
+          <div className="mt-3 flex justify-end">
+            <Button
+              variant="ghost"
+              onClick={() =>
+                setFilters({
+                  academicPeriodId: '',
+                  term: '',
+                  subjectId: '',
+                  program: '',
+                  yearLevel: '',
+                  sectionId: '',
+                  dateFrom: '',
+                  dateTo: '',
+                })
+              }
+            >
+              Clear filters
+            </Button>
+          </div>
         </Card>
         <div
           className="grid gap-4"
@@ -149,10 +312,99 @@ export default function TeacherDashboard() {
             accent={3}
           />
         </div>
-        <Card><CardHeader title="Term comparison" subtitle="Historical term data remains available when a new term begins." />{data?.termComparison.length?<ResponsiveContainer width="100%" height={240}><BarChart data={data.termComparison.map(x=>({...x,term:x.term.replace('_',' ')}))}><CartesianGrid stroke={p.border} vertical={false}/><XAxis dataKey="term" {...axisProps(p)}/><YAxis domain={[0,100]} unit="%" {...axisProps(p)}/><Tooltip {...tooltipProps(p)}/><Bar dataKey="incidentRate" name="Incident rate" fill={p.brand}/><Bar dataKey="avgSuspicion" name="Avg. suspicion" fill={p.cyan}/></BarChart></ResponsiveContainer>:<p className="text-sm text-text-2">No term data yet.</p>}</Card>
-        <div className="grid gap-5" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
-          <Card><CardHeader title="Incident rate by Year level & section" subtitle="A session is counted once when it contains one or more incidents." />{data?.incidentRateBySection.length ? <ResponsiveContainer width="100%" height={Math.max(240,data.incidentRateBySection.length*38)}><BarChart data={data.incidentRateBySection} layout="vertical" margin={{left:55}}><CartesianGrid stroke={p.border} horizontal={false}/><XAxis type="number" domain={[0,100]} unit="%" {...axisProps(p)}/><YAxis type="category" dataKey="section" width={145} {...axisProps(p)}/><Tooltip {...tooltipProps(p)}/><Bar dataKey="rate" fill={p.brand}/></BarChart></ResponsiveContainer>:<p className="text-sm text-text-2">No sessions match this scope.</p>}</Card>
-          <Card><CardHeader title="Average suspicion by subject" />{data?.avgSuspicionBySubject.length?<ResponsiveContainer width="100%" height={240}><BarChart data={data.avgSuspicionBySubject}><CartesianGrid stroke={p.border} vertical={false}/><XAxis dataKey="subject" {...axisProps(p)}/><YAxis domain={[0,100]} {...axisProps(p)}/><Tooltip {...tooltipProps(p)}/><Bar dataKey="avg" fill={p.brand}/></BarChart></ResponsiveContainer>:<p className="text-sm text-text-2">No scored sessions match this scope.</p>}</Card>
+        <Card>
+          <CardHeader
+            title="Term comparison"
+            subtitle="Historical term data remains available when a new term begins."
+          />
+          {data?.termComparison.length ? (
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart
+                data={data.termComparison.map((x) => ({
+                  ...x,
+                  term: x.term.replace('_', ' '),
+                }))}
+              >
+                <CartesianGrid stroke={p.border} vertical={false} />
+                <XAxis dataKey="term" {...axisProps(p)} />
+                <YAxis domain={[0, 100]} unit="%" {...axisProps(p)} />
+                <Tooltip {...tooltipProps(p)} />
+                <Bar
+                  dataKey="incidentRate"
+                  name="Incident rate"
+                  fill={p.brand}
+                />
+                <Bar
+                  dataKey="avgSuspicion"
+                  name="Avg. suspicion"
+                  fill={p.cyan}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-sm text-text-2">No term data yet.</p>
+          )}
+        </Card>
+        <div
+          className="grid gap-5"
+          style={{ gridTemplateColumns: '1.4fr 1fr' }}
+        >
+          <Card>
+            <CardHeader
+              title="Incident rate by Year level & section"
+              subtitle="A session is counted once when it contains one or more incidents."
+            />
+            {data?.incidentRateBySection.length ? (
+              <ResponsiveContainer
+                width="100%"
+                height={Math.max(240, data.incidentRateBySection.length * 38)}
+              >
+                <BarChart
+                  data={data.incidentRateBySection}
+                  layout="vertical"
+                  margin={{ left: 55 }}
+                >
+                  <CartesianGrid stroke={p.border} horizontal={false} />
+                  <XAxis
+                    type="number"
+                    domain={[0, 100]}
+                    unit="%"
+                    {...axisProps(p)}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="section"
+                    width={145}
+                    {...axisProps(p)}
+                  />
+                  <Tooltip {...tooltipProps(p)} />
+                  <Bar dataKey="rate" fill={p.brand} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-text-2">
+                No sessions match this scope.
+              </p>
+            )}
+          </Card>
+          <Card>
+            <CardHeader title="Average suspicion by subject" />
+            {data?.avgSuspicionBySubject.length ? (
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart data={data.avgSuspicionBySubject}>
+                  <CartesianGrid stroke={p.border} vertical={false} />
+                  <XAxis dataKey="subject" {...axisProps(p)} />
+                  <YAxis domain={[0, 100]} {...axisProps(p)} />
+                  <Tooltip {...tooltipProps(p)} />
+                  <Bar dataKey="avg" fill={p.brand} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-text-2">
+                No scored sessions match this scope.
+              </p>
+            )}
+          </Card>
         </div>
         <div
           className="grid gap-5"
@@ -253,4 +505,27 @@ export default function TeacherDashboard() {
   );
 }
 
-function Filter({label,value,onChange,children}:{label:string;value:string;onChange:(value:string)=>void;children:React.ReactNode}) { return <label className="text-xs font-semibold text-text-2">{label}<select value={value} onChange={e=>onChange(e.target.value)} className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm">{children}</select></label> }
+function Filter({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="text-xs font-semibold text-text-2">
+      {label}
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm"
+      >
+        {children}
+      </select>
+    </label>
+  );
+}

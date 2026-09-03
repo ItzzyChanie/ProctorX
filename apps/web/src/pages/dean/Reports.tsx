@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
 import { FileText } from 'lucide-react';
 import { z } from 'zod';
 import { api } from '../../lib/api';
@@ -45,7 +46,13 @@ export default function Reports() {
     queryFn: async () => (await api.get<{id:string;academicYear:string;semester:string;status:string}[]>('/academic-periods')).data,
   });
   const [message, setMessage] = useState('');
+  const [messageType, setMessageType] = useState<'success' | 'error'>('success');
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [message]);
   const {
     data: rows = [],
     isLoading,
@@ -65,15 +72,32 @@ export default function Reports() {
       api.post('/dean/reports', data),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ['dean-reports'] });
+      setMessageType('success');
       setMessage('Report queued for generation.');
       setForm({ name: '', dateFrom: '', dateTo: '', format: 'pdf', academicPeriodId: '', term: '' });
     },
-    onError: () => setMessage('Could not queue the report.'),
+    onError: (error) => {
+      setMessageType('error');
+      if (axios.isAxiosError(error)) {
+        const responseMessage = error.response?.data?.message;
+        const detail = Array.isArray(responseMessage)
+          ? responseMessage.join(' ')
+          : responseMessage;
+        setMessage(
+          typeof detail === 'string' && detail
+            ? `Could not queue the report: ${detail}`
+            : 'Could not queue the report.'
+        );
+        return;
+      }
+      setMessage('Could not queue the report.');
+    },
   });
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const parsed = reportSchema.safeParse(form);
     if (!parsed.success) {
+      setMessageType('error');
       setMessage(
         parsed.error.issues[0]?.message ?? 'Check the report details.'
       );
@@ -96,8 +120,10 @@ export default function Reports() {
       }`;
       link.click();
       URL.revokeObjectURL(url);
+      setMessageType('success');
       setMessage('Report downloaded successfully.');
     } catch {
+      setMessageType('error');
       setMessage('Could not download the report.');
     } finally {
       setDownloadingId(null);
@@ -161,8 +187,10 @@ export default function Reports() {
           </form>
           {message && (
             <p
-              role="status"
-              className="fixed bottom-5 right-5 z-50 rounded bg-brand px-4 py-3 text-sm text-white shadow-lg"
+              role={messageType === 'error' ? 'alert' : 'status'}
+              className={`fixed bottom-5 right-5 z-50 rounded px-4 py-3 text-sm text-white shadow-lg ${
+                messageType === 'success' ? 'bg-green-600' : 'bg-red-600'
+              }`}
             >
               {message}
             </p>

@@ -19,6 +19,7 @@ export interface User {
   studentId?: string | null
   yearLevel?: string | null
   program?: string | null
+  sectionName?: string | null
   employeeId?: string | null
   office?: string | null
   officialTitle?: string | null

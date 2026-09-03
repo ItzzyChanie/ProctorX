@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import {
   AccountStatus,
+  EvidenceClipPhase,
+  EvidenceClipStatus,
   GradeStatus,
   Prisma,
   Role,
@@ -309,7 +311,9 @@ export class PortalService {
           term: x.exam.term,
           academicPeriod: x.exam.academicPeriod,
         })),
-      academicPeriods: await this.academicPeriods(await this.institutionFor(userId)),
+      academicPeriods: await this.academicPeriods(
+        await this.institutionFor(userId)
+      ),
     };
   }
 
@@ -332,8 +336,10 @@ export class PortalService {
         : x.sessions.filter((s) => s.status === SessionStatus.IN_PROGRESS)
             .length;
       const completed =
-        x.sessions.length > 0 &&
-        x.sessions.every((s) => s.status === SessionStatus.COMPLETED);
+        x.subject._count.enrollments > 0 &&
+        x.sessions.filter(
+          (session) => session.status === SessionStatus.COMPLETED
+        ).length >= x.subject._count.enrollments;
       return {
         examId: x.id,
         title: x.title,
@@ -357,21 +363,46 @@ export class PortalService {
   }
 
   async playback(teacherId: string, id: string) {
+    const lookup = id.trim();
     const matchedSession = await this.prisma.examSession.findFirst({
-      where: { id, exam: { subject: { teacherId } } },
+      where: { id: lookup, exam: { subject: { teacherId } } },
       select: { examId: true },
     });
-    const examId = matchedSession?.examId ?? id;
     const exam = await this.prisma.exam.findFirst({
-      where: { id: examId, subject: { teacherId } },
+      where: {
+        subject: { teacherId },
+        ...(matchedSession
+          ? { id: matchedSession.examId }
+          : {
+              OR: [{ id: lookup }, { roomCode: lookup.toUpperCase() }],
+            }),
+      },
       include: {
         subject: { select: { code: true, subjectCode: true, name: true } },
         sessions: {
           include: {
-            student: { select: { id: true, fullName: true } },
+            student: {
+              select: {
+                id: true,
+                fullName: true,
+                profilePicture: true,
+                enrollments: { select: { subjectId: true } },
+              },
+            },
             recording: true,
             scoreHistory: { orderBy: { computedAt: 'asc' } },
-            events: { orderBy: { occurredAt: 'asc' } },
+            events: {
+              orderBy: { occurredAt: 'asc' },
+              include: {
+                evidenceClips: {
+                  where: {
+                    phase: EvidenceClipPhase.CENTERED,
+                    status: EvidenceClipStatus.COMPLETE,
+                  },
+                  orderBy: { startedAt: 'asc' },
+                },
+              },
+            },
           },
           orderBy: { student: { fullName: 'asc' } },
         },
@@ -401,10 +432,20 @@ export class PortalService {
         subjectName: exam.subject.name,
       },
       sessions: exam.sessions
-        .filter((session) => session.status === SessionStatus.COMPLETED)
+        .filter(
+          (session) =>
+            session.status === SessionStatus.COMPLETED &&
+            session.student.enrollments.some(
+              (enrollment) => enrollment.subjectId === exam.subjectId
+            )
+        )
         .map((session) => ({
           sessionId: session.id,
-          student: session.student,
+          student: {
+            id: session.student.id,
+            fullName: session.student.fullName,
+            profilePicture: session.student.profilePicture,
+          },
           startedAt: session.startedAt,
           endedAt: session.endedAt,
           recording: session.recording
@@ -429,14 +470,55 @@ export class PortalService {
             tier: score.tier,
           })),
           events: session.events.map((event) => ({
+            id: event.id,
             type: event.type,
             occurredAt: event.occurredAt,
             intensity: event.intensity,
+            clips: event.evidenceClips.map((clip) => ({
+              id: clip.id,
+              phase: clip.phase,
+              startedAt: clip.startedAt,
+              endedAt: clip.endedAt,
+              status: clip.status,
+              playbackUrl: `/teacher/evidence-clips/${clip.id}`,
+              eventOffsetSec: Math.max(
+                0,
+                (event.occurredAt.getTime() - clip.startedAt.getTime()) / 1000
+              ),
+            })),
           })),
         })),
     };
   }
 
+  async evidenceClipFile(teacherId: string, clipId: string) {
+    const clip = await this.prisma.evidenceClip.findFirst({
+      where: {
+        id: clipId,
+        status: 'COMPLETE',
+        session: { exam: { subject: { teacherId } } },
+      },
+      select: {
+        storagePath: true,
+        session: {
+          select: { studentId: true, exam: { select: { subjectId: true } } },
+        },
+      },
+    });
+    if (!clip) throw new NotFoundException('Evidence clip is not available');
+    const enrolled = await this.prisma.enrollment.findUnique({
+      where: {
+        subjectId_studentId: {
+          subjectId: clip.session.exam.subjectId,
+          studentId: clip.session.studentId,
+        },
+      },
+      select: { id: true },
+    });
+    if (!enrolled)
+      throw new NotFoundException('Evidence clip is not available');
+    return clip.storagePath;
+  }
   async recordingFile(teacherId: string, sessionId: string) {
     const session = await this.prisma.examSession.findFirst({
       where: {
@@ -512,7 +594,8 @@ export class PortalService {
       where: { id: userId },
       select: { institutionId: true },
     });
-    if (!user?.institutionId) throw new ForbiddenException('Institution is not configured');
+    if (!user?.institutionId)
+      throw new ForbiddenException('Institution is not configured');
     return user.institutionId;
   }
 
@@ -917,15 +1000,18 @@ export class PortalService {
     });
   }
 
-  async audit(institutionId: string, query: {
-    role: string;
-    dateFrom?: string;
-    dateTo?: string;
-    timeFrom?: string;
-    timeTo?: string;
-    page?: number;
-    limit?: number;
-  }) {
+  async audit(
+    institutionId: string,
+    query: {
+      role: string;
+      dateFrom?: string;
+      dateTo?: string;
+      timeFrom?: string;
+      timeTo?: string;
+      page?: number;
+      limit?: number;
+    }
+  ) {
     const limit = Math.min(Math.max(query.limit ?? 10, 1), 100);
     const page = Math.max(query.page ?? 1, 1);
     const dateFrom = query.dateFrom
@@ -1003,9 +1089,7 @@ export class PortalService {
           teacher: { institutionId },
           ...(f.subjectCode ? { code: f.subjectCode } : {}),
         },
-        ...(f.academicPeriodId
-          ? { academicPeriodId: f.academicPeriodId }
-          : {}),
+        ...(f.academicPeriodId ? { academicPeriodId: f.academicPeriodId } : {}),
         ...(f.term ? { term: f.term as any } : {}),
       },
       ...(Object.keys(profile).length
@@ -1014,7 +1098,10 @@ export class PortalService {
     };
   }
 
-  async deanDashboard(institutionId: string, filters: DeanAnalyticsFilters = {}) {
+  async deanDashboard(
+    institutionId: string,
+    filters: DeanAnalyticsFilters = {}
+  ) {
     const [sessions, configuredSections] = await Promise.all([
       this.prisma.examSession.findMany({
         where: this.scope(institutionId, filters),
@@ -1130,8 +1217,7 @@ export class PortalService {
             )
           : 0,
         sectionsAboveThreshold: [...bySection.values()].filter(
-          (v) =>
-            rate([v.participants.size, v.flaggedStudents.size]) >= 70
+          (v) => rate([v.participants.size, v.flaggedStudents.size]) >= 70
         ).length,
       },
       incidenceRateBySection: [...bySection.values()]
@@ -1171,7 +1257,10 @@ export class PortalService {
     };
   }
 
-  async deanAnalytics(institutionId: string, filters: DeanAnalyticsFilters = {}) {
+  async deanAnalytics(
+    institutionId: string,
+    filters: DeanAnalyticsFilters = {}
+  ) {
     const dashboard = await this.deanDashboard(institutionId, filters);
     const submissions = await this.prisma.submission.findMany({
       where: {

@@ -1,18 +1,15 @@
 import { io } from 'socket.io-client';
 
-export const socket = io(
-  import.meta.env.VITE_SOCKET_URL ?? 'http://localhost:4000',
-  {
-    autoConnect: false,
-    withCredentials: true,
-  }
-);
+const defaultSocketUrl = `${window.location.protocol}//${window.location.hostname}:4000`;
+const socketUrl = import.meta.env.VITE_SOCKET_URL ?? defaultSocketUrl;
 
-export const notificationSocket = io(
-  import.meta.env.VITE_SOCKET_URL ?? 'http://localhost:4000',
-  {
-    autoConnect: false,
-    withCredentials: true,
-    forceNew: true,
-  }
-);
+export const socket = io(socketUrl, {
+  autoConnect: false,
+  withCredentials: true,
+});
+
+export const notificationSocket = io(socketUrl, {
+  autoConnect: false,
+  withCredentials: true,
+  forceNew: true,
+});
