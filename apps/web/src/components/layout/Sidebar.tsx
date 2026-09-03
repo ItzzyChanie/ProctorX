@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { ChevronDown, Eye, LogOut, Menu } from 'lucide-react';
+import { ChevronDown, LogOut, Menu } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import darkModeLogo from '../../assets/ProctorX-Logo.png';
+import lightModeLogo from '../../assets/proctorX-dark.png';
 import { NAV } from '../../config/nav';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
@@ -24,17 +26,18 @@ export function Sidebar({ role }: { role: Role }) {
         className={`flex h-[84px] items-center gap-2.5 ${collapsed ? 'justify-center px-3' : 'px-4'}`}
       >
         {!collapsed && (
-          <>
-            <div
-              className="w-[34px] h-[34px] rounded-[10px] flex items-center justify-center flex-shrink-0 shadow-glow"
-              style={{ background: 'var(--brand-gradient)' }}
-            >
-              <Eye size={17} color="#fff" />
-            </div>
-            <span className="font-head font-bold text-[17px] text-text-1 tracking-tight">
-              ProctorX
-            </span>
-          </>
+          <div className="min-w-0 flex-1">
+            <img
+              src={lightModeLogo}
+              alt="ProctorX"
+              className="h-[48px] max-w-full object-contain object-left dark:hidden"
+            />
+            <img
+              src={darkModeLogo}
+              alt="ProctorX"
+              className="hidden h-10 max-w-full object-contain object-left dark:block"
+            />
+          </div>
         )}
         <button
           type="button"
