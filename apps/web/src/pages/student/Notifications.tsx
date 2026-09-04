@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Bell, CheckCircle2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card } from '../../components/ui/Card';
 import { api } from '../../lib/api';
@@ -12,6 +13,7 @@ type Notification = {
   message: string;
   isRead: boolean;
   createdAt: string;
+  link?: string | null;
 };
 const formatNotificationTime = (value: string) =>
   new Intl.DateTimeFormat('en-US', {
@@ -25,6 +27,7 @@ const formatNotificationTime = (value: string) =>
   }).format(new Date(value));
 export default function Notifications() {
   const client = useQueryClient();
+  const navigate = useNavigate();
   const [toast, setToast] = useState<{
     message: string;
     error?: boolean;
@@ -115,11 +118,11 @@ export default function Notifications() {
               />
               <div className="flex-1">
                 <button
-                  disabled={
-                    n.isRead ||
-                    (markRead.isPending && markRead.variables === n.id)
-                  }
-                  onClick={() => markRead.mutate(n.id)}
+                  disabled={markRead.isPending && markRead.variables === n.id}
+                  onClick={() => {
+                    if (!n.isRead) markRead.mutate(n.id);
+                    if (n.link) navigate(n.link);
+                  }}
                   className={`text-left font-body text-[13px] text-text-1 ${
                     n.isRead ? '' : 'font-semibold'
                   }`}

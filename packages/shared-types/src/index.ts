@@ -23,6 +23,7 @@ export interface User {
   employeeId?: string | null
   office?: string | null
   officialTitle?: string | null
+  institutionName?: string | null
 }
 
 export interface LoginRequest { loginId: string; password: string }

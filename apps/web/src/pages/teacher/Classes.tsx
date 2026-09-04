@@ -77,6 +77,11 @@ const blank = (type: QType = 'MULTIPLE_CHOICE'): Question => ({
     { label: '', isCorrect: false },
   ],
 });
+const localDateTimeValue = (value: string | null) => {
+  if (!value) return '';
+  const date = new Date(value);
+  return new Date(+date - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+};
 const displayName = (fullName: string) => {
   const parts = fullName.trim().split(/\s+/);
   const last = parts.pop() ?? '';
@@ -136,6 +141,7 @@ export default function Classes() {
     }),
     [questions, setQuestions] = useState<Question[]>([blank()]);
   const [assessmentClock, setAssessmentClock] = useState(() => Date.now());
+  const [rescheduling, setRescheduling] = useState<{ subject: Subject; exam: Subject['exams'][number]; scheduledAt: string; endsAt: string }>();
   const noticeIsError =
     /could not|cannot|check|enter|choose|set at least|complete the|need|invalid|required|declined|failed|error|unsupported|exceed|unavailable|rate limit/i.test(
       notice
@@ -265,6 +271,18 @@ export default function Classes() {
       void qc.invalidateQueries({ queryKey: ['subjects'] });
     },
     onError: () => setNotice('Could not stop the exam/quiz.'),
+  });
+  const updateSchedule = useMutation({
+    mutationFn: () => api.patch(`/subjects/${rescheduling!.subject.id}/exams/${rescheduling!.exam.id}/schedule`, {
+      scheduledAt: new Date(rescheduling!.scheduledAt).toISOString(),
+      endsAt: new Date(rescheduling!.endsAt).toISOString(),
+    }),
+    onSuccess: () => {
+      setNotice('Assessment schedule updated. Enrolled students were notified.');
+      setRescheduling(undefined);
+      void qc.invalidateQueries({ queryKey: ['subjects'] });
+    },
+    onError: (error: any) => setNotice(error?.response?.data?.message ?? 'Could not update the assessment schedule.'),
   });
   const review = useMutation({
     mutationFn: (v: { id: string; status: 'APPROVED' | 'DECLINED' }) =>
@@ -595,12 +613,24 @@ export default function Classes() {
                     <td className="p-4">
                       <div className="flex gap-2">
                         {activeExamFor(s) ? (
-                          <Button
-                            variant="danger"
-                            onClick={() => setStopping(s)}
-                          >
-                            Stop
-                          </Button>
+                          <>
+                            <Button
+                              variant="ghost"
+                              icon={Pencil}
+                              onClick={() => {
+                                const exam = activeExamFor(s)!;
+                                setRescheduling({ subject: s, exam, scheduledAt: localDateTimeValue(exam.scheduledAt), endsAt: localDateTimeValue(exam.endsAt) });
+                              }}
+                            >
+                              Reschedule
+                            </Button>
+                            <Button
+                              variant="danger"
+                              onClick={() => setStopping(s)}
+                            >
+                              Stop
+                            </Button>
+                          </>
                         ) : (
                           <Button
                             disabled={!activePeriods.length}
@@ -1253,6 +1283,16 @@ export default function Classes() {
                 {deleteSubject.isPending ? 'Deleting…' : 'Delete subject'}
               </Button>
             </div>
+          </Card>
+        </div>
+      )}
+      {rescheduling && (
+        <div className="fixed inset-0 z-[65] grid place-items-center bg-black/50 p-4">
+          <Card className="w-full max-w-md">
+            <CardHeader title="Reschedule assessment" subtitle={`${rescheduling.exam.title} · enrolled students will be notified`} />
+            <label className="mb-3 block text-sm font-semibold">New start<input type="datetime-local" value={rescheduling.scheduledAt} onChange={event => setRescheduling({ ...rescheduling, scheduledAt: event.target.value })} className={`${input} mt-1`} /></label>
+            <label className="mb-5 block text-sm font-semibold">New deadline<input type="datetime-local" value={rescheduling.endsAt} onChange={event => setRescheduling({ ...rescheduling, endsAt: event.target.value })} className={`${input} mt-1`} /></label>
+            <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setRescheduling(undefined)}>Cancel</Button><Button disabled={updateSchedule.isPending || !rescheduling.scheduledAt || !rescheduling.endsAt || new Date(rescheduling.endsAt) <= new Date(rescheduling.scheduledAt)} onClick={() => updateSchedule.mutate()}>{updateSchedule.isPending ? 'Saving…' : 'Save schedule'}</Button></div>
           </Card>
         </div>
       )}

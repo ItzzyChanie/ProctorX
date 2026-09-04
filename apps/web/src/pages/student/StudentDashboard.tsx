@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import {
   Area,
@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Clock, LogIn } from 'lucide-react';
+import { Archive, Clock, LogIn, RotateCcw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
@@ -25,18 +25,30 @@ import { api } from '../../lib/api';
 type Dashboard = {
   monitoringClientStatus: string;
   upcomingSessions: ({ examTitle: string; startsAt: string } & PeriodMeta)[];
-  recentActivity: ({ text: string; occurredAt: string } & PeriodMeta)[];
+  recentActivity: ({ id: string; text: string; occurredAt: string } & PeriodMeta)[];
+  archivedActivity: ({ id: string; text: string; occurredAt: string } & PeriodMeta)[];
   scoreHistory: ({ examTitle: string; score: number; maxScore: number } & PeriodMeta)[];
   sessionTimeMinutes: ({ examTitle: string; minutes: number } & PeriodMeta)[];
   academicPeriods:{id:string;academicYear:string;semester:'FIRST'|'SECOND';status:string}[];
 };
 type PeriodMeta={term?:string;academicPeriod?:{id:string;academicYear:string;semester:'FIRST'|'SECOND'}};
+const formatDateTime = (value: string) =>
+  new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(new Date(value));
 export default function StudentDashboard() {
   const { dark } = useTheme(),
     p = useChartPalette(dark),
     { user } = useAuthStore(),
-    navigate = useNavigate();
+    navigate = useNavigate(),
+    queryClient = useQueryClient();
   const [periodId,setPeriodId]=useState(''),[term,setTerm]=useState('');
+  const [activityView, setActivityView] = useState<'active' | 'archived'>('active');
   const { data, isLoading, isError } = useQuery({
     queryKey: ['student-dashboard'],
     queryFn: async () =>
@@ -54,7 +66,19 @@ export default function StudentDashboard() {
       session: x.examTitle,
       mins: x.minutes,
     })) ?? [];
-  const upcoming=data?.upcomingSessions.filter(inScope)??[], recent=data?.recentActivity.filter(inScope)??[];
+  const upcoming=data?.upcomingSessions.filter(inScope)??[];
+  const recent = (activityView === 'active'
+    ? data?.recentActivity
+    : data?.archivedActivity
+  )?.filter(inScope) ?? [];
+  const updateActivityArchive = useMutation({
+    mutationFn: ({ id, archive }: { id: string; archive: boolean }) =>
+      api.patch(
+        `/students/me/activities/${id}/${archive ? 'archive' : 'restore'}`
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['student-dashboard'] }),
+  });
   return (
     <DashboardLayout
       role="student"
@@ -164,11 +188,16 @@ export default function StudentDashboard() {
                 <>
                   {upcoming.map((x) => (
                     <div
-                      key={x.examTitle}
-                      className="flex justify-between py-2"
+                      key={`${x.examTitle}-${x.startsAt}`}
+                      className="flex items-center justify-between gap-3 py-2"
                     >
-                      <span>{x.examTitle}</span>
-                      <Clock size={15} />
+                      <div>
+                        <div>{x.examTitle}</div>
+                        <div className="text-sm text-text-2">
+                          {formatDateTime(x.startsAt)}
+                        </div>
+                      </div>
+                      <Clock size={15} className="shrink-0" />
                     </div>
                   ))}
                 </>
@@ -178,20 +207,52 @@ export default function StudentDashboard() {
             </Card>
             <Card>
               <CardHeader title="Recent activity" />
+              <div className="mb-2 flex gap-2">
+                {(['active', 'archived'] as const).map((view) => (
+                  <button
+                    key={view}
+                    type="button"
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${activityView === view ? 'bg-brand text-white' : 'bg-surface-2 text-text-2 hover:text-text-1'}`}
+                    onClick={() => setActivityView(view)}
+                  >
+                    {view === 'active' ? 'Active' : 'Archive'}
+                  </button>
+                ))}
+              </div>
               {recent.length ? (
                 recent.map((x) => (
                   <div
-                    key={`${x.text}${x.occurredAt}`}
-                    className="py-2 text-sm"
+                    key={x.id}
+                    className="flex items-center justify-between gap-3 border-b border-border py-2 text-sm last:border-0"
                   >
-                    <span>{x.text}</span>
-                    <small className="ml-2 text-text-3">
-                      {new Date(x.occurredAt).toLocaleString()}
-                    </small>
+                    <div>
+                      <div>{x.text}</div>
+                      <small className="text-text-3">
+                        {formatDateTime(x.occurredAt)}
+                      </small>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      icon={activityView === 'active' ? Archive : RotateCcw}
+                      className="shrink-0 !px-2.5 !py-2 hover:!border-blue-600 hover:!bg-blue-600 hover:!text-white"
+                      disabled={updateActivityArchive.isPending}
+                      onClick={() =>
+                        updateActivityArchive.mutate({
+                          id: x.id,
+                          archive: activityView === 'active',
+                        })
+                      }
+                      aria-label={activityView === 'active' ? 'Archive activity' : 'Restore activity'}
+                      title={activityView === 'active' ? 'Archive' : 'Restore'}
+                    >
+                      {activityView === 'active' ? 'Archive' : 'Restore'}
+                    </Button>
                   </div>
                 ))
               ) : (
-                <p className="text-sm text-text-2">No recent activity.</p>
+                <p className="text-sm text-text-2">
+                  {activityView === 'active' ? 'No recent activity.' : 'No archived activity.'}
+                </p>
               )}
             </Card>
           </div>

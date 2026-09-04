@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
@@ -5,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  EyeOff,
   LogIn,
   Mic,
   Minus,
@@ -147,6 +149,7 @@ export default function JoinSession() {
     queryKey: ['my-subject-join-requests'],
     queryFn: async () =>
       (await api.get<any[]>('/subjects/join-requests/mine')).data,
+    refetchInterval: 15_000,
   });
   const requestSubject = useMutation({
     mutationFn: () =>
@@ -160,10 +163,21 @@ export default function JoinSession() {
         queryKey: ['my-subject-join-requests'],
       });
     },
-    onError: () =>
+    onError: (error) =>
       setNotice(
-        'That subject code is invalid, already enrolled, or already requested.'
+        axios.isAxiosError(error)
+          ? (error.response?.data?.message ?? 'Could not send the join request.')
+          : 'Could not send the join request.'
       ),
+  });
+  const hideJoinRequest = useMutation({
+    mutationFn: (requestId: string) =>
+      api.patch(`/subjects/join-requests/${requestId}/hide`),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: ['my-subject-join-requests'],
+      }),
+    onError: () => setNotice('Could not hide that join request.'),
   });
   const recorder = useRef<MediaRecorder | null>(null);
   const suppressIncidentRef = useRef(false);
@@ -882,23 +896,35 @@ export default function JoinSession() {
               <div className="mb-2 text-xs font-bold uppercase text-text-3">
                 Recent requests
               </div>
-              {joinRequests.data.slice(0, 5).map((request) => (
+              {joinRequests.data.map((request) => (
                 <div
                   key={request.id}
-                  className="flex justify-between py-2 text-sm"
+                  className="flex items-center justify-between gap-3 border-b border-border py-2 text-sm last:border-0"
                 >
                   <span>{request.subject.name}</span>
-                  <span
-                    className={
-                      request.status === 'APPROVED'
-                        ? 'text-risk-low'
-                        : request.status === 'DECLINED'
-                          ? 'text-risk-high'
-                          : 'text-amber-600'
-                    }
-                  >
-                    {request.status.toLowerCase()}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={
+                        request.status === 'APPROVED'
+                          ? 'text-risk-low'
+                          : request.status === 'DECLINED'
+                            ? 'text-risk-high'
+                            : 'text-amber-600'
+                      }
+                    >
+                      {request.status.toLowerCase()}
+                    </span>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-border p-2 text-text-3 transition hover:border-blue-600 hover:bg-blue-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={hideJoinRequest.isPending}
+                      onClick={() => hideJoinRequest.mutate(request.id)}
+                      aria-label={`Hide ${request.subject.name} join request`}
+                      title="Hide request"
+                    >
+                      <EyeOff size={15} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
