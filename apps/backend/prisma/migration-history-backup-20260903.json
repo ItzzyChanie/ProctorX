@@ -1,0 +1,32 @@
+[
+  {
+    "id": "37003fa1-e261-473a-bf29-1f1347e53979",
+    "checksum": "68ecf2aad04629a1f8076936e17a9bd8426df7ebfc21c5bdb57480e79494e6d4",
+    "finished_at": "2026-08-27T12:22:18.542Z",
+    "migration_name": "20260828190000_add_academic_periods",
+    "logs": null,
+    "rolled_back_at": null,
+    "started_at": "2026-08-27T12:22:18.329Z",
+    "applied_steps_count": 1
+  },
+  {
+    "id": "5d38861a-ad0e-43a3-b376-8d6937b5531f",
+    "checksum": "fe2acb971517ab0ff6dffdc506a8bdf5844c3c282d335d3cf808cd2eccda60ee",
+    "finished_at": null,
+    "migration_name": "20260903150000_add_student_learning_features",
+    "logs": "A migration failed to apply. New migrations cannot be applied before the error is recovered from. Read more about how to resolve migration issues in a production database: https://pris.ly/d/migrate-resolve\n\nMigration name: 20260903150000_add_student_learning_features\n\nDatabase error code: 42601\n\nDatabase error:\nERROR: syntax error at or near \"﻿ALTER\"\n\nPosition:\n\u001b[1m  0\u001b[0m\n\u001b[1m  1\u001b[1;31m ﻿ALTER TABLE \"exams\"\u001b[0m\n\nDbError { severity: \"ERROR\", parsed_severity: Some(Error), code: SqlState(E42601), message: \"syntax error at or near \\\"\\u{feff}ALTER\\\"\", detail: None, hint: None, position: Some(Original(1)), where_: None, schema: None, table: None, column: None, datatype: None, constraint: None, file: Some(\"scan.l\"), line: Some(1244), routine: Some(\"scanner_yyerror\") }\n\n",
+    "rolled_back_at": "2026-09-03T13:43:19.855Z",
+    "started_at": "2026-09-03T13:42:53.639Z",
+    "applied_steps_count": 0
+  },
+  {
+    "id": "c4f403a7-2df2-433b-8bd0-8d207e4b83b2",
+    "checksum": "5b1a332720f17681ed6e93cc7c8403a58191d94b0cd710784783548d0a6b9b78",
+    "finished_at": "2026-09-03T13:43:28.027Z",
+    "migration_name": "20260903150000_add_student_learning_features",
+    "logs": null,
+    "rolled_back_at": null,
+    "started_at": "2026-09-03T13:43:27.910Z",
+    "applied_steps_count": 1
+  }
+]

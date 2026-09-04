@@ -114,6 +114,7 @@ export class AuthService {
       employeeId: teacherProfile?.employeeId ?? deanProfile?.employeeId ?? null,
       office: deanProfile?.college ?? teacherProfile?.department ?? null,
       officialTitle: deanProfile?.title ?? null,
+      institutionName: deanProfile?.institutionName ?? null,
       studentId: studentProfile?.studentId ?? null,
       yearLevel: studentProfile?.yearLevel ?? null,
       program: studentProfile?.program ?? null,

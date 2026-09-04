@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { AccountStatus, InstitutionRegistrationStatus, Role } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import bcrypt from 'bcrypt';
 import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -17,9 +18,72 @@ const CODE_LIFETIME_MS = 10 * 60 * 1000;
 export class InstitutionRegistrationService {
   constructor(
     private prisma: PrismaService,
-    private email: EmailService
+    private email: EmailService,
+    private config: ConfigService
   ) {}
 
+  async searchInstitutions(rawQuery: string) {
+    const query = rawQuery.trim();
+    if (query.length < 2) return [];
+
+    const baseUrl =
+      this.config.get<string>('UNIVERSITY_SEARCH_API_URL') ??
+      'http://universities.hipolabs.com/search';
+    try {
+      const url = new URL(baseUrl);
+      url.searchParams.set('name', query);
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(4_000),
+        headers: { accept: 'application/json' },
+      });
+      if (!response.ok) return [];
+      const results = (await response.json()) as Array<{
+        name?: unknown;
+        country?: unknown;
+        domains?: unknown;
+      }>;
+      const normalizedQuery = query.toLocaleLowerCase();
+      const unique = new Map<
+        string,
+        { name: string; country: string | null; domain: string | null }
+      >();
+      for (const result of Array.isArray(results) ? results : []) {
+        if (typeof result.name !== 'string' || !result.name.trim()) continue;
+        const name = result.name.trim();
+        const key = name.toLocaleLowerCase();
+        if (!unique.has(key)) {
+          unique.set(key, {
+            name,
+            country:
+              typeof result.country === 'string' ? result.country : null,
+            domain:
+              Array.isArray(result.domains) &&
+              typeof result.domains[0] === 'string'
+                ? result.domains[0]
+                : null,
+          });
+        }
+      }
+      return [...unique.values()]
+        .sort((a, b) => {
+          const aStarts = a.name
+            .toLocaleLowerCase()
+            .startsWith(normalizedQuery)
+            ? 0
+            : 1;
+          const bStarts = b.name
+            .toLocaleLowerCase()
+            .startsWith(normalizedQuery)
+            ? 0
+            : 1;
+          return aStarts - bStarts || a.name.localeCompare(b.name);
+        })
+        .slice(0, 8);
+    } catch {
+      // Registration still accepts exact manual entry if the directory is unavailable.
+      return [];
+    }
+  }
   private code() {
     return String(Math.floor(100000 + Math.random() * 900000));
   }
@@ -69,7 +133,10 @@ export class InstitutionRegistrationService {
       return { ...this.publicApplication({ ...application, status: InstitutionRegistrationStatus.APPROVED }), userId: existingUser.id };
     }
 
-    const loginId = application.employeeId?.trim().toLowerCase() || application.email;
+    const employeeId = application.employeeId?.trim();
+    if (!employeeId)
+      throw new ConflictException('Employee ID is required.');
+    const loginId = employeeId.toLowerCase();
     const loginOwner = await this.prisma.user.findUnique({ where: { loginId } });
     if (loginOwner)
       throw new ConflictException('This Employee ID is already used by another account.');
@@ -90,7 +157,7 @@ export class InstitutionRegistrationService {
           status: AccountStatus.ACTIVE,
           deanProfile: {
             create: {
-              employeeId: application.employeeId,
+              employeeId,
               college: application.collegeDepartmentName,
               title: application.officialTitle,
             },
@@ -116,12 +183,12 @@ export class InstitutionRegistrationService {
       );
 
     const email = input.email.trim().toLowerCase();
-    const employeeId = input.employeeId?.trim() || null;
+    const employeeId = input.employeeId.trim();
     const duplicate = await this.prisma.user.findFirst({
       where: {
         OR: [
           { email },
-          ...(employeeId ? [{ loginId: employeeId.toLowerCase() }] : []),
+          { loginId: employeeId.toLowerCase() },
         ],
       },
     });

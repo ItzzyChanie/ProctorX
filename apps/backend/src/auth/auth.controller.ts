@@ -4,6 +4,7 @@ import {
   Get,
   Post,
   Patch,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -21,6 +22,7 @@ import { InstitutionRegistrationService } from './institution-registration.servi
 import {
   CreateInstitutionRegistrationDto,
   ResendInstitutionCodeDto,
+  SearchInstitutionsDto,
   VerifyInstitutionEmailDto,
 } from './dto/institution-registration.dto';
 
@@ -49,6 +51,13 @@ export class AuthController {
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   registerInstitution(@Body() body: CreateInstitutionRegistrationDto) {
     return this.institutionRegistration.create(body);
+  }
+
+  @Get('institutions/search')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  searchInstitutions(@Query() query: SearchInstitutionsDto) {
+    return this.institutionRegistration.searchInstitutions(query.q);
   }
 
   @Post('institution-registration/verify')

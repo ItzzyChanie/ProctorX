@@ -17,6 +17,7 @@ import {
   Clock,
   GraduationCap,
   CalendarRange,
+  TrendingUp,
   BookOpen,
   Layers3,
 } from "lucide-react";
@@ -35,6 +36,8 @@ export const NAV: Record<Role, NavItem[]> = {
       path: "/student",
     },
     { key: "join", label: "Join Session", icon: LogIn, path: "/student/join" },
+    { key: "calendar", label: "Assessment Calendar", icon: CalendarRange, path: "/student/calendar" },
+    { key: "progress", label: "Progress Analytics", icon: TrendingUp, path: "/student/progress" },
     {
       key: "sessions",
       label: "My Sessions",

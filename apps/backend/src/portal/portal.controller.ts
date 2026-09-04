@@ -71,8 +71,40 @@ export class PortalController {
     return this.p.readNotification(r.user.id, id);
   }
 
-  @Get('students/me/dashboard') dashboard(@Req() r: any) {
+  @Get('students/me/dashboard')
+  @Roles(Role.STUDENT)
+  dashboard(@Req() r: any) {
     return this.p.studentDashboard(r.user.id);
+  }
+
+  @Get('students/me/assessments')
+  @Roles(Role.STUDENT)
+  assessments(@Req() r: any) {
+    return this.p.studentAssessments(r.user.id);
+  }
+
+  @Get('students/me/sessions/:sessionId/result')
+  @Roles(Role.STUDENT)
+  result(@Req() r: any, @Param('sessionId') sessionId: string) {
+    return this.p.studentResult(r.user.id, sessionId);
+  }
+
+  @Get('students/me/analytics')
+  @Roles(Role.STUDENT)
+  studentAnalytics(@Req() r: any) {
+    return this.p.studentAnalytics(r.user.id);
+  }
+
+  @Patch('students/me/activities/:sessionId/archive')
+  @Roles(Role.STUDENT)
+  archiveActivity(@Req() r: any, @Param('sessionId') sessionId: string) {
+    return this.p.setStudentActivityArchived(r.user.id, sessionId, true);
+  }
+
+  @Patch('students/me/activities/:sessionId/restore')
+  @Roles(Role.STUDENT)
+  restoreActivity(@Req() r: any, @Param('sessionId') sessionId: string) {
+    return this.p.setStudentActivityArchived(r.user.id, sessionId, false);
   }
 
   @Post('students/me/sessions/:sessionId/raise-hand') raise(

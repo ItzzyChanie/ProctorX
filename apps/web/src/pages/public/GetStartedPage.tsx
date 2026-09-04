@@ -38,6 +38,12 @@ type FormData = {
   privacyAccepted: boolean;
 };
 
+type InstitutionSuggestion = {
+  name: string;
+  country: string | null;
+  domain: string | null;
+};
+
 type Application = {
   referenceNumber: string;
   email: string;
@@ -82,6 +88,10 @@ export default function GetStartedPage() {
   const [busy, setBusy] = useState(false);
   const [resendSeconds, setResendSeconds] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
+  const [institutionSuggestions, setInstitutionSuggestions] = useState<InstitutionSuggestion[]>([]);
+  const [institutionSearching, setInstitutionSearching] = useState(false);
+  const [institutionSearchOpen, setInstitutionSearchOpen] = useState(false);
+  const [selectedInstitution, setSelectedInstitution] = useState('');
 
   useEffect(() => {
     if (!resendSeconds) return;
@@ -92,6 +102,36 @@ export default function GetStartedPage() {
     return () => window.clearInterval(timer);
   }, [resendSeconds]);
 
+  useEffect(() => {
+    const query = form.institutionName.trim();
+    if (step !== 1 || query.length < 2 || query === selectedInstitution) {
+      setInstitutionSuggestions([]);
+      setInstitutionSearching(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setInstitutionSearching(true);
+      try {
+        const { data } = await api.get<InstitutionSuggestion[]>(
+          '/auth/institutions/search',
+          { params: { q: query }, signal: controller.signal },
+        );
+        setInstitutionSuggestions(data);
+        setInstitutionSearchOpen(true);
+      } catch (requestError) {
+        if (!axios.isCancel(requestError)) setInstitutionSuggestions([]);
+      } finally {
+        if (!controller.signal.aborted) setInstitutionSearching(false);
+      }
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [form.institutionName, selectedInstitution, step]);
   const set = <K extends keyof FormData>(key: K, value: FormData[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
     setError('');
@@ -125,6 +165,7 @@ export default function GetStartedPage() {
     if (
       !form.firstName.trim() ||
       !form.lastName.trim() ||
+      !form.employeeId.trim() ||
       !form.officialTitle.trim() ||
       !form.email.trim()
     ) {
@@ -312,18 +353,75 @@ export default function GetStartedPage() {
                 </div>
               </div>
               <div className="gs-form">
-                <label className="gs-field full">
-                  <span>
+                <div className="gs-field full gs-institution-field">
+                  <label htmlFor="institution-name">
                     Institution or university name <b>*</b>
-                  </span>
+                  </label>
                   <input
+                    id="institution-name"
                     autoFocus
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-expanded={institutionSearchOpen}
+                    aria-controls="institution-suggestions"
+                    autoComplete="off"
                     value={form.institutionName}
-                    onChange={(e) => set('institutionName', e.target.value)}
-                    placeholder="e.g. North Valley State University"
+                    onFocus={() => setInstitutionSearchOpen(true)}
+                    onBlur={() =>
+                      window.setTimeout(() => setInstitutionSearchOpen(false), 120)
+                    }
+                    onChange={(e) => {
+                      setSelectedInstitution('');
+                      setInstitutionSearchOpen(true);
+                      set('institutionName', e.target.value);
+                    }}
+                    placeholder="Start typing your school name"
                     maxLength={160}
                   />
-                </label>
+                  {institutionSearchOpen && form.institutionName.trim().length >= 2 && (
+                    <div
+                      id="institution-suggestions"
+                      className="gs-institution-suggestions"
+                      role="listbox"
+                    >
+                      {institutionSearching ? (
+                        <div className="gs-institution-message">Searching institutions…</div>
+                      ) : institutionSuggestions.length ? (
+                        institutionSuggestions.map((institution) => (
+                          <button
+                            key={`${institution.name}-${institution.country ?? ''}`}
+                            type="button"
+                            role="option"
+                            aria-selected={false}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => {
+                              set('institutionName', institution.name);
+                              setSelectedInstitution(institution.name);
+                              setInstitutionSearchOpen(false);
+                              setInstitutionSuggestions([]);
+                            }}
+                          >
+                            <b>{institution.name}</b>
+                            {(institution.country || institution.domain) && (
+                              <small>
+                                {[institution.country, institution.domain]
+                                  .filter(Boolean)
+                                  .join(' · ')}
+                              </small>
+                            )}
+                          </button>
+                        ))
+                      ) : (
+                        <div className="gs-institution-message">
+                          No directory match. Keep your exact school name as entered.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <small>
+                    Select a directory suggestion, or keep typing to use the school’s exact official name.
+                  </small>
+                </div>
                 <label className="gs-field full">
                   <span>
                     College or department name <b>*</b>
@@ -404,7 +502,7 @@ export default function GetStartedPage() {
                 </label>
                 <label className="gs-field">
                   <span>
-                    Employee ID <em>Optional</em>
+                    Employee ID <b>*</b>
                   </span>
                   <input
                     value={form.employeeId}
@@ -413,8 +511,7 @@ export default function GetStartedPage() {
                     maxLength={80}
                   />
                   <small>
-                    If provided, this becomes your primary username and appears
-                    in the topbar.
+                    This becomes your primary username and appears in the topbar.
                   </small>
                 </label>
                 <label className="gs-field">
@@ -424,7 +521,7 @@ export default function GetStartedPage() {
                   <input
                     value={form.officialTitle}
                     onChange={(e) => set('officialTitle', e.target.value)}
-                    placeholder="e.g. Dean, Associate Dean"
+                    placeholder="e.g. Dean, Professor"
                     maxLength={120}
                   />
                   <small>
@@ -443,8 +540,7 @@ export default function GetStartedPage() {
                     maxLength={320}
                   />
                   <small>
-                    You can use this email to sign in, especially when no
-                    Employee ID applies.
+                    You can use either this email or your Employee ID to sign in.
                   </small>
                 </label>
                 <label className="gs-field">

@@ -64,6 +64,16 @@ export default function DeanProfile() {
         <Card>
           <CardHeader title="Profile" />
           <ProfilePictureEditor />
+          <div className="mb-3 grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-[11.5px] text-text-3">Institution</span>
+              <input readOnly value={user?.institutionName ?? ""} className="w-full cursor-not-allowed rounded-[9px] border border-border bg-slate-100 px-3 py-2.5 text-[13.5px] text-text-1 opacity-75 dark:bg-slate-800" />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[11.5px] text-text-3">Official title or position</span>
+              <input readOnly value={user?.officialTitle ?? ""} className="w-full cursor-not-allowed rounded-[9px] border border-border bg-slate-100 px-3 py-2.5 text-[13.5px] text-text-1 opacity-75 dark:bg-slate-800" />
+            </label>
+          </div>
           <form onSubmit={save} className="space-y-3">
             {([
               ["fullName", "Full name", "text"],

@@ -13,6 +13,9 @@ import JoinSession from './pages/student/JoinSession';
 import MySessions from './pages/student/MySessions';
 import Notifications from './pages/student/Notifications';
 import StudentProfile from './pages/student/Profile';
+import AssessmentCalendar from './pages/student/AssessmentCalendar';
+import ProgressAnalytics from './pages/student/ProgressAnalytics';
+import ExamResult from './pages/student/ExamResult';
 
 import TeacherDashboard from './pages/teacher/TeacherDashboard';
 import TeacherProfile from './pages/teacher/Profile';
@@ -107,6 +110,9 @@ export default function App() {
             <Route path="/student" element={<StudentDashboard />} />
             <Route path="/student/join" element={<JoinSession />} />
             <Route path="/student/sessions" element={<MySessions />} />
+            <Route path="/student/sessions/:sessionId/result" element={<ExamResult />} />
+            <Route path="/student/calendar" element={<AssessmentCalendar />} />
+            <Route path="/student/progress" element={<ProgressAnalytics />} />
             <Route path="/student/notifications" element={<Notifications />} />
             <Route path="/student/profile" element={<StudentProfile />} />
           </Route>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, Check, Moon, Sun } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { useTheme } from '../../lib/useTheme';
 import type { Role } from '../../types/dashboard';
@@ -19,6 +20,7 @@ type Notification = {
   message: string;
   isRead: boolean;
   createdAt: string;
+  link?: string | null;
 };
 const notificationEndpoint = (role: Role) =>
   role === 'student'
@@ -44,6 +46,7 @@ export function Topbar({
 }: TopbarProps) {
   const { dark, toggleDark } = useTheme();
   const client = useQueryClient();
+  const navigate = useNavigate();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const notificationPanel = useRef<HTMLDivElement>(null);
   const endpoint = notificationEndpoint(role);
@@ -186,11 +189,14 @@ export function Topbar({
                   <button
                     key={item.id}
                     type="button"
-                    disabled={
-                      item.isRead ||
-                      (markRead.isPending && markRead.variables === item.id)
-                    }
-                    onClick={() => markRead.mutate(item.id)}
+                    disabled={markRead.isPending && markRead.variables === item.id}
+                    onClick={() => {
+                      if (!item.isRead) markRead.mutate(item.id);
+                      if (item.link) {
+                        setNotificationsOpen(false);
+                        navigate(item.link);
+                      }
+                    }}
                     className="flex w-full cursor-pointer items-start gap-3 border-b border-border px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-brand-soft disabled:cursor-default disabled:opacity-100"
                   >
                     <span

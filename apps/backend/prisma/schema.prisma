@@ -172,6 +172,12 @@ enum IncidentStatus {
   RESOLVED
 }
 
+enum ProctorReviewDecision {
+  PENDING
+  NEGATIVE
+  POSITIVE
+}
+
 model User {
   id                    String               @id @default(uuid())
   institutionId         String?
@@ -218,14 +224,15 @@ model StudentLoginSession {
 }
 
 model DeanProfile {
-  id         String   @id @default(uuid())
-  userId     String   @unique
-  employeeId String?  @unique
-  college    String?
-  title      String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  employeeId      String?  @unique
+  college         String?
+  title           String?
+  institutionName String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("dean_profiles")
 }
@@ -407,18 +414,20 @@ model Subject {
 }
 
 model SubjectJoinRequest {
-  id          String            @id @default(uuid())
-  subjectId   String
-  studentId   String
-  status      JoinRequestStatus @default(PENDING)
-  requestedAt DateTime          @default(now())
-  reviewedAt  DateTime?
-  subject     Subject           @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  student     User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  id              String            @id @default(uuid())
+  subjectId       String
+  studentId       String
+  status          JoinRequestStatus @default(PENDING)
+  requestedAt     DateTime          @default(now())
+  reviewedAt      DateTime?
+  studentHiddenAt DateTime?
+  subject         Subject           @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  student         User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@unique([subjectId, studentId])
   @@index([subjectId, status])
   @@index([studentId, status])
+  @@index([studentId, studentHiddenAt])
   @@map("subject_join_requests")
 }
 
@@ -449,30 +458,31 @@ model SubjectSection {
 }
 
 model Exam {
-  id                String         @id @default(uuid())
-  subjectId         String
-  academicPeriodId  String
-  term              AcademicTerm
-  title             String
-  assessmentType    AssessmentType @default(EXAM)
-  instructions      String?
-  totalPoints       Int
-  durationMinutes   Int
-  roomCode          String         @unique
-  requireCamera     Boolean        @default(false)
-  requireMicrophone Boolean        @default(false)
-  appPolicyMode     AppPolicyMode  @default(BLACKLIST)
-  appPolicyList     String[]       @default([])
-  status            ExamStatus     @default(DRAFT)
-  scheduledAt       DateTime?
-  endsAt            DateTime?
-  sourceType        ExamSourceType @default(MANUAL)
-  externalFormUrl   String?
-  createdAt         DateTime       @default(now())
-  subject           Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  academicPeriod    AcademicPeriod @relation(fields: [academicPeriodId], references: [id])
-  questions         Question[]
-  sessions          ExamSession[]
+  id                 String         @id @default(uuid())
+  subjectId          String
+  academicPeriodId   String
+  term               AcademicTerm
+  title              String
+  assessmentType     AssessmentType @default(EXAM)
+  instructions       String?
+  totalPoints        Int
+  durationMinutes    Int
+  roomCode           String         @unique
+  requireCamera      Boolean        @default(false)
+  requireMicrophone  Boolean        @default(false)
+  appPolicyMode      AppPolicyMode  @default(BLACKLIST)
+  appPolicyList      String[]       @default([])
+  status             ExamStatus     @default(DRAFT)
+  scheduledAt        DateTime?
+  endsAt             DateTime?
+  sourceType         ExamSourceType @default(MANUAL)
+  externalFormUrl    String?
+  showCorrectAnswers Boolean        @default(false)
+  createdAt          DateTime       @default(now())
+  subject            Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  academicPeriod     AcademicPeriod @relation(fields: [academicPeriodId], references: [id])
+  questions          Question[]
+  sessions           ExamSession[]
 
   @@index([subjectId])
   @@index([academicPeriodId, term])
@@ -529,16 +539,17 @@ model QuestionOption {
 }
 
 model Submission {
-  id          String         @id @default(uuid())
-  sessionId   String         @unique
-  submittedAt DateTime?
-  totalScore  Int?
-  maxScore    Int
-  gradeStatus GradeStatus    @default(UNGRADED)
-  mode        SubmissionMode @default(MANUAL)
-  deletedAt   DateTime?
-  session     ExamSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  answers     Answer[]
+  id              String         @id @default(uuid())
+  sessionId       String         @unique
+  submittedAt     DateTime?
+  totalScore      Int?
+  maxScore        Int
+  gradeStatus     GradeStatus    @default(UNGRADED)
+  mode            SubmissionMode @default(MANUAL)
+  deletedAt       DateTime?
+  teacherFeedback String?        @db.Text
+  session         ExamSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  answers         Answer[]
 
   @@index([deletedAt, submittedAt])
   @@map("submissions")
@@ -563,28 +574,34 @@ model Answer {
 }
 
 model ExamSession {
-  id                String                   @id @default(uuid())
-  examId            String
-  studentId         String
-  startedAt         DateTime
-  endedAt           DateTime?
-  status            SessionStatus
-  timerStartedAt    DateTime?
-  activeStartedAt   DateTime?
-  lastHeartbeatAt   DateTime?
-  remainingSeconds  Int?
-  exam              Exam                     @relation(fields: [examId], references: [id], onDelete: Cascade)
-  student           User                     @relation(fields: [studentId], references: [id])
-  recording         Recording?
-  submission        Submission?
-  events            ProctoringEvent[]
-  scoreHistory      SuspicionScoreSnapshot[]
-  raiseHandRequests RaiseHandRequest[]
-  incidents         Incident[]
-  evidenceClips     EvidenceClip[]
+  id                        String                   @id @default(uuid())
+  examId                    String
+  studentId                 String
+  startedAt                 DateTime
+  endedAt                   DateTime?
+  status                    SessionStatus
+  timerStartedAt            DateTime?
+  activeStartedAt           DateTime?
+  lastHeartbeatAt           DateTime?
+  remainingSeconds          Int?
+  studentActivityArchivedAt DateTime?
+  proctorReviewDecision     ProctorReviewDecision    @default(PENDING)
+  proctorReviewedAt         DateTime?
+  proctorReviewedById       String?
+  exam                      Exam                     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student                   User                     @relation(fields: [studentId], references: [id])
+  recording                 Recording?
+  submission                Submission?
+  events                    ProctoringEvent[]
+  scoreHistory              SuspicionScoreSnapshot[]
+  raiseHandRequests         RaiseHandRequest[]
+  incidents                 Incident[]
+  evidenceClips             EvidenceClip[]
 
   @@unique([examId, studentId])
   @@index([studentId])
+  @@index([studentId, studentActivityArchivedAt])
+  @@index([proctorReviewDecision])
   @@index([status, lastHeartbeatAt])
   @@map("exam_sessions")
 }
@@ -694,6 +711,8 @@ model Notification {
   message   String
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
+  dedupeKey String?  @unique
+  link      String?
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isRead])

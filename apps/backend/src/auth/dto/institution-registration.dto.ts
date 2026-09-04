@@ -3,7 +3,6 @@ import {
   IsEmail,
   IsIn,
   IsNotEmpty,
-  IsOptional,
   IsString,
   Matches,
   MaxLength,
@@ -18,13 +17,17 @@ export class CreateInstitutionRegistrationDto {
   schoolType!: string;
   @IsString() @IsNotEmpty() @MaxLength(80) firstName!: string;
   @IsString() @IsNotEmpty() @MaxLength(80) lastName!: string;
-  @IsOptional() @IsString() @MaxLength(80) employeeId?: string;
+  @IsString() @IsNotEmpty() @MaxLength(80) employeeId!: string;
   @IsString() @IsNotEmpty() @MaxLength(120) officialTitle!: string;
   @IsEmail() @MaxLength(320) email!: string;
   @IsString() @MinLength(8) @MaxLength(128) password!: string;
   @IsBoolean() authorityConfirmed!: boolean;
   @IsBoolean() termsAccepted!: boolean;
   @IsBoolean() privacyAccepted!: boolean;
+}
+
+export class SearchInstitutionsDto {
+  @IsString() @IsNotEmpty() @MinLength(2) @MaxLength(100) q!: string;
 }
 
 export class VerifyInstitutionEmailDto {

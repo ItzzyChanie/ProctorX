@@ -10,6 +10,7 @@ import {
   EvidenceClipStatus,
   GradeStatus,
   Prisma,
+  ProctorReviewDecision,
   Role,
   SessionStatus,
 } from '@prisma/client';
@@ -191,6 +192,9 @@ export class PortalService {
         exam: { include: { subject: true, academicPeriod: true } },
         scoreHistory: { orderBy: { computedAt: 'desc' } },
         incidents: { where: { status: 'OPEN' }, select: { id: true } },
+        submission: {
+          select: { id: true, gradeStatus: true, totalScore: true, maxScore: true },
+        },
       },
       orderBy: { startedAt: 'desc' },
     });
@@ -207,14 +211,23 @@ export class PortalService {
         ? Math.round((+x.endedAt - +x.startedAt) / 1000)
         : null,
       status: x.status,
+      submission: x.submission,
       reviewStatus:
-        x.scoreHistory.some((s) => s.tier === 'HIGH') || x.incidents.length
-          ? 'UNDER_REVIEW'
-          : 'CLEARED',
+        x.proctorReviewDecision !== ProctorReviewDecision.PENDING
+          ? x.proctorReviewDecision
+          : x.scoreHistory.some((s) => s.tier === 'HIGH') || x.incidents.length
+            ? 'FLAGGED'
+            : 'NO_FLAGS',
+      proctorReviewedAt: x.proctorReviewedAt,
     }));
   }
 
-  notifications(userId: string) {
+  async notifications(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true },
+    });
+    if (user?.role === Role.STUDENT) await this.ensureStudentReminders(userId);
     return this.prisma.notification.findMany({
       where: { userId },
       select: {
@@ -223,9 +236,100 @@ export class PortalService {
         message: true,
         isRead: true,
         createdAt: true,
+        link: true,
       },
       orderBy: { createdAt: 'desc' },
+      take: 100,
     });
+  }
+
+  private async ensureStudentReminders(userId: string) {
+    const now = new Date();
+    const sevenDays = new Date(+now + 7 * 24 * 60 * 60 * 1000);
+    const oneDay = new Date(+now + 24 * 60 * 60 * 1000);
+    const [exams, released, reviewed] = await Promise.all([
+      this.prisma.exam.findMany({
+        where: {
+          status: 'PUBLISHED',
+          subject: { enrollments: { some: { studentId: userId } } },
+          OR: [
+            { scheduledAt: { gt: now, lte: sevenDays } },
+            { endsAt: { gt: now, lte: oneDay } },
+          ],
+        },
+        select: {
+          id: true,
+          title: true,
+          scheduledAt: true,
+          endsAt: true,
+          subject: { select: { subjectCode: true, name: true } },
+        },
+      }),
+      this.prisma.submission.findMany({
+        where: {
+          gradeStatus: GradeStatus.TEACHER_CONFIRMED,
+          deletedAt: null,
+          session: { studentId: userId },
+        },
+        select: {
+          id: true,
+          sessionId: true,
+          session: { select: { exam: { select: { title: true } } } },
+        },
+      }),
+      this.prisma.examSession.findMany({
+        where: {
+          studentId: userId,
+          proctorReviewDecision: { in: ['NEGATIVE', 'POSITIVE'] },
+        },
+        select: {
+          id: true,
+          proctorReviewDecision: true,
+          proctorReviewedAt: true,
+          exam: { select: { title: true } },
+        },
+      }),
+    ]);
+    const rows: Prisma.NotificationCreateManyInput[] = [];
+    for (const exam of exams) {
+      const subject = exam.subject.subjectCode ?? exam.subject.name;
+      if (exam.scheduledAt && exam.scheduledAt > now && exam.scheduledAt <= sevenDays)
+        rows.push({
+          userId,
+          type: 'UPCOMING_ASSESSMENT',
+          message: `${exam.title} for ${subject} starts ${exam.scheduledAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.`,
+          dedupeKey: `upcoming:${userId}:${exam.id}:${exam.scheduledAt.toISOString()}`,
+          link: '/student/calendar',
+        });
+      if (exam.endsAt && exam.endsAt > now && exam.endsAt <= oneDay)
+        rows.push({
+          userId,
+          type: 'ASSESSMENT_DEADLINE',
+          message: `${exam.title} closes ${exam.endsAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.`,
+          dedupeKey: `deadline:${userId}:${exam.id}:${exam.endsAt.toISOString()}`,
+          link: '/student/calendar',
+        });
+    }
+    for (const submission of released)
+      rows.push({
+        userId,
+        type: 'RESULT_RELEASED',
+        message: `Your result for ${submission.session.exam.title} is available.`,
+        dedupeKey: `result:${userId}:${submission.id}`,
+        link: `/student/sessions/${submission.sessionId}/result`,
+      });
+    for (const session of reviewed)
+      rows.push({
+        userId,
+        type: session.proctorReviewDecision === 'NEGATIVE' ? 'PROCTOR_REVIEW_CLEAR' : 'PROCTOR_REVIEW_WARN',
+        message: session.proctorReviewDecision === 'NEGATIVE'
+          ? `Your teacher reviewed ${session.exam.title} and found no violation.`
+          : `Your teacher reviewed ${session.exam.title} and confirmed a violation.`,
+        dedupeKey: `proctor-review:${userId}:${session.id}:${session.proctorReviewDecision}:${session.proctorReviewedAt?.toISOString() ?? 'reviewed'}`,
+        link: '/student/sessions',
+      });
+    if (rows.length)
+      await this.prisma.notification.createMany({ data: rows, skipDuplicates: true });
   }
 
   async readNotification(userId: string, id: string) {
@@ -284,12 +388,26 @@ export class PortalService {
           academicPeriod: e.academicPeriod,
         }))
         .sort((a, b) => +a.startsAt - +b.startsAt),
-      recentActivity: sessions.slice(0, 5).map((x) => ({
-        text: `${x.status === 'IN_PROGRESS' ? 'Joined' : 'Completed'} ${x.exam.title}`,
-        occurredAt: x.startedAt,
-        term: x.exam.term,
-        academicPeriod: x.exam.academicPeriod,
-      })),
+      recentActivity: sessions
+        .filter((x) => !x.studentActivityArchivedAt)
+        .slice(0, 5)
+        .map((x) => ({
+          id: x.id,
+          text: `${x.status === 'IN_PROGRESS' ? 'Joined' : 'Completed'} ${x.exam.title}`,
+          occurredAt: x.startedAt,
+          term: x.exam.term,
+          academicPeriod: x.exam.academicPeriod,
+        })),
+      archivedActivity: sessions
+        .filter((x) => x.studentActivityArchivedAt)
+        .slice(0, 5)
+        .map((x) => ({
+          id: x.id,
+          text: `${x.status === 'IN_PROGRESS' ? 'Joined' : 'Completed'} ${x.exam.title}`,
+          occurredAt: x.startedAt,
+          term: x.exam.term,
+          academicPeriod: x.exam.academicPeriod,
+        })),
       scoreHistory: sessions
         .filter(
           (x) =>
@@ -315,6 +433,177 @@ export class PortalService {
         await this.institutionFor(userId)
       ),
     };
+  }
+
+  async setStudentActivityArchived(
+    userId: string,
+    sessionId: string,
+    archived: boolean
+  ) {
+    const session = await this.prisma.examSession.findFirst({
+      where: { id: sessionId, studentId: userId },
+      select: { id: true },
+    });
+    if (!session) throw new NotFoundException('Activity not found');
+
+    return this.prisma.examSession.update({
+      where: { id: sessionId },
+      data: { studentActivityArchivedAt: archived ? new Date() : null },
+      select: { id: true, studentActivityArchivedAt: true },
+    });
+  }
+
+  async studentAssessments(userId: string) {
+    const enrollments = await this.prisma.enrollment.findMany({
+      where: { studentId: userId },
+      select: {
+        subject: {
+          select: {
+            id: true,
+            subjectCode: true,
+            name: true,
+            teacher: { select: { fullName: true } },
+            exams: {
+              where: { scheduledAt: { not: null } },
+              select: {
+                id: true,
+                title: true,
+                assessmentType: true,
+                scheduledAt: true,
+                endsAt: true,
+                durationMinutes: true,
+                status: true,
+                term: true,
+                createdAt: true,
+                academicPeriod: true,
+                sessions: {
+                  where: { studentId: userId },
+                  select: { id: true, status: true },
+                },
+              },
+              orderBy: { scheduledAt: 'asc' },
+            },
+          },
+        },
+      },
+    });
+    return enrollments.flatMap(({ subject }) =>
+      subject.exams.map((exam) => ({
+        ...exam,
+        subject: {
+          id: subject.id,
+          subjectCode: subject.subjectCode,
+          name: subject.name,
+          teacherName: subject.teacher.fullName,
+        },
+      }))
+    );
+  }
+
+  async studentResult(userId: string, sessionId: string) {
+    const submission = await this.prisma.submission.findFirst({
+      where: { sessionId, session: { studentId: userId }, deletedAt: null },
+      include: {
+        session: {
+          include: {
+            exam: { include: { subject: true, academicPeriod: true } },
+          },
+        },
+        answers: {
+          orderBy: { question: { order: 'asc' } },
+          include: { question: { include: { options: true } } },
+        },
+      },
+    });
+    if (!submission) throw new NotFoundException('Result not found');
+    const released = submission.gradeStatus === GradeStatus.TEACHER_CONFIRMED;
+    const showCorrect = released && submission.session.exam.showCorrectAnswers;
+    return {
+      id: submission.id,
+      sessionId,
+      submittedAt: submission.submittedAt,
+      totalScore: released ? submission.totalScore : null,
+      maxScore: submission.maxScore,
+      gradeStatus: submission.gradeStatus,
+      teacherFeedback: released ? submission.teacherFeedback : null,
+      showCorrectAnswers: showCorrect,
+      exam: {
+        title: submission.session.exam.title,
+        assessmentType: submission.session.exam.assessmentType,
+        term: submission.session.exam.term,
+        academicPeriod: submission.session.exam.academicPeriod,
+        subject: {
+          code: submission.session.exam.subject.subjectCode ?? submission.session.exam.subject.code,
+          name: submission.session.exam.subject.name,
+        },
+      },
+      answers: submission.answers.map((answer) => ({
+        id: answer.id,
+        responseText: answer.responseText,
+        selectedOptionIds: answer.selectedOptionIds,
+        awardedPoints: released ? answer.awardedPoints : null,
+        gradeStatus: answer.gradeStatus,
+        question: {
+          order: answer.question.order,
+          prompt: answer.question.prompt,
+          type: answer.question.type,
+          points: answer.question.points,
+          correctAnswer: showCorrect ? answer.question.correctAnswer : null,
+          options: answer.question.options.map((option) => ({
+            id: option.id,
+            label: option.label,
+            ...(showCorrect ? { isCorrect: option.isCorrect } : {}),
+          })),
+        },
+      })),
+    };
+  }
+
+  async studentAnalytics(userId: string) {
+    const submissions = await this.prisma.submission.findMany({
+      where: {
+        session: { studentId: userId },
+        gradeStatus: GradeStatus.TEACHER_CONFIRMED,
+        totalScore: { not: null },
+        deletedAt: null,
+      },
+      include: {
+        session: {
+          include: {
+            exam: { include: { subject: true, academicPeriod: true } },
+          },
+        },
+      },
+      orderBy: { submittedAt: 'asc' },
+    });
+    const attempts = submissions.map((submission) => ({
+      sessionId: submission.sessionId,
+      examTitle: submission.session.exam.title,
+      subjectId: submission.session.exam.subjectId,
+      subjectCode: submission.session.exam.subject.subjectCode ?? submission.session.exam.subject.code,
+      subjectName: submission.session.exam.subject.name,
+      term: submission.session.exam.term,
+      academicPeriod: submission.session.exam.academicPeriod,
+      submittedAt: submission.submittedAt,
+      score: submission.totalScore!,
+      maxScore: submission.maxScore,
+      percentage: submission.maxScore ? Math.round(submission.totalScore! / submission.maxScore * 100) : 0,
+      timeMinutes: submission.session.endedAt
+        ? Math.max(0, Math.round((+submission.session.endedAt - +submission.session.startedAt) / 60000))
+        : 0,
+    }));
+    const subjects = [...new Set(attempts.map((item) => item.subjectId))].map((subjectId) => {
+      const rows = attempts.filter((item) => item.subjectId === subjectId);
+      return {
+        subjectId,
+        subjectCode: rows[0]!.subjectCode,
+        subjectName: rows[0]!.subjectName,
+        attempts: rows.length,
+        averageScore: Math.round(rows.reduce((sum, row) => sum + row.percentage, 0) / rows.length),
+        totalTimeMinutes: rows.reduce((sum, row) => sum + row.timeMinutes, 0),
+      };
+    });
+    return { attempts, subjects };
   }
 
   async teacherExams(teacherId: string) {
@@ -448,6 +737,8 @@ export class PortalService {
           },
           startedAt: session.startedAt,
           endedAt: session.endedAt,
+          proctorReviewDecision: session.proctorReviewDecision,
+          proctorReviewedAt: session.proctorReviewedAt,
           recording: session.recording
             ? {
                 status: session.recording.status,
@@ -614,7 +905,7 @@ export class PortalService {
       employeeId: x.teacherProfile?.employeeId ?? x.deanProfile?.employeeId,
       name: x.fullName,
       email: x.email,
-      title: x.teacherProfile?.department ?? x.deanProfile?.college,
+      title: x.teacherProfile?.department ?? x.deanProfile?.title,
       role: x.role,
       profilePicture: (x as typeof x & { profilePicture: string | null })
         .profilePicture,
@@ -696,7 +987,7 @@ export class PortalService {
           ? {
               deanProfile: {
                 update: {
-                  college: input.title.trim(),
+                  title: input.title.trim(),
                   ...(input.employeeId !== undefined
                     ? { employeeId: input.employeeId.trim() || null }
                     : {}),
