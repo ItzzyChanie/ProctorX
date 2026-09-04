@@ -22,6 +22,7 @@ import {
   CreateExamDto,
   CreateSubjectDto,
   UpdateSubjectDto,
+  UpdateExamScheduleDto,
 } from './dto/subjects.dto';
 import { AiService, QuestionCounts } from '../ai/ai.service';
 import { SessionsGateway } from '../sessions/sessions.gateway';
@@ -225,6 +226,7 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
         status: JoinRequestStatus.PENDING,
         requestedAt: new Date(),
         reviewedAt: null,
+        studentHiddenAt: null,
       },
       include: {
         student: { select: { fullName: true } },
@@ -249,7 +251,7 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
   }
   studentJoinRequests(studentId: string) {
     return this.prisma.subjectJoinRequest.findMany({
-      where: { studentId },
+      where: { studentId, studentHiddenAt: null },
       include: {
         subject: {
           select: {
@@ -262,6 +264,20 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       orderBy: { requestedAt: 'desc' },
     });
   }
+  async hideStudentJoinRequest(studentId: string, requestId: string) {
+    const request = await this.prisma.subjectJoinRequest.findFirst({
+      where: { id: requestId, studentId },
+      select: { id: true },
+    });
+    if (!request) throw new NotFoundException('Join request not found');
+
+    return this.prisma.subjectJoinRequest.update({
+      where: { id: requestId },
+      data: { studentHiddenAt: new Date() },
+      select: { id: true },
+    });
+  }
+
   pendingJoinRequests(teacherId: string) {
     return this.prisma.subjectJoinRequest.findMany({
       where: { status: JoinRequestStatus.PENDING, subject: { teacherId } },
@@ -812,6 +828,30 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       });
     return exam;
   }
+  async updateExamSchedule(
+    subjectId: string,
+    examId: string,
+    teacherId: string,
+    input: UpdateExamScheduleDto
+  ) {
+    const subject = await this.owned(subjectId, teacherId);
+    const scheduledAt = new Date(input.scheduledAt);
+    const endsAt = new Date(input.endsAt);
+    if (endsAt <= scheduledAt)
+      throw new ConflictException('End time must be after the scheduled start');
+    const exam = await this.prisma.exam.findFirst({ where: { id: examId, subjectId } });
+    if (!exam) throw new NotFoundException('Assessment not found');
+    const enrollments = await this.prisma.enrollment.findMany({ where: { subjectId }, select: { studentId: true } });
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.exam.update({ where: { id: examId }, data: { scheduledAt, endsAt, durationMinutes: Math.max(1, Math.round((+endsAt - +scheduledAt) / 60000)) } });
+      if (enrollments.length)
+        await tx.notification.createMany({ data: enrollments.map(({ studentId }) => ({ userId: studentId, type: 'ASSESSMENT_SCHEDULE_CHANGED', message: `The schedule for ${exam.title} in ${subject.subjectCode ?? subject.name} changed to ${scheduledAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.`, link: '/student/calendar' })) });
+      await tx.auditLog.create({ data: { actorId: teacherId, action: 'EXAM_SCHEDULE_UPDATED', targetType: 'Exam', targetId: examId, metadata: { scheduledAt, endsAt } } });
+      return updated;
+    });
+    return saved;
+  }
+
   async stopExam(subjectId: string, examId: string, teacherId: string) {
     const subject = await this.owned(subjectId, teacherId);
     const exam = await this.prisma.exam.findFirst({

@@ -81,3 +81,8 @@ export class CreateExamDto {
   @Type(() => QuestionDto)
   questions?: QuestionDto[];
 }
+
+export class UpdateExamScheduleDto {
+  @IsISO8601() scheduledAt!: string;
+  @IsISO8601() endsAt!: string;
+}

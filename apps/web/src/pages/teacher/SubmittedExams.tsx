@@ -60,7 +60,7 @@ type AnswerDetail = {
     options: { id: string; label: string; isCorrect: boolean }[];
   };
 };
-type SubmissionDetail = SubmissionRow & { answers: AnswerDetail[] };
+type SubmissionDetail = SubmissionRow & { teacherFeedback?: string; answers: AnswerDetail[]; session: SubmissionRow['session'] & { exam: SubmissionRow['session']['exam'] & { showCorrectAnswers: boolean } } };
 
 const terms = [
   ['PRELIMINARY', 'Preliminary'],
@@ -498,6 +498,17 @@ function ReviewModal({
   onUpdated: () => void;
   onError: () => void;
 }) {
+  const [teacherFeedback, setTeacherFeedback] = useState('');
+  const [showCorrectAnswers, setShowCorrectAnswers] = useState(false);
+  useEffect(() => {
+    setTeacherFeedback(detail?.teacherFeedback ?? '');
+    setShowCorrectAnswers(detail?.session.exam.showCorrectAnswers ?? false);
+  }, [detail?.id, detail?.teacherFeedback, detail?.session.exam.showCorrectAnswers]);
+  const saveRelease = useMutation({
+    mutationFn: () => api.patch(`/sessions/submissions/${detail!.id}/release-settings`, { teacherFeedback, showCorrectAnswers }),
+    onSuccess: onUpdated,
+    onError,
+  });
   useEffect(() => {
     const close = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
     document.addEventListener('keydown', close);
@@ -547,6 +558,13 @@ function ReviewModal({
           </div>
         </header>
         <main className="space-y-5">
+          <section className="rounded-2xl border border-slate-300 bg-white p-5 shadow-xl">
+            <h3 className="font-bold">Student result release</h3>
+            <p className="mt-1 text-sm text-slate-600">Feedback is visible after the score is confirmed. Correct-answer visibility applies to this entire assessment.</p>
+            <textarea value={teacherFeedback} onChange={event => setTeacherFeedback(event.target.value)} maxLength={5000} rows={3} placeholder="Optional feedback for this student" className="mt-4 w-full rounded-xl border border-slate-300 p-3 text-sm" />
+            <label className="mt-3 flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={showCorrectAnswers} onChange={event => setShowCorrectAnswers(event.target.checked)} />Allow students to review correct answers after grading is confirmed</label>
+            <Button className="mt-4" disabled={saveRelease.isPending} onClick={() => saveRelease.mutate()}>{saveRelease.isPending ? 'Saving…' : 'Save result settings'}</Button>
+          </section>
           {detail.answers.map((answer) => (
             <AnswerCard
               key={answer.id}

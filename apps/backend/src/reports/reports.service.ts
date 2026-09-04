@@ -5,7 +5,12 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
-import { GradeStatus, ReportFormat, ReportJobStatus } from '@prisma/client';
+import {
+  GradeStatus,
+  ProctorReviewDecision,
+  ReportFormat,
+  ReportJobStatus,
+} from '@prisma/client';
 import { readFile } from 'fs/promises';
 import { basename, extname } from 'path';
 import { AiService } from '../ai/ai.service';
@@ -105,6 +110,8 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       select: {
         id: true,
         startedAt: true,
+        proctorReviewDecision: true,
+        proctorReviewedAt: true,
         student: {
           select: { id: true, fullName: true, profilePicture: true },
         },
@@ -138,6 +145,41 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
         latestEventAt: session.events[0]?.occurredAt ?? session.startedAt,
       };
     });
+  }
+
+  async reviewProctoring(
+    sessionId: string,
+    teacherId: string,
+    decision: 'NEGATIVE' | 'POSITIVE'
+  ) {
+    const session = await this.prisma.examSession.findFirst({
+      where: { id: sessionId, exam: { subject: { teacherId } } },
+      select: { id: true },
+    });
+    if (!session) throw new NotFoundException('Session review not found');
+
+    const reviewed = await this.prisma.examSession.update({
+      where: { id: sessionId },
+      data: {
+        proctorReviewDecision: decision as ProctorReviewDecision,
+        proctorReviewedAt: new Date(),
+        proctorReviewedById: teacherId,
+      },
+      select: {
+        id: true,
+        proctorReviewDecision: true,
+        proctorReviewedAt: true,
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: `PROCTOR_REVIEW_${decision}`,
+        targetType: 'ExamSession',
+        targetId: sessionId,
+      },
+    });
+    return reviewed;
   }
 
   async removeIncident(sessionId: string, teacherId: string) {

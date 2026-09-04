@@ -13,6 +13,7 @@ import {
   SubmissionMode,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { UpdateResultReleaseDto } from './dto/result-release.dto';
 
 type SubmittedAnswer = {
   questionId: string;
@@ -547,6 +548,42 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       },
       orderBy: { submittedAt: 'desc' },
     });
+  }
+
+  async updateResultRelease(
+    submissionId: string,
+    teacherId: string,
+    input: UpdateResultReleaseDto
+  ) {
+    const submission = await this.prisma.submission.findFirst({
+      where: {
+        id: submissionId,
+        session: { exam: { subject: { teacherId } } },
+      },
+      select: { id: true, session: { select: { examId: true } } },
+    });
+    if (!submission) throw new NotFoundException('Submission not found');
+    const feedback = input.teacherFeedback?.trim() || null;
+    await this.prisma.$transaction([
+      this.prisma.submission.update({
+        where: { id: submissionId },
+        data: { teacherFeedback: feedback },
+      }),
+      this.prisma.exam.update({
+        where: { id: submission.session.examId },
+        data: { showCorrectAnswers: input.showCorrectAnswers },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actorId: teacherId,
+          action: 'RESULT_RELEASE_SETTINGS_UPDATED',
+          targetType: 'Submission',
+          targetId: submissionId,
+          metadata: { showCorrectAnswers: input.showCorrectAnswers },
+        },
+      }),
+    ]);
+    return this.submissionDetail(submissionId, teacherId);
   }
 
   async confirmAnswer(answerId: string, teacherId: string, points: number) {

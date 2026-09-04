@@ -22,6 +22,7 @@ import {
   JoinSubjectDto,
   ReviewJoinRequestDto,
   UpdateSubjectDto,
+  UpdateExamScheduleDto,
   AssignSectionDto,
 } from './dto/subjects.dto';
 import { SubjectsService } from './subjects.service';
@@ -83,6 +84,11 @@ export class SubjectsController {
   @Get('join-requests/mine') @Roles(Role.STUDENT) myRequests(@Req() req: any) {
     return this.subjects.studentJoinRequests(req.user.id);
   }
+  @Patch('join-requests/:requestId/hide')
+  @Roles(Role.STUDENT)
+  hideRequest(@Param('requestId') requestId: string, @Req() req: any) {
+    return this.subjects.hideStudentJoinRequest(req.user.id, requestId);
+  }
   @Get('join-requests/pending') @Roles(Role.TEACHER) pending(@Req() req: any) {
     return this.subjects.pendingJoinRequests(req.user.id);
   }
@@ -105,6 +111,16 @@ export class SubjectsController {
     @Body() body: CreateExamDto
   ) {
     return this.subjects.createExam(id, req.user.id, body);
+  }
+  @Patch(':id/exams/:examId/schedule')
+  @Roles(Role.TEACHER)
+  updateExamSchedule(
+    @Param('id') id: string,
+    @Param('examId') examId: string,
+    @Req() req: any,
+    @Body() body: UpdateExamScheduleDto
+  ) {
+    return this.subjects.updateExamSchedule(id, examId, req.user.id, body);
   }
   @Post(':id/exams/:examId/stop') @Roles(Role.TEACHER) stopExam(
     @Param('id') id: string,

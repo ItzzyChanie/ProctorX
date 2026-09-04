@@ -7,6 +7,7 @@ import {
   ParseEnumPipe,
   ParseFilePipeBuilder,
   Post,
+  Patch,
   Query,
   Req,
   UploadedFile,
@@ -26,6 +27,7 @@ import {
   SubmitDto,
   TeacherSessionAction,
 } from './dto/sessions.dto';
+import { UpdateResultReleaseDto } from './dto/result-release.dto';
 import { GradingService } from './grading.service';
 import { MonitoringAnalysisService } from './monitoring-analysis.service';
 import { SessionsService } from './sessions.service';
@@ -102,6 +104,19 @@ export class SessionsController {
     @Param('examId') examId: string
   ) {
     return this.grading.listForExam(examId, r.user.id);
+  }
+  @Patch('submissions/:submissionId/release-settings')
+  @Roles(Role.TEACHER)
+  updateReleaseSettings(
+    @Req() r: any,
+    @Param('submissionId') submissionId: string,
+    @Body() body: UpdateResultReleaseDto
+  ) {
+    return this.grading.updateResultRelease(
+      submissionId,
+      r.user.id,
+      body
+    );
   }
   @Post('grades/confirm') @Roles(Role.TEACHER) confirm(
     @Req() r: any,

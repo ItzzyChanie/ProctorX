@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Post,
+  Patch,
   Req,
   Res,
   StreamableFile,
@@ -15,6 +16,7 @@ import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { ReportsService } from './reports.service';
+import { ReviewProctoringDto } from './dto/review-proctoring.dto';
 
 @Controller('reports')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -24,6 +26,20 @@ export class ReportsController {
     return this.reports.incidents(req.user.id);
   }
   
+  @Patch('incidents/:sessionId/review')
+  @Roles(Role.TEACHER)
+  reviewProctoring(
+    @Req() req: any,
+    @Param('sessionId') sessionId: string,
+    @Body() body: ReviewProctoringDto
+  ) {
+    return this.reports.reviewProctoring(
+      sessionId,
+      req.user.id,
+      body.decision
+    );
+  }
+
   @Delete('incidents/:sessionId') @Roles(Role.TEACHER) removeIncident(
     @Req() req: any,
     @Param('sessionId') sessionId: string

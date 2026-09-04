@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
-import { LogIn } from 'lucide-react';
+import { CheckCircle2, LogIn, TriangleAlert } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Button } from '../../components/ui/Button';
@@ -14,7 +14,9 @@ type Session = {
   subjectCode: string;
   startedAt: string;
   durationSec: number | null;
-  reviewStatus: 'CLEARED' | 'UNDER_REVIEW';
+  reviewStatus: 'NO_FLAGS' | 'FLAGGED' | 'NEGATIVE' | 'POSITIVE';
+  proctorReviewedAt: string | null;
+  submission: { id: string; gradeStatus: string; totalScore: number | null; maxScore: number } | null;
   term?:string;
   academicPeriod?:{id:string;academicYear:string;semester:'FIRST'|'SECOND'};
 };
@@ -29,6 +31,7 @@ export default function MySessions() {
     queryKey: ['student-sessions'],
     queryFn: async () =>
       (await api.get<Session[]>('/students/me/sessions')).data,
+    refetchInterval: 5_000,
   });
   const periodOptions=useQuery({queryKey:['academic-periods'],queryFn:async()=>(await api.get<{id:string;academicYear:string;semester:'FIRST'|'SECOND'}[]>('/academic-periods')).data});
   const periods=periodOptions.data??[...new Map(rows.filter(x=>x.academicPeriod).map(x=>[x.academicPeriod!.id,x.academicPeriod!])).values()];
@@ -45,7 +48,7 @@ export default function MySessions() {
           <div className="flex items-center justify-between gap-3">
             <CardHeader
               title="Session history"
-              subtitle="Every monitored assessment you've taken"
+              subtitle="Monitoring review status is separate from your exam grade"
             />
             <Button
               variant="ghost"
@@ -73,6 +76,11 @@ export default function MySessions() {
             You have not joined any monitored sessions yet.
           </div>
         )}
+        {!isLoading && !isError && rows.length > 0 && visible.length === 0 && (
+          <div className="p-5 text-sm text-text-2">
+            No sessions match the selected semester and term.
+          </div>
+        )}
         {visible.map((r, i) => (
           <div
             key={r.sessionId}
@@ -91,15 +99,54 @@ export default function MySessions() {
                   : `${Math.round(r.durationSec / 60)}m`}
               </div>
             </div>
-            <Chip
-              color={
-                r.reviewStatus === 'CLEARED'
-                  ? 'var(--risk-low)'
-                  : 'var(--risk-med)'
-              }
-            >
-              {r.reviewStatus === 'CLEARED' ? 'Cleared' : 'Under Review'}
-            </Chip>
+            <div className="max-w-72 text-right">
+              <Chip
+                color={
+                  r.reviewStatus === 'POSITIVE'
+                    ? 'var(--risk-high)'
+                    : r.reviewStatus === 'FLAGGED'
+                      ? 'var(--risk-med)'
+                      : 'var(--risk-low)'
+                }
+              >
+                <span className="inline-flex items-center gap-1">
+                  {r.reviewStatus === 'NEGATIVE' && <CheckCircle2 size={13} />}
+                  {r.reviewStatus === 'POSITIVE' && <TriangleAlert size={13} />}
+                  {r.reviewStatus === 'NEGATIVE'
+                    ? 'NEGATIVE — No issue'
+                    : r.reviewStatus === 'POSITIVE'
+                      ? 'POSITIVE — Violation confirmed'
+                      : r.reviewStatus === 'FLAGGED'
+                        ? 'Flagged — Teacher review pending'
+                        : 'No monitoring flags detected'}
+                </span>
+              </Chip>
+              {r.reviewStatus === 'FLAGGED' && (
+                <p className="mt-1.5 text-[11px] leading-4 text-text-3">
+                  The proctoring system detected monitoring events. Your teacher
+                  has not made a final decision yet.
+                </p>
+              )}
+              {r.reviewStatus === 'NEGATIVE' && (
+                <p className="mt-1.5 text-[11px] leading-4 text-risk-low">
+                  Your teacher reviewed the flags and found no violation.
+                </p>
+              )}
+              {r.reviewStatus === 'POSITIVE' && (
+                <p className="mt-1.5 text-[11px] leading-4 text-risk-high">
+                  Your teacher reviewed the session and confirmed a violation.
+                </p>
+              )}
+              {r.submission && (
+                <Button
+                  variant="ghost"
+                  className="mt-2 !px-2.5 !py-1.5"
+                  onClick={() => navigate(`/student/sessions/${r.sessionId}/result`)}
+                >
+                  {r.submission.gradeStatus === 'TEACHER_CONFIRMED' ? 'View result' : 'Grading pending'}
+                </Button>
+              )}
+            </div>
           </div>
         ))}
       </Card>
