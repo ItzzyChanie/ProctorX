@@ -15,17 +15,19 @@ import { readFile } from 'fs/promises';
 import { basename, extname } from 'path';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { SessionsGateway } from '../sessions/sessions.gateway';
 
 @Injectable()
 export class ReportsService implements OnModuleInit, OnModuleDestroy {
   private syncTimer?: NodeJS.Timeout;
   constructor(
     private prisma: PrismaService,
-    private ai: AiService
+    private ai: AiService,
+    private gateway: SessionsGateway
   ) {}
   onModuleInit() {
     this.syncTimer = setInterval(
-      () => void this.syncPendingDeanReports(),
+      () => void this.syncPendingDeanReports().catch(() => undefined),
       10_000
     );
   }
@@ -104,12 +106,17 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async incidents(teacherId: string) {
+  async incidents(teacherId: string, archived = false) {
     const sessions = await this.prisma.examSession.findMany({
-      where: { exam: { subject: { teacherId } }, events: { some: {} } },
+      where: {
+        exam: { subject: { teacherId } },
+        events: { some: {} },
+        integrityArchivedAt: archived ? { not: null } : null,
+      },
       select: {
         id: true,
         startedAt: true,
+        status: true,
         proctorReviewDecision: true,
         proctorReviewedAt: true,
         student: {
@@ -120,6 +127,12 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
             title: true,
             term: true,
             academicPeriod: true,
+            status: true,
+            endsAt: true,
+            sessions: {
+              where: { status: 'IN_PROGRESS' },
+              select: { id: true },
+            },
             subject: { select: { code: true } },
           },
         },
@@ -134,12 +147,28 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       take: 100,
     });
     return sessions.map((session) => {
+      const {
+        exam: rawExam,
+        status: sessionStatus,
+        ...report
+      } = session;
+      const {
+        status,
+        endsAt,
+        sessions: activeSessions,
+        ...exam
+      } = rawExam;
       const score = this.calibratedScore(
         session.scoreHistory[0],
         session.events.filter((event) => event.type === 'TAB_SWITCH').length
       );
       return {
-        ...session,
+        ...report,
+        exam,
+        playbackAvailable:
+          sessionStatus === 'COMPLETED' &&
+          (status !== 'PUBLISHED' || (!!endsAt && endsAt <= new Date())) &&
+          activeSessions.length === 0,
         scoreHistory: [score],
         eventCount: session.events.length,
         latestEventAt: session.events[0]?.occurredAt ?? session.startedAt,
@@ -154,31 +183,61 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
   ) {
     const session = await this.prisma.examSession.findFirst({
       where: { id: sessionId, exam: { subject: { teacherId } } },
-      select: { id: true },
+      select: {
+        id: true,
+        startedAt: true,
+        proctorReviewDecision: true,
+        exam: { select: { subject: { select: { teacher: { select: { institutionId: true } } } } } },
+      },
     });
     if (!session) throw new NotFoundException('Session review not found');
 
-    const reviewed = await this.prisma.examSession.update({
-      where: { id: sessionId },
-      data: {
-        proctorReviewDecision: decision as ProctorReviewDecision,
-        proctorReviewedAt: new Date(),
-        proctorReviewedById: teacherId,
-      },
-      select: {
-        id: true,
-        proctorReviewDecision: true,
-        proctorReviewedAt: true,
-      },
+    const reviewedAt = new Date();
+    const reviewed = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.examSession.update({
+        where: { id: sessionId },
+        data: {
+          proctorReviewDecision: decision as ProctorReviewDecision,
+          proctorReviewedAt: reviewedAt,
+          proctorReviewedById: teacherId,
+        },
+        select: {
+          id: true,
+          proctorReviewDecision: true,
+          proctorReviewedAt: true,
+        },
+      });
+      await tx.proctorReview.create({
+        data: {
+          sessionId,
+          teacherId,
+          previousDecision: session.proctorReviewDecision,
+          decision: decision as ProctorReviewDecision,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: teacherId,
+          action: `PROCTOR_REVIEW_${decision}`,
+          targetType: 'ExamSession',
+          targetId: sessionId,
+          metadata: { previousDecision: session.proctorReviewDecision },
+        },
+      });
+      const institutionId = session.exam.subject.teacher.institutionId;
+      if (institutionId)
+        await tx.generatedReport.updateMany({
+          where: {
+            requestedBy: { institutionId },
+            staleAt: null,
+            dateFrom: { lte: session.startedAt },
+            dateTo: { gte: session.startedAt },
+          },
+          data: { staleAt: reviewedAt },
+        });
+      return result;
     });
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: teacherId,
-        action: `PROCTOR_REVIEW_${decision}`,
-        targetType: 'ExamSession',
-        targetId: sessionId,
-      },
-    });
+    this.gateway.emitIntegrityReviewUpdated();
     return reviewed;
   }
 
@@ -190,19 +249,55 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
 
     if (!session) throw new NotFoundException('Incident report not found');
     await this.prisma.$transaction([
-      this.prisma.incident.deleteMany({ where: { sessionId } }),
-      this.prisma.proctoringEvent.deleteMany({ where: { sessionId } }),
-      this.prisma.suspicionScoreSnapshot.deleteMany({ where: { sessionId } }),
+      this.prisma.examSession.update({
+        where: { id: sessionId },
+        data: { integrityArchivedAt: new Date() },
+      }),
+      this.prisma.incident.updateMany({
+        where: { sessionId },
+        data: { status: 'RESOLVED', resolvedAt: new Date() },
+      }),
     ]);
     await this.prisma.auditLog.create({
       data: {
         actorId: teacherId,
-        action: 'INCIDENT_REPORT_DELETED',
+        action: 'INCIDENT_REPORT_ARCHIVED',
         targetType: 'ExamSession',
         targetId: sessionId,
       },
     });
-    return { deleted: true };
+    return { archived: true };
+  }
+
+  async restoreIncident(sessionId: string, teacherId: string) {
+    const session = await this.prisma.examSession.findFirst({
+      where: {
+        id: sessionId,
+        integrityArchivedAt: { not: null },
+        exam: { subject: { teacherId } },
+      },
+      select: { id: true },
+    });
+    if (!session) throw new NotFoundException('Archived incident report not found');
+    await this.prisma.$transaction([
+      this.prisma.examSession.update({
+        where: { id: sessionId },
+        data: { integrityArchivedAt: null },
+      }),
+      this.prisma.incident.updateMany({
+        where: { sessionId },
+        data: { status: 'OPEN', resolvedAt: null },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actorId: teacherId,
+          action: 'INCIDENT_REPORT_RESTORED',
+          targetType: 'ExamSession',
+          targetId: sessionId,
+        },
+      }),
+    ]);
+    return { restored: true };
   }
 
   async correlation(examId: string, teacherId: string) {
@@ -317,6 +412,10 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       format: x.format,
       status: x.status,
       createdAt: x.createdAt,
+      staleAt: x.staleAt,
+      dateFrom: x.dateFrom,
+      dateTo: x.dateTo,
+      filters: x.filters,
       downloadPath:
         x.status === ReportJobStatus.COMPLETE
           ? `/dean/reports/${x.id}/download`
@@ -389,6 +488,12 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       };
       const sessions = await this.prisma.examSession.findMany({
         where: {
+          proctorReviewDecision: {
+            in: [
+              ProctorReviewDecision.NEGATIVE,
+              ProctorReviewDecision.POSITIVE,
+            ],
+          },
           startedAt: { gte: dateFrom, lte: dateTo },
           exam: {
             subject: {
@@ -410,16 +515,22 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
         },
       });
       const events = sessions.flatMap((s) =>
-        s.events.map((e) => ({
-          type: e.type,
-          intensity: e.intensity,
-          occurred_at: e.occurredAt.toISOString(),
-        }))
+        s.proctorReviewDecision === ProctorReviewDecision.POSITIVE
+          ? s.events.map((e) => ({
+              type: e.type,
+              intensity: e.intensity,
+              occurred_at: e.occurredAt.toISOString(),
+            }))
+          : []
       );
       const average = sessions.length
         ? Math.round(
             sessions.reduce(
-              (sum, s) => sum + (s.scoreHistory[0]?.score ?? 0),
+              (sum, s) =>
+                sum +
+                (s.proctorReviewDecision === ProctorReviewDecision.NEGATIVE
+                  ? 0
+                  : (s.scoreHistory[0]?.score ?? 0)),
               0
             ) / sessions.length
           )

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bar,
   BarChart,
@@ -19,6 +19,7 @@ import { axisProps, tooltipProps } from '../../components/charts/chartTheme';
 import { useChartPalette, riskTier } from '../../lib/chartPalette';
 import { useTheme } from '../../lib/useTheme';
 import { api } from '../../lib/api';
+import { notificationSocket } from '../../lib/socket';
 type Data = {
   academicPeriods: {
     id: string;
@@ -52,6 +53,12 @@ type Data = {
   };
 };
 export default function Analytics() {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const refresh = () => void queryClient.invalidateQueries({ queryKey: ['dean-analytics'] });
+    notificationSocket.on('integrity:review-updated', refresh);
+    return () => { notificationSocket.off('integrity:review-updated', refresh); };
+  }, [queryClient]);
   const { dark } = useTheme(),
     p = useChartPalette(dark);
   const [filters, setFilters] = useState({

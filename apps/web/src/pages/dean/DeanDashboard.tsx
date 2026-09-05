@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bar,
   BarChart,
@@ -13,90 +13,120 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-} from "recharts"
+} from 'recharts';
 import {
   AlertTriangle,
   FileText,
   FileWarning,
   Shield,
   Video,
-} from "lucide-react"
-import { useNavigate } from "react-router-dom"
-import { DashboardLayout } from "../../components/layout/DashboardLayout"
-import { Card, CardHeader } from "../../components/ui/Card"
-import { HeroBanner } from "../../components/ui/HeroBanner"
-import { Button } from "../../components/ui/Button"
-import { KPI } from "../../components/ui/KPI"
+} from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { DashboardLayout } from '../../components/layout/DashboardLayout';
+import { notificationSocket } from '../../lib/socket';
+import { Card, CardHeader } from '../../components/ui/Card';
+import { HeroBanner } from '../../components/ui/HeroBanner';
+import { Button } from '../../components/ui/Button';
+import { KPI } from '../../components/ui/KPI';
 import {
   axisProps,
   INCIDENT_COLORS,
   tooltipProps,
-} from "../../components/charts/chartTheme"
-import { useChartPalette } from "../../lib/chartPalette"
-import { useTheme } from "../../lib/useTheme"
-import { api } from "../../lib/api"
+} from '../../components/charts/chartTheme';
+import { useChartPalette } from '../../lib/chartPalette';
+import { useTheme } from '../../lib/useTheme';
+import { api } from '../../lib/api';
 type Data = {
   kpis: {
-    monitoredSessionsThisTerm: number
-    collegeWideAvgSuspicion: number
-    incidentRatePercent: number
-    sectionsAboveThreshold: number
-  }
+    monitoredSessionsThisTerm: number;
+    collegeWideAvgSuspicion: number;
+    incidentRatePercent: number;
+    sectionsAboveThreshold: number;
+  };
   incidenceRateBySection: {
-    program: string
-    yearLevel: string
-    sectionName: string
-    section: string
-    participantCount: number
-    flaggedStudentCount: number
-    rate: number
-  }[]
+    program: string;
+    yearLevel: string;
+    sectionName: string;
+    section: string;
+    participantCount: number;
+    flaggedStudentCount: number;
+    rate: number;
+  }[];
   incidentsByType: Array<{
-    type: string
-    count: number
-  }>
+    type: string;
+    count: number;
+  }>;
   incidenceRateTrend: Array<{
-    week: string
-    rate: number
-  }>
+    week: string;
+    rate: number;
+  }>;
   incidenceRateBySubject: Array<{
-    subject: string
-    rate: number
-  }>
-  termComparison: { term:string; sessions:number; incidentRate:number; avgSuspicion:number }[]
-  academicPeriods: AcademicPeriod[]
-}
-type AcademicPeriod={id:string;academicYear:string;semester:"FIRST"|"SECOND";status:"ACTIVE"|"CLOSED";startsAt?:string;endsAt?:string;_count:{exams:number}}
+    subject: string;
+    rate: number;
+  }>;
+  termComparison: {
+    term: string;
+    sessions: number;
+    incidentRate: number;
+    avgSuspicion: number;
+  }[];
+  academicPeriods: AcademicPeriod[];
+};
+type AcademicPeriod = {
+  id: string;
+  academicYear: string;
+  semester: 'FIRST' | 'SECOND';
+  status: 'ACTIVE' | 'CLOSED';
+  startsAt?: string;
+  endsAt?: string;
+  _count: { exams: number };
+};
 export default function DeanDashboard() {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const refresh = () =>
+      void queryClient.invalidateQueries({ queryKey: ['dean-dashboard'] });
+    notificationSocket.on('integrity:review-updated', refresh);
+    return () => {
+      notificationSocket.off('integrity:review-updated', refresh);
+    };
+  }, [queryClient]);
   const { dark } = useTheme(),
     p = useChartPalette(dark),
-    nav = useNavigate()
-  const [filters,setFilters]=useState({academicPeriodId:"",term:""})
-  const query=useMemo(()=>new URLSearchParams(Object.entries(filters).filter(([,v])=>v)).toString(),[filters])
+    nav = useNavigate();
+  const [filters, setFilters] = useState({ academicPeriodId: '', term: '' });
+  const query = useMemo(
+    () =>
+      new URLSearchParams(
+        Object.entries(filters).filter(([, v]) => v)
+      ).toString(),
+    [filters]
+  );
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["dean-dashboard",query],
-    queryFn: async () => (await api.get<Data>(`/dean/dashboard${query?`?${query}`:""}`)).data,
+    queryKey: ['dean-dashboard', query],
+    queryFn: async () =>
+      (await api.get<Data>(`/dean/dashboard${query ? `?${query}` : ''}`)).data,
     refetchInterval: 5_000,
-  })
-  const k = data?.kpis
-  const incidentColors = INCIDENT_COLORS(p)
+  });
+  const k = data?.kpis;
+  const incidentColors = INCIDENT_COLORS(p);
   const incidentData =
     data?.incidentsByType.map((item, index) => ({
       name: item.type
         .toLowerCase()
-        .replace(/_/g, " ")
+        .replace(/_/g, ' ')
         .replace(/\b\w/g, (letter: string) => letter.toUpperCase()),
       value: item.count,
       color: incidentColors[index % incidentColors.length],
-    })) ?? []
-  const sectionChart = (program: "CS" | "IT", title: string) => {
+    })) ?? [];
+  const sectionChart = (program: 'CS' | 'IT', title: string) => {
     const rows =
       data?.incidenceRateBySection
         .filter((item) => item.program === program)
         .map((item) => ({
           ...item,
-          label: item.section.replace(`${program} · `, ""),
-        })) ?? []
+          label: item.section.replace(`${program} · `, ''),
+        })) ?? [];
     return (
       <Card className="h-full">
         <CardHeader
@@ -132,7 +162,7 @@ export default function DeanDashboard() {
                   {...tooltipProps(p)}
                   formatter={(value, _name, item) => [
                     `${value}% (${item.payload.flaggedStudentCount} of ${item.payload.participantCount} students)`,
-                    "Flagged student rate",
+                    'Flagged student rate',
                   ]}
                 />
                 <Bar dataKey="rate" fill={p.violet} />
@@ -145,8 +175,8 @@ export default function DeanDashboard() {
           </p>
         )}
       </Card>
-    )
-  }
+    );
+  };
   return (
     <DashboardLayout
       role="dean"
@@ -174,16 +204,70 @@ export default function DeanDashboard() {
               variant="ghost"
               icon={FileText}
               className="!bg-white/15 !text-white !border-white/35 hover:!bg-white/25 hover:!border-white/60 hover:shadow-lg"
-              onClick={() => nav("/dean/analytics")}
+              onClick={() => nav('/dean/analytics')}
             >
               View full analytics
             </Button>
           }
         />
-        <Card><CardHeader title="Academic period scope" subtitle="Every chart and overview total follows the selected semester and term."/><div className="grid gap-3 md:grid-cols-3"><label className="text-xs font-semibold">Semester<select className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2.5" value={filters.academicPeriodId} onChange={e=>setFilters(x=>({...x,academicPeriodId:e.target.value}))}><option value="">All semesters</option>{data?.academicPeriods.map(x=><option key={x.id} value={x.id}>{x.academicYear} · {x.semester === "FIRST"?"First":"Second"} Semester{x.status==="CLOSED"?" (Closed)":""}</option>)}</select></label><label className="text-xs font-semibold">Term<select className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2.5" value={filters.term} onChange={e=>setFilters(x=>({...x,term:e.target.value}))}><option value="">All terms</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option><option value="UNSPECIFIED">Legacy / Unspecified</option></select></label><div className="flex items-end"><Button variant="ghost" onClick={()=>setFilters({academicPeriodId:"",term:""})}>Clear filters</Button></div></div></Card>
+        <Card>
+          <CardHeader
+            title="Academic period scope"
+            subtitle="Every chart and overview total follows the selected semester and term."
+          />
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="text-xs font-semibold">
+              Semester
+              <select
+                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2.5"
+                value={filters.academicPeriodId}
+                onChange={(e) =>
+                  setFilters((x) => ({
+                    ...x,
+                    academicPeriodId: e.target.value,
+                  }))
+                }
+              >
+                <option value="">All semesters</option>
+                {data?.academicPeriods.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.academicYear} ·{' '}
+                    {x.semester === 'FIRST' ? 'First' : 'Second'} Semester
+                    {x.status === 'CLOSED' ? ' (Closed)' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-semibold">
+              Term
+              <select
+                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2.5"
+                value={filters.term}
+                onChange={(e) =>
+                  setFilters((x) => ({ ...x, term: e.target.value }))
+                }
+              >
+                <option value="">All terms</option>
+                <option value="PRELIMINARY">Preliminary</option>
+                <option value="MIDTERM">Midterm</option>
+                <option value="SEMI_FINAL">Semi-final</option>
+                <option value="FINAL">Final</option>
+                <option value="UNSPECIFIED">Legacy / Unspecified</option>
+              </select>
+            </label>
+            <div className="flex items-end">
+              <Button
+                variant="ghost"
+                onClick={() => setFilters({ academicPeriodId: '', term: '' })}
+              >
+                Clear filters
+              </Button>
+            </div>
+          </div>
+        </Card>
         <div
           className="grid gap-4"
-          style={{ gridTemplateColumns: "repeat(4,1fr)" }}
+          style={{ gridTemplateColumns: 'repeat(4,1fr)' }}
         >
           <KPI
             label="Monitored sessions"
@@ -211,8 +295,8 @@ export default function DeanDashboard() {
           />
         </div>
         <div className="grid gap-5 xl:grid-cols-2">
-          {sectionChart("CS", "CS")}
-          {sectionChart("IT", "IT")}
+          {sectionChart('CS', 'CS')}
+          {sectionChart('IT', 'IT')}
         </div>
         <div className="grid gap-5 xl:grid-cols-2">
           <Card>
@@ -290,23 +374,55 @@ export default function DeanDashboard() {
           </Card>
         </div>
         <Card>
-            <CardHeader title="Incident rate by subject" />
-            {data?.incidenceRateBySubject.length ? (
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={data.incidenceRateBySubject}>
-                  <CartesianGrid stroke={p.border} vertical={false} />
-                  <XAxis dataKey="subject" {...axisProps(p)} />
-                  <YAxis {...axisProps(p)} />
-                  <Tooltip {...tooltipProps(p)} />
-                  <Bar dataKey="rate" fill={p.cyan} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <p className="text-sm text-text-2">No subject data.</p>
-            )}
+          <CardHeader title="Incident rate by subject" />
+          {data?.incidenceRateBySubject.length ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={data.incidenceRateBySubject}>
+                <CartesianGrid stroke={p.border} vertical={false} />
+                <XAxis dataKey="subject" {...axisProps(p)} />
+                <YAxis {...axisProps(p)} />
+                <Tooltip {...tooltipProps(p)} />
+                <Bar dataKey="rate" fill={p.cyan} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-sm text-text-2">No subject data.</p>
+          )}
         </Card>
-        <Card><CardHeader title="Term comparison" subtitle="Compare incident rate and average suspicion without losing prior-term history."/>{data?.termComparison.length?<ResponsiveContainer width="100%" height={240}><BarChart data={data.termComparison.map(x=>({...x,term:x.term.replace("_"," ")}))}><CartesianGrid stroke={p.border} vertical={false}/><XAxis dataKey="term" {...axisProps(p)}/><YAxis domain={[0,100]} unit="%" {...axisProps(p)}/><Tooltip {...tooltipProps(p)}/><Bar dataKey="incidentRate" name="Incident rate" fill={p.brand}/><Bar dataKey="avgSuspicion" name="Avg. suspicion" fill={p.cyan}/></BarChart></ResponsiveContainer>:<p className="text-sm text-text-2">No term data yet.</p>}</Card>
+        <Card>
+          <CardHeader
+            title="Term comparison"
+            subtitle="Compare incident rate and average suspicion without losing prior-term history."
+          />
+          {data?.termComparison.length ? (
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart
+                data={data.termComparison.map((x) => ({
+                  ...x,
+                  term: x.term.replace('_', ' '),
+                }))}
+              >
+                <CartesianGrid stroke={p.border} vertical={false} />
+                <XAxis dataKey="term" {...axisProps(p)} />
+                <YAxis domain={[0, 100]} unit="%" {...axisProps(p)} />
+                <Tooltip {...tooltipProps(p)} />
+                <Bar
+                  dataKey="incidentRate"
+                  name="Incident rate"
+                  fill={p.brand}
+                />
+                <Bar
+                  dataKey="avgSuspicion"
+                  name="Avg. suspicion"
+                  fill={p.cyan}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-sm text-text-2">No term data yet.</p>
+          )}
+        </Card>
       </div>
     </DashboardLayout>
-  )
+  );
 }

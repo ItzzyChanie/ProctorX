@@ -181,11 +181,45 @@ export class SessionsGateway {
     this.server.to(`exam:${examId}`).emit(event, payload);
   }
 
-  warn(sessionId: string, message: string) {
-    this.server.to(`student:${sessionId}`).emit('student:warn', { message });
+  warn(
+    sessionId: string,
+    warning: { id: string; message: string; sentAt: Date }
+  ) {
+    this.server.to(`student:${sessionId}`).emit('student:warn', warning);
   }
 
   lock(sessionId: string, locked: boolean) {
     this.server.to(`student:${sessionId}`).emit('student:lock', { locked });
+  }
+
+  timeAdjusted(
+    examId: string,
+    sessionId: string,
+    remainingSeconds: number,
+    extraTimeSeconds: number
+  ) {
+    const payload = { sessionId, remainingSeconds, extraTimeSeconds };
+    this.server
+      .to(`student:${sessionId}`)
+      .emit('student:time-adjusted', payload);
+    this.emitMonitor(examId, 'monitor:time-adjusted', payload);
+  }
+
+  warningAcknowledged(examId: string, sessionId: string, warningId: string) {
+    this.emitMonitor(examId, 'monitor:warning-acknowledged', {
+      sessionId,
+      warningId,
+      acknowledgedAt: new Date(),
+    });
+  }
+
+  resume(sessionId: string) {
+    this.server.to(`student:${sessionId}`).emit('student:resume', {
+      sessionId,
+    });
+  }
+
+  emitIntegrityReviewUpdated() {
+    this.server.emit('integrity:review-updated');
   }
 }

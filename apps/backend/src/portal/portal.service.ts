@@ -193,7 +193,12 @@ export class PortalService {
         scoreHistory: { orderBy: { computedAt: 'desc' } },
         incidents: { where: { status: 'OPEN' }, select: { id: true } },
         submission: {
-          select: { id: true, gradeStatus: true, totalScore: true, maxScore: true },
+          select: {
+            id: true,
+            gradeStatus: true,
+            totalScore: true,
+            maxScore: true,
+          },
         },
       },
       orderBy: { startedAt: 'desc' },
@@ -293,7 +298,11 @@ export class PortalService {
     const rows: Prisma.NotificationCreateManyInput[] = [];
     for (const exam of exams) {
       const subject = exam.subject.subjectCode ?? exam.subject.name;
-      if (exam.scheduledAt && exam.scheduledAt > now && exam.scheduledAt <= sevenDays)
+      if (
+        exam.scheduledAt &&
+        exam.scheduledAt > now &&
+        exam.scheduledAt <= sevenDays
+      )
         rows.push({
           userId,
           type: 'UPCOMING_ASSESSMENT',
@@ -321,15 +330,22 @@ export class PortalService {
     for (const session of reviewed)
       rows.push({
         userId,
-        type: session.proctorReviewDecision === 'NEGATIVE' ? 'PROCTOR_REVIEW_CLEAR' : 'PROCTOR_REVIEW_WARN',
-        message: session.proctorReviewDecision === 'NEGATIVE'
-          ? `Your teacher reviewed ${session.exam.title} and found no violation.`
-          : `Your teacher reviewed ${session.exam.title} and confirmed a violation.`,
+        type:
+          session.proctorReviewDecision === 'NEGATIVE'
+            ? 'PROCTOR_REVIEW_CLEAR'
+            : 'PROCTOR_REVIEW_WARN',
+        message:
+          session.proctorReviewDecision === 'NEGATIVE'
+            ? `Your teacher reviewed ${session.exam.title} and found no violation.`
+            : `Your teacher reviewed ${session.exam.title} and confirmed a violation.`,
         dedupeKey: `proctor-review:${userId}:${session.id}:${session.proctorReviewDecision}:${session.proctorReviewedAt?.toISOString() ?? 'reviewed'}`,
         link: '/student/sessions',
       });
     if (rows.length)
-      await this.prisma.notification.createMany({ data: rows, skipDuplicates: true });
+      await this.prisma.notification.createMany({
+        data: rows,
+        skipDuplicates: true,
+      });
   }
 
   async readNotification(userId: string, id: string) {
@@ -533,7 +549,9 @@ export class PortalService {
         term: submission.session.exam.term,
         academicPeriod: submission.session.exam.academicPeriod,
         subject: {
-          code: submission.session.exam.subject.subjectCode ?? submission.session.exam.subject.code,
+          code:
+            submission.session.exam.subject.subjectCode ??
+            submission.session.exam.subject.code,
           name: submission.session.exam.subject.name,
         },
       },
@@ -580,29 +598,43 @@ export class PortalService {
       sessionId: submission.sessionId,
       examTitle: submission.session.exam.title,
       subjectId: submission.session.exam.subjectId,
-      subjectCode: submission.session.exam.subject.subjectCode ?? submission.session.exam.subject.code,
+      subjectCode:
+        submission.session.exam.subject.subjectCode ??
+        submission.session.exam.subject.code,
       subjectName: submission.session.exam.subject.name,
       term: submission.session.exam.term,
       academicPeriod: submission.session.exam.academicPeriod,
       submittedAt: submission.submittedAt,
       score: submission.totalScore!,
       maxScore: submission.maxScore,
-      percentage: submission.maxScore ? Math.round(submission.totalScore! / submission.maxScore * 100) : 0,
+      percentage: submission.maxScore
+        ? Math.round((submission.totalScore! / submission.maxScore) * 100)
+        : 0,
       timeMinutes: submission.session.endedAt
-        ? Math.max(0, Math.round((+submission.session.endedAt - +submission.session.startedAt) / 60000))
+        ? Math.max(
+            0,
+            Math.round(
+              (+submission.session.endedAt - +submission.session.startedAt) /
+                60000
+            )
+          )
         : 0,
     }));
-    const subjects = [...new Set(attempts.map((item) => item.subjectId))].map((subjectId) => {
-      const rows = attempts.filter((item) => item.subjectId === subjectId);
-      return {
-        subjectId,
-        subjectCode: rows[0]!.subjectCode,
-        subjectName: rows[0]!.subjectName,
-        attempts: rows.length,
-        averageScore: Math.round(rows.reduce((sum, row) => sum + row.percentage, 0) / rows.length),
-        totalTimeMinutes: rows.reduce((sum, row) => sum + row.timeMinutes, 0),
-      };
-    });
+    const subjects = [...new Set(attempts.map((item) => item.subjectId))].map(
+      (subjectId) => {
+        const rows = attempts.filter((item) => item.subjectId === subjectId);
+        return {
+          subjectId,
+          subjectCode: rows[0]!.subjectCode,
+          subjectName: rows[0]!.subjectName,
+          attempts: rows.length,
+          averageScore: Math.round(
+            rows.reduce((sum, row) => sum + row.percentage, 0) / rows.length
+          ),
+          totalTimeMinutes: rows.reduce((sum, row) => sum + row.timeMinutes, 0),
+        };
+      }
+    );
     return { attempts, subjects };
   }
 
@@ -630,8 +662,12 @@ export class PortalService {
           (session) => session.status === SessionStatus.COMPLETED
         ).length >= x.subject._count.enrollments;
       return {
+        id: x.id,
         examId: x.id,
         title: x.title,
+        version: x.version,
+        versionGroupId: x.versionGroupId,
+        subject: { code: x.subject.code, name: x.subject.name },
         subjectCode: x.subject.code,
         term: x.term,
         academicPeriod: x.academicPeriod,
@@ -869,14 +905,21 @@ export class PortalService {
 
     if (!row || row.session.exam.subject.teacherId !== teacherId)
       throw new ForbiddenException();
-    const saved = await this.prisma.raiseHandRequest.update({
-      where: { id },
-      data: { resolvedAt: new Date() },
-    });
-    this.gateway.warn(
-      row.sessionId,
-      'Your teacher has resolved your raised-hand request.'
-    );
+    const [saved, warning] = await this.prisma.$transaction([
+      this.prisma.raiseHandRequest.update({
+        where: { id },
+        data: { resolvedAt: new Date() },
+      }),
+      this.prisma.proctorWarning.create({
+        data: {
+          sessionId: row.sessionId,
+          teacherId,
+          message: 'Your teacher has resolved your raised-hand request.',
+        },
+        select: { id: true, message: true, sentAt: true },
+      }),
+    ]);
+    this.gateway.warn(row.sessionId, warning);
     return saved;
   }
 
@@ -1267,19 +1310,31 @@ export class PortalService {
       exam: { term: string };
       events: unknown[];
       scoreHistory: Array<{ score: number }>;
-    }>
+      proctorReviewDecision?: string;
+    }>,
+    reviewedOnly = false
   ) {
     return ['PRELIMINARY', 'MIDTERM', 'SEMI_FINAL', 'FINAL'].map((term) => {
-      const rows = sessions.filter((session) => session.exam.term === term);
-      const scores = rows.flatMap(
-        (session) => session.scoreHistory.at(-1)?.score ?? []
+      const rows = sessions.filter(
+        (session) =>
+          session.exam.term === term &&
+          (!reviewedOnly || session.proctorReviewDecision !== 'PENDING')
+      );
+      const scores = rows.flatMap((session) =>
+        session.proctorReviewDecision === 'NEGATIVE'
+          ? [0]
+          : (session.scoreHistory.at(-1)?.score ?? [])
       );
       return {
         term,
         sessions: rows.length,
         incidentRate: rows.length
           ? Math.round(
-              (rows.filter((session) => session.events.length).length /
+              (rows.filter(
+                (session) =>
+                  session.proctorReviewDecision === 'POSITIVE' ||
+                  (!reviewedOnly && session.events.length)
+              ).length /
                 rows.length) *
                 100
             )
@@ -1415,8 +1470,16 @@ export class PortalService {
       }),
     ]);
 
-    const scores = sessions
-        .map((s) => s.scoreHistory[0]?.score)
+    const confirmedSessions = sessions.filter(
+        (session) =>
+          session.proctorReviewDecision !== ProctorReviewDecision.PENDING
+      ),
+      scores = confirmedSessions
+        .map((s) =>
+          s.proctorReviewDecision === ProctorReviewDecision.NEGATIVE
+            ? 0
+            : s.scoreHistory[0]?.score
+        )
         .filter((x): x is number => x !== undefined),
       bySection = new Map<
         string,
@@ -1443,8 +1506,9 @@ export class PortalService {
       byWeek = new Map<string, [Date, number, number]>(),
       types = new Map<string, number>();
 
-    for (const s of sessions) {
-      const incident = s.events.length > 0 ? 1 : 0,
+    for (const s of confirmedSessions) {
+      const incident =
+          s.proctorReviewDecision === ProctorReviewDecision.POSITIVE ? 1 : 0,
         profile = s.student.studentProfile,
         sectionId =
           profile?.sectionId ??
@@ -1475,7 +1539,10 @@ export class PortalService {
       const weekKey = weekStart.toISOString().slice(0, 10),
         week = byWeek.get(weekKey) ?? [weekStart, 0, 0];
       byWeek.set(weekKey, [week[0], week[1] + 1, week[2] + incident]);
-      s.events.forEach((e) => types.set(e.type, (types.get(e.type) ?? 0) + 1));
+      if (incident)
+        s.events.forEach((e) =>
+          types.set(e.type, (types.get(e.type) ?? 0) + 1)
+        );
     }
     const average = (values: number[]) =>
         values.length
@@ -1500,10 +1567,13 @@ export class PortalService {
       kpis: {
         monitoredSessionsThisTerm: sessions.length,
         collegeWideAvgSuspicion: average(scores),
-        incidentRatePercent: sessions.length
+        incidentRatePercent: confirmedSessions.length
           ? Math.round(
-              (sessions.filter((s) => s.events.length > 0).length /
-                sessions.length) *
+              (confirmedSessions.filter(
+                (s) =>
+                  s.proctorReviewDecision === ProctorReviewDecision.POSITIVE
+              ).length /
+                confirmedSessions.length) *
                 100
             )
           : 0,
@@ -1543,7 +1613,7 @@ export class PortalService {
         subject,
         rate: rate(v),
       })),
-      termComparison: this.termComparison(sessions),
+      termComparison: this.termComparison(sessions, true),
       academicPeriods: await this.academicPeriods(institutionId),
     };
   }
@@ -1569,10 +1639,18 @@ export class PortalService {
     });
 
     const pairs = submissions.flatMap((s) =>
-      s.totalScore !== null && s.maxScore > 0 && s.session.scoreHistory[0]
+      s.totalScore !== null &&
+      s.maxScore > 0 &&
+      s.session.proctorReviewDecision !== ProctorReviewDecision.PENDING &&
+      (s.session.scoreHistory[0] ||
+        s.session.proctorReviewDecision === ProctorReviewDecision.NEGATIVE)
         ? [
             {
-              suspicion_score: s.session.scoreHistory[0].score,
+              suspicion_score:
+                s.session.proctorReviewDecision ===
+                ProctorReviewDecision.NEGATIVE
+                  ? 0
+                  : s.session.scoreHistory[0]!.score,
               exam_score: Math.round((s.totalScore / s.maxScore) * 100),
             },
           ]

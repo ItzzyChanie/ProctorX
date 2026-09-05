@@ -12,7 +12,14 @@ import {
   RecordingStatus,
   SessionStatus,
 } from '@prisma/client';
-import { appendFile, mkdir, rename, stat, unlink, writeFile } from 'fs/promises';
+import {
+  appendFile,
+  mkdir,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from 'fs/promises';
 import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 import { join } from 'path';
@@ -33,7 +40,8 @@ export class SessionsService {
       where: { id: studentId },
       select: { institutionId: true },
     });
-    if (!student?.institutionId) throw new ForbiddenException('Institution is not configured');
+    if (!student?.institutionId)
+      throw new ForbiddenException('Institution is not configured');
     const exam = await this.prisma.exam.findFirst({
       where: {
         roomCode: code.trim().toUpperCase(),
@@ -49,6 +57,10 @@ export class SessionsService {
           orderBy: { order: 'asc' },
         },
         subject: true,
+        studentOverrides: {
+          where: { studentId },
+          select: { extraTimeMinutes: true },
+        },
       },
     });
     if (!exam)
@@ -58,7 +70,11 @@ export class SessionsService {
     const now = new Date();
     if (exam.scheduledAt && now < exam.scheduledAt)
       throw new ConflictException('This assessment has not started yet');
-    if (exam.endsAt && now > exam.endsAt)
+    const extraTimeMinutes = exam.studentOverrides[0]?.extraTimeMinutes ?? 0;
+    const personalEndsAt = exam.endsAt
+      ? new Date(+exam.endsAt + extraTimeMinutes * 60_000)
+      : null;
+    if (personalEndsAt && now > personalEndsAt)
       throw new ConflictException('This assessment has already ended');
     return exam;
   }
@@ -79,7 +95,10 @@ export class SessionsService {
       requireCamera: exam.requireCamera,
       requireMicrophone: exam.requireMicrophone,
       questionCount: exam.questions.length,
-      durationMinutes: exam.durationMinutes,
+      durationMinutes:
+        exam.durationMinutes +
+        (exam.studentOverrides[0]?.extraTimeMinutes ?? 0),
+      extraTimeMinutes: exam.studentOverrides[0]?.extraTimeMinutes ?? 0,
       scheduledAt: exam.scheduledAt,
       endsAt: exam.endsAt,
       subject: {
@@ -93,16 +112,37 @@ export class SessionsService {
   async join(code: string, studentId: string) {
     const exam = await this.availableExam(code, studentId);
     const now = new Date();
+    const extraTimeSeconds =
+      (exam.studentOverrides[0]?.extraTimeMinutes ?? 0) * 60;
+    const randomizedQuestionIds = exam.randomizeQuestions
+      ? this.shuffle(exam.questions.map((question) => question.id))
+      : exam.questions.map((question) => question.id);
+    const randomizedOptionIds = Object.fromEntries(
+      exam.questions.map((question) => [
+        question.id,
+        exam.randomizeOptions
+          ? this.shuffle(question.options.map((option) => option.id))
+          : question.options.map((option) => option.id),
+      ])
+    );
     let session = await this.prisma.examSession.findUnique({
       where: { examId_studentId: { examId: exam.id, studentId } },
-      include: { submission: { include: { answers: true } } },
+      include: {
+        submission: { include: { answers: true } },
+        proctorWarnings: {
+          where: { acknowledgedAt: null },
+          orderBy: { sentAt: 'desc' },
+          take: 1,
+        },
+      },
     });
     if (session?.status === SessionStatus.COMPLETED)
       throw new ConflictException('This exam has already been completed');
     if (!session) {
       const scheduledSeconds = exam.endsAt
-        ? Math.max(0, Math.floor((+exam.endsAt - +now) / 1000))
-        : exam.durationMinutes * 60;
+        ? Math.max(0, Math.floor((+exam.endsAt - +now) / 1000)) +
+          extraTimeSeconds
+        : exam.durationMinutes * 60 + extraTimeSeconds;
       session = await this.prisma.examSession.create({
         data: {
           examId: exam.id,
@@ -112,12 +152,22 @@ export class SessionsService {
           timerStartedAt: now,
           activeStartedAt: now,
           lastHeartbeatAt: now,
+          extraTimeSeconds,
+          questionOrder: randomizedQuestionIds,
+          optionOrder: randomizedOptionIds,
           remainingSeconds: Math.min(
-            exam.durationMinutes * 60,
+            exam.durationMinutes * 60 + extraTimeSeconds,
             scheduledSeconds
           ),
         },
-        include: { submission: { include: { answers: true } } },
+        include: {
+          submission: { include: { answers: true } },
+          proctorWarnings: {
+            where: { acknowledgedAt: null },
+            orderBy: { sentAt: 'desc' },
+            take: 1,
+          },
+        },
       });
     } else {
       const previouslyConsumed =
@@ -130,10 +180,18 @@ export class SessionsService {
             )
           : 0;
       const deadlineSeconds = exam.endsAt
-        ? Math.max(0, Math.floor((+exam.endsAt - +now) / 1000))
+        ? Math.max(
+            0,
+            Math.floor((+exam.endsAt - +now) / 1000) + session.extraTimeSeconds
+          )
         : Number.MAX_SAFE_INTEGER;
       const remainingSeconds = Math.min(
-        Math.max(0, (session.remainingSeconds ?? exam.durationMinutes * 60) - previouslyConsumed),
+        Math.max(
+          0,
+          (session.remainingSeconds ??
+            exam.durationMinutes * 60 + session.extraTimeSeconds) -
+            previouslyConsumed
+        ),
         deadlineSeconds
       );
       session = await this.prisma.examSession.update({
@@ -142,8 +200,19 @@ export class SessionsService {
           activeStartedAt: now,
           lastHeartbeatAt: now,
           remainingSeconds,
+          questionOrder: session.questionOrder.length
+            ? undefined
+            : randomizedQuestionIds,
+          optionOrder: session.optionOrder ?? randomizedOptionIds,
         },
-        include: { submission: { include: { answers: true } } },
+        include: {
+          submission: { include: { answers: true } },
+          proctorWarnings: {
+            where: { acknowledgedAt: null },
+            orderBy: { sentAt: 'desc' },
+            take: 1,
+          },
+        },
       });
     }
     this.gateway.emitMonitor(exam.id, 'monitor:session-start', {
@@ -157,35 +226,80 @@ export class SessionsService {
           responseText: answer.responseText ?? undefined,
           selectedOptionIds: answer.selectedOptionIds,
         })) ?? [],
+      pendingWarning: session.proctorWarnings[0] ?? null,
       exam: {
         id: exam.id,
         title: exam.title,
         assessmentType: exam.assessmentType,
         instructions: exam.instructions,
-        durationMinutes: exam.durationMinutes,
+        durationMinutes:
+          exam.durationMinutes + Math.floor(session.extraTimeSeconds / 60),
+        extraTimeMinutes: Math.floor(session.extraTimeSeconds / 60),
         requireCamera: exam.requireCamera,
         requireMicrophone: exam.requireMicrophone,
         sourceType: exam.sourceType,
         externalFormUrl: exam.externalFormUrl,
-        questions: exam.questions.map((question) => ({
-          id: question.id,
-          type: question.type,
-          order: question.order,
-          points: question.points,
-          prompt: question.prompt,
-          isRequired: question.isRequired,
-          enumerationAnswerCount:
-            question.type === QuestionType.ENUMERATION &&
-            Array.isArray(question.correctAnswer)
-              ? question.correctAnswer.length
-              : undefined,
-          options: question.options.map((option) => ({
-            id: option.id,
-            label: option.label,
-          })),
-        })),
+        questions: this.orderQuestions(exam.questions, session).map(
+          (question) => ({
+            id: question.id,
+            type: question.type,
+            order: question.order,
+            points: question.points,
+            prompt: question.prompt,
+            isRequired: question.isRequired,
+            enumerationAnswerCount:
+              question.type === QuestionType.ENUMERATION &&
+              Array.isArray(question.correctAnswer)
+                ? question.correctAnswer.length
+                : undefined,
+            options: this.orderOptions(
+              question.options,
+              question.id,
+              session
+            ).map((option) => ({
+              id: option.id,
+              label: option.label,
+            })),
+          })
+        ),
       },
     };
+  }
+
+  private shuffle<T>(values: T[]) {
+    const result = [...values];
+    for (let index = result.length - 1; index > 0; index--) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [result[index], result[swap]] = [result[swap]!, result[index]!];
+    }
+    return result;
+  }
+
+  private orderQuestions<T extends { id: string }>(
+    questions: T[],
+    session: { questionOrder: string[] }
+  ) {
+    if (!session.questionOrder.length) return questions;
+    const order = new Map(
+      session.questionOrder.map((id, index) => [id, index])
+    );
+    return [...questions].sort(
+      (a, b) => (order.get(a.id) ?? 999999) - (order.get(b.id) ?? 999999)
+    );
+  }
+
+  private orderOptions<T extends { id: string }>(
+    options: T[],
+    questionId: string,
+    session: { optionOrder: unknown }
+  ) {
+    const stored = session.optionOrder as Record<string, string[]> | null;
+    const ids = stored?.[questionId];
+    if (!ids?.length) return options;
+    const order = new Map(ids.map((id, index) => [id, index]));
+    return [...options].sort(
+      (a, b) => (order.get(a.id) ?? 999999) - (order.get(b.id) ?? 999999)
+    );
   }
 
   async monitorableExams(teacherId: string) {
@@ -293,7 +407,9 @@ export class SessionsService {
     const startedAt = new Date(input.startedAt);
     const endedAt = new Date(input.endedAt);
     if (+endedAt <= +startedAt || +endedAt - +startedAt > 12_000)
-      throw new ConflictException('Evidence segments must be 12 seconds or shorter');
+      throw new ConflictException(
+        'Evidence segments must be 12 seconds or shorter'
+      );
     const dir = join(process.cwd(), 'storage', 'evidence');
     await mkdir(dir, { recursive: true });
     const path = join(dir, `${event.id}-${input.phase.toLowerCase()}.webm`);
@@ -405,7 +521,12 @@ export class SessionsService {
         ffmpeg.on('error', reject);
         ffmpeg.on('close', (code: number | null) => {
           if (code === 0) resolve();
-          else reject(new Error(`FFmpeg exited with ${code}: ${errorOutput.slice(-1000)}`));
+          else
+            reject(
+              new Error(
+                `FFmpeg exited with ${code}: ${errorOutput.slice(-1000)}`
+              )
+            );
         });
       });
       await unlink(outputPath).catch(() => undefined);
@@ -446,7 +567,9 @@ export class SessionsService {
           },
         },
       });
-      await Promise.all(parts.map((part) => unlink(part.storagePath).catch(() => undefined)));
+      await Promise.all(
+        parts.map((part) => unlink(part.storagePath).catch(() => undefined))
+      );
       return centered;
     } finally {
       await unlink(listPath).catch(() => undefined);
@@ -490,33 +613,256 @@ export class SessionsService {
       where: { id: examId, subject: { teacherId } },
     });
     if (!exam) throw new ForbiddenException();
-    const activeIds = [...this.gateway.activeSessionIds(examId)];
-    if (!activeIds.length) return [];
+    const activeIds = this.gateway.activeSessionIds(examId);
     const sessions = await this.prisma.examSession.findMany({
       where: {
         examId,
-        id: { in: activeIds },
-        status: SessionStatus.IN_PROGRESS,
+        status: { in: [SessionStatus.IN_PROGRESS, SessionStatus.DISCONNECTED] },
       },
       include: {
-        student: { select: { fullName: true } },
-        scoreHistory: { orderBy: { computedAt: 'desc' } },
+        student: {
+          select: {
+            fullName: true,
+            studentProfile: {
+              select: {
+                program: true,
+                yearLevel: true,
+                section: { select: { id: true, name: true } },
+              },
+            },
+          },
+        },
+        scoreHistory: { orderBy: { computedAt: 'desc' }, take: 1 },
         events: true,
+        raiseHandRequests: {
+          where: { resolvedAt: null },
+          orderBy: { raisedAt: 'desc' },
+          take: 1,
+        },
+        proctorWarnings: {
+          orderBy: { sentAt: 'desc' },
+          take: 1,
+        },
+      },
+      orderBy: { startedAt: 'asc' },
+    });
+    const now = Date.now();
+    return sessions.map((session) => ({
+      ...session,
+      connected: activeIds.has(session.id),
+      connectionStatus: activeIds.has(session.id)
+        ? 'CONNECTED'
+        : 'DISCONNECTED',
+      eventCount: session.events.length,
+      raisedHand: Boolean(session.raiseHandRequests.length),
+      remainingSeconds: Math.max(
+        0,
+        (session.remainingSeconds ?? exam.durationMinutes * 60) -
+          (session.activeStartedAt
+            ? Math.floor((now - +session.activeStartedAt) / 1000)
+            : 0)
+      ),
+    }));
+  }
+
+  private async teacherSession(sessionId: string, teacherId: string) {
+    const session = await this.prisma.examSession.findUnique({
+      where: { id: sessionId },
+      include: { exam: { include: { subject: true } } },
+    });
+    if (!session || session.exam.subject.teacherId !== teacherId)
+      throw new ForbiddenException();
+    return session;
+  }
+
+  async sendWarning(sessionId: string, teacherId: string, rawMessage: string) {
+    const session = await this.teacherSession(sessionId, teacherId);
+    if (session.status === SessionStatus.COMPLETED)
+      throw new ConflictException('This assessment attempt has ended');
+    const message = rawMessage.trim();
+    if (!message) throw new ConflictException('Warning message is required');
+    const warning = await this.prisma.proctorWarning.create({
+      data: { sessionId, teacherId, message },
+      select: { id: true, message: true, sentAt: true, acknowledgedAt: true },
+    });
+    this.gateway.warn(sessionId, warning);
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: 'PROCTOR_WARNING_SENT',
+        targetType: 'ExamSession',
+        targetId: sessionId,
+        metadata: { warningId: warning.id },
       },
     });
-    return sessions.map((session) => {
-      const connectedAt = this.gateway.connectedAt(session.id);
-      if (!connectedAt) return { ...session, events: [], scoreHistory: [] };
-      return {
-        ...session,
-        events: session.events.filter(
-          (event) => event.occurredAt >= connectedAt
-        ),
-        scoreHistory: session.scoreHistory
-          .filter((score) => score.computedAt >= connectedAt)
-          .slice(0, 1),
-      };
+    return warning;
+  }
+
+  async acknowledgeWarning(
+    sessionId: string,
+    warningId: string,
+    studentId: string
+  ) {
+    const warning = await this.prisma.proctorWarning.findFirst({
+      where: { id: warningId, sessionId, session: { studentId } },
+      include: { session: { select: { examId: true } } },
     });
+    if (!warning) throw new NotFoundException('Warning not found');
+    const acknowledgedAt = warning.acknowledgedAt ?? new Date();
+    if (!warning.acknowledgedAt)
+      await this.prisma.proctorWarning.update({
+        where: { id: warningId },
+        data: { acknowledgedAt },
+      });
+    this.gateway.warningAcknowledged(
+      warning.session.examId,
+      sessionId,
+      warningId
+    );
+    return { id: warningId, acknowledgedAt };
+  }
+
+  async addExtraTime(sessionId: string, teacherId: string, minutes: number) {
+    const session = await this.teacherSession(sessionId, teacherId);
+    if (session.status === SessionStatus.COMPLETED)
+      throw new ConflictException('This assessment attempt has ended');
+    const now = new Date();
+    const elapsed = session.activeStartedAt
+      ? Math.max(0, Math.floor((+now - +session.activeStartedAt) / 1000))
+      : 0;
+    const currentRemaining = Math.max(
+      0,
+      (session.remainingSeconds ?? session.exam.durationMinutes * 60) - elapsed
+    );
+    const addedSeconds = minutes * 60;
+    const remainingSeconds = currentRemaining + addedSeconds;
+    const extraTimeSeconds = session.extraTimeSeconds + addedSeconds;
+    await this.prisma.$transaction([
+      this.prisma.examSession.update({
+        where: { id: sessionId },
+        data: {
+          remainingSeconds,
+          extraTimeSeconds,
+          activeStartedAt: now,
+          lastHeartbeatAt: now,
+        },
+      }),
+      this.prisma.examStudentOverride.upsert({
+        where: {
+          examId_studentId: {
+            examId: session.examId,
+            studentId: session.studentId,
+          },
+        },
+        create: {
+          examId: session.examId,
+          studentId: session.studentId,
+          extraTimeMinutes: minutes,
+        },
+        update: { extraTimeMinutes: { increment: minutes } },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actorId: teacherId,
+          action: 'EXAM_EXTRA_TIME_GRANTED',
+          targetType: 'ExamSession',
+          targetId: sessionId,
+          metadata: { minutes, remainingSeconds },
+        },
+      }),
+    ]);
+    this.gateway.timeAdjusted(
+      session.examId,
+      sessionId,
+      remainingSeconds,
+      extraTimeSeconds
+    );
+    return {
+      sessionId,
+      minutesAdded: minutes,
+      remainingSeconds,
+      extraTimeSeconds,
+    };
+  }
+
+  async grantPreExamExtraTime(
+    examId: string,
+    studentId: string,
+    teacherId: string,
+    minutes: number
+  ) {
+    const exam = await this.prisma.exam.findFirst({
+      where: {
+        id: examId,
+        subject: {
+          teacherId,
+          enrollments: { some: { studentId } },
+        },
+      },
+      select: { id: true, title: true },
+    });
+    if (!exam)
+      throw new NotFoundException('Exam or enrolled student not found');
+    const session = await this.prisma.examSession.findUnique({
+      where: { examId_studentId: { examId, studentId } },
+      select: { id: true, status: true },
+    });
+    if (session?.status === SessionStatus.COMPLETED)
+      throw new ConflictException(
+        'A completed attempt cannot receive extra time'
+      );
+    if (session) return this.addExtraTime(session.id, teacherId, minutes);
+    const [override] = await this.prisma.$transaction([
+      this.prisma.examStudentOverride.upsert({
+        where: { examId_studentId: { examId, studentId } },
+        create: { examId, studentId, extraTimeMinutes: minutes },
+        update: { extraTimeMinutes: { increment: minutes } },
+      }),
+      this.prisma.notification.create({
+        data: {
+          userId: studentId,
+          type: 'EXAM_EXTRA_TIME_GRANTED',
+          message: `Your teacher granted ${minutes} additional minutes for "${exam.title}".`,
+          link: '/student/calendar',
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actorId: teacherId,
+          action: 'EXAM_EXTRA_TIME_GRANTED',
+          targetType: 'Exam',
+          targetId: examId,
+          metadata: { studentId, minutes, beforeStart: true },
+        },
+      }),
+    ]);
+    return override;
+  }
+
+  async resume(sessionId: string, teacherId: string) {
+    const session = await this.teacherSession(sessionId, teacherId);
+    if (session.status === SessionStatus.COMPLETED)
+      throw new ConflictException('A completed attempt cannot be resumed');
+    const updated = await this.prisma.examSession.update({
+      where: { id: sessionId },
+      data: {
+        status: SessionStatus.IN_PROGRESS,
+        isLocked: false,
+        resumeAuthorizedAt: new Date(),
+      },
+      select: { id: true, status: true, resumeAuthorizedAt: true },
+    });
+    this.gateway.lock(sessionId, false);
+    this.gateway.resume(sessionId);
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: 'EXAM_SESSION_RESUMED',
+        targetType: 'ExamSession',
+        targetId: sessionId,
+      },
+    });
+    return updated;
   }
 
   async control(
@@ -524,15 +870,20 @@ export class SessionsService {
     teacherId: string,
     action: 'warn' | 'lock' | 'unlock'
   ) {
-    const session = await this.prisma.examSession.findUnique({
-      where: { id: sessionId },
-      include: { exam: { include: { subject: true } } },
-    });
-    if (!session || session.exam.subject.teacherId !== teacherId)
-      throw new ForbiddenException();
+    const session = await this.teacherSession(sessionId, teacherId);
     if (action === 'warn')
-      this.gateway.warn(sessionId, 'Your teacher has sent a review reminder.');
-    else this.gateway.lock(sessionId, action === 'lock');
+      return this.sendWarning(
+        sessionId,
+        teacherId,
+        'Your teacher has sent a review reminder.'
+      );
+    const locked = action === 'lock';
+    await this.prisma.examSession.update({
+      where: { id: sessionId },
+      data: { isLocked: locked },
+    });
+    this.gateway.lock(sessionId, locked);
+    return { id: session.id, locked };
   }
 
   async playback(sessionId: string, teacherId: string) {

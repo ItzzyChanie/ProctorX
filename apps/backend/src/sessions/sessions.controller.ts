@@ -24,6 +24,8 @@ import {
   EvidenceClipDto,
   JoinExamDto,
   SaveDraftDto,
+  SendWarningDto,
+  AddExtraTimeDto,
   SubmitDto,
   TeacherSessionAction,
 } from './dto/sessions.dto';
@@ -89,17 +91,21 @@ export class SessionsController {
   ) {
     return this.grading.submissionDetail(submissionId, r.user.id);
   }
-  @Post('submissions/:submissionId/restore') @Roles(Role.TEACHER) restoreSubmission(
+  @Post('submissions/:submissionId/restore')
+  @Roles(Role.TEACHER)
+  restoreSubmission(
     @Req() r: any,
     @Param('submissionId') submissionId: string
   ) {
     return this.grading.restoreSubmission(submissionId, r.user.id);
-  }  @Delete('submissions/:submissionId') @Roles(Role.TEACHER) removeSubmission(
+  }
+  @Delete('submissions/:submissionId') @Roles(Role.TEACHER) removeSubmission(
     @Req() r: any,
     @Param('submissionId') submissionId: string
   ) {
     return this.grading.removeSubmission(submissionId, r.user.id);
-  }  @Get('exam/:examId/submissions') @Roles(Role.TEACHER) submissions(
+  }
+  @Get('exam/:examId/submissions') @Roles(Role.TEACHER) submissions(
     @Req() r: any,
     @Param('examId') examId: string
   ) {
@@ -112,11 +118,7 @@ export class SessionsController {
     @Param('submissionId') submissionId: string,
     @Body() body: UpdateResultReleaseDto
   ) {
-    return this.grading.updateResultRelease(
-      submissionId,
-      r.user.id,
-      body
-    );
+    return this.grading.updateResultRelease(submissionId, r.user.id, body);
   }
   @Post('grades/confirm') @Roles(Role.TEACHER) confirm(
     @Req() r: any,
@@ -203,6 +205,50 @@ export class SessionsController {
     @Param('examId') id: string
   ) {
     return this.s.monitor(id, r.user.id);
+  }
+  @Patch('exam/:examId/student/:studentId/extra-time')
+  @Roles(Role.TEACHER)
+  grantPreExamExtraTime(
+    @Req() r: any,
+    @Param('examId') examId: string,
+    @Param('studentId') studentId: string,
+    @Body() body: AddExtraTimeDto
+  ) {
+    return this.s.grantPreExamExtraTime(
+      examId,
+      studentId,
+      r.user.id,
+      body.minutes
+    );
+  }
+  @Patch(':id/extra-time') @Roles(Role.TEACHER) addExtraTime(
+    @Req() r: any,
+    @Param('id') id: string,
+    @Body() body: AddExtraTimeDto
+  ) {
+    return this.s.addExtraTime(id, r.user.id, body.minutes);
+  }
+  @Post(':id/warnings') @Roles(Role.TEACHER) sendWarning(
+    @Req() r: any,
+    @Param('id') id: string,
+    @Body() body: SendWarningDto
+  ) {
+    return this.s.sendWarning(id, r.user.id, body.message);
+  }
+  @Post(':id/warnings/:warningId/acknowledge')
+  @Roles(Role.STUDENT)
+  acknowledgeWarning(
+    @Req() r: any,
+    @Param('id') id: string,
+    @Param('warningId') warningId: string
+  ) {
+    return this.s.acknowledgeWarning(id, warningId, r.user.id);
+  }
+  @Post(':id/resume') @Roles(Role.TEACHER) resume(
+    @Req() r: any,
+    @Param('id') id: string
+  ) {
+    return this.s.resume(id, r.user.id);
   }
   @Post(':id/:action') @Roles(Role.TEACHER) control(
     @Req() r: any,

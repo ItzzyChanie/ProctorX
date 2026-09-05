@@ -36,8 +36,10 @@ const superscriptDigits: Record<number, string> = {
 
 const normalizeObjectiveText = (input: unknown) =>
   String(input ?? '')
-    .replace(/[\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+/gu, (digits) =>
-      `^${[...digits].map((digit) => superscriptDigits[digit.codePointAt(0)!]).join('')}`
+    .replace(
+      /[\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+/gu,
+      (digits) =>
+        `^${[...digits].map((digit) => superscriptDigits[digit.codePointAt(0)!]).join('')}`
     )
     .normalize('NFKC')
     .toLocaleLowerCase()
@@ -66,7 +68,7 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     this.timeoutTimer = setInterval(
-      () => void this.finishExpiredSessions(),
+      () => void this.finishExpiredSessions().catch(() => undefined),
       10_000
     );
   }
@@ -195,12 +197,17 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       ? Math.max(0, Math.floor((+now - +session.activeStartedAt) / 1000))
       : 0;
     const deadlineRemaining = session.exam.endsAt
-      ? Math.max(0, Math.floor((+session.exam.endsAt - +now) / 1000))
+      ? Math.max(
+          0,
+          Math.floor((+session.exam.endsAt - +now) / 1000) +
+            session.extraTimeSeconds
+        )
       : Number.MAX_SAFE_INTEGER;
     const remainingSeconds = Math.min(
       Math.max(
         0,
-        (session.remainingSeconds ?? session.exam.durationMinutes * 60) -
+        (session.remainingSeconds ??
+          session.exam.durationMinutes * 60 + session.extraTimeSeconds) -
           elapsed
       ),
       deadlineRemaining
@@ -387,13 +394,39 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       ...(search
         ? {
             OR: [
-              { session: { student: { fullName: { contains: search, mode: 'insensitive' } } } },
-              { session: { student: { studentProfile: { studentId: { contains: search, mode: 'insensitive' } } } } },
-              { session: { exam: { title: { contains: search, mode: 'insensitive' } } } },
-              { session: { exam: { subject: { OR: [
-                { code: { contains: search, mode: 'insensitive' } },
-                { name: { contains: search, mode: 'insensitive' } },
-              ] } } } },
+              {
+                session: {
+                  student: {
+                    fullName: { contains: search, mode: 'insensitive' },
+                  },
+                },
+              },
+              {
+                session: {
+                  student: {
+                    studentProfile: {
+                      studentId: { contains: search, mode: 'insensitive' },
+                    },
+                  },
+                },
+              },
+              {
+                session: {
+                  exam: { title: { contains: search, mode: 'insensitive' } },
+                },
+              },
+              {
+                session: {
+                  exam: {
+                    subject: {
+                      OR: [
+                        { code: { contains: search, mode: 'insensitive' } },
+                        { name: { contains: search, mode: 'insensitive' } },
+                      ],
+                    },
+                  },
+                },
+              },
             ],
           }
         : {}),
@@ -512,7 +545,8 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       },
       select: { id: true },
     });
-    if (!submission) throw new NotFoundException('Archived submission not found');
+    if (!submission)
+      throw new NotFoundException('Archived submission not found');
     await this.prisma.$transaction([
       this.prisma.submission.update({
         where: { id: submissionId },

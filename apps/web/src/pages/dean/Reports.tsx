@@ -16,6 +16,10 @@ type Report = {
   status: 'PENDING' | 'PROCESSING' | 'COMPLETE' | 'FAILED';
   createdAt: string;
   downloadPath: string | null;
+  staleAt: string | null;
+  dateFrom: string;
+  dateTo: string;
+  filters: { academicPeriodId?: string; term?: string } | null;
 };
 const reportSchema = z
   .object({
@@ -43,10 +47,22 @@ export default function Reports() {
   });
   const { data: periods = [] } = useQuery({
     queryKey: ['academic-periods'],
-    queryFn: async () => (await api.get<{id:string;academicYear:string;semester:string;status:string}[]>('/academic-periods')).data,
+    queryFn: async () =>
+      (
+        await api.get<
+          {
+            id: string;
+            academicYear: string;
+            semester: string;
+            status: string;
+          }[]
+        >('/academic-periods')
+      ).data,
   });
   const [message, setMessage] = useState('');
-  const [messageType, setMessageType] = useState<'success' | 'error'>('success');
+  const [messageType, setMessageType] = useState<'success' | 'error'>(
+    'success'
+  );
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   useEffect(() => {
     if (!message) return;
@@ -74,7 +90,14 @@ export default function Reports() {
       client.invalidateQueries({ queryKey: ['dean-reports'] });
       setMessageType('success');
       setMessage('Report queued for generation.');
-      setForm({ name: '', dateFrom: '', dateTo: '', format: 'pdf', academicPeriodId: '', term: '' });
+      setForm({
+        name: '',
+        dateFrom: '',
+        dateTo: '',
+        format: 'pdf',
+        academicPeriodId: '',
+        term: '',
+      });
     },
     onError: (error) => {
       setMessageType('error');
@@ -129,6 +152,16 @@ export default function Reports() {
       setDownloadingId(null);
     }
   };
+  const regenerate = (report: Report) => {
+    create.mutate({
+      name: report.name + ' (updated)',
+      dateFrom: report.dateFrom.slice(0, 10),
+      dateTo: report.dateTo.slice(0, 10),
+      format: report.format.toLowerCase() as 'pdf' | 'excel',
+      academicPeriodId: report.filters?.academicPeriodId ?? '',
+      term: report.filters?.term ?? '',
+    });
+  };
   return (
     <DashboardLayout
       role="dean"
@@ -150,8 +183,33 @@ export default function Reports() {
               placeholder="Report name"
               className="rounded border border-border p-2"
             />
-            <select value={form.academicPeriodId} onChange={(e)=>setForm({...form,academicPeriodId:e.target.value})} className="rounded border border-border p-2"><option value="">All semesters</option>{periods.map(x=><option key={x.id} value={x.id}>{x.academicYear} · {x.semester === 'FIRST' ? 'First' : 'Second'} Semester</option>)}</select>
-            <select value={form.term} onChange={(e)=>setForm({...form,term:e.target.value})} className="rounded border border-border p-2"><option value="">All terms</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option><option value="UNSPECIFIED">Legacy / Unspecified</option></select>
+            <select
+              value={form.academicPeriodId}
+              onChange={(e) =>
+                setForm({ ...form, academicPeriodId: e.target.value })
+              }
+              className="rounded border border-border p-2"
+            >
+              <option value="">All semesters</option>
+              {periods.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.academicYear} ·{' '}
+                  {x.semester === 'FIRST' ? 'First' : 'Second'} Semester
+                </option>
+              ))}
+            </select>
+            <select
+              value={form.term}
+              onChange={(e) => setForm({ ...form, term: e.target.value })}
+              className="rounded border border-border p-2"
+            >
+              <option value="">All terms</option>
+              <option value="PRELIMINARY">Preliminary</option>
+              <option value="MIDTERM">Midterm</option>
+              <option value="SEMI_FINAL">Semi-final</option>
+              <option value="FINAL">Final</option>
+              <option value="UNSPECIFIED">Legacy / Unspecified</option>
+            </select>
             <input
               required
               type="date"
@@ -254,6 +312,18 @@ export default function Reports() {
                 >
                   {r.status}
                 </Chip>
+                {r.staleAt && (
+                  <>
+                    <Chip color="var(--risk-med)">OUTDATED</Chip>
+                    <Button
+                      variant="ghost"
+                      disabled={create.isPending}
+                      onClick={() => regenerate(r)}
+                    >
+                      Regenerate with current facts
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
           ))}

@@ -6,6 +6,7 @@ import {
   Param,
   Post,
   Patch,
+  Query,
   Req,
   Res,
   StreamableFile,
@@ -22,10 +23,13 @@ import { ReviewProctoringDto } from './dto/review-proctoring.dto';
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ReportsController {
   constructor(private reports: ReportsService) {}
-  @Get('incidents') @Roles(Role.TEACHER) incidents(@Req() req: any) {
-    return this.reports.incidents(req.user.id);
+  @Get('incidents') @Roles(Role.TEACHER) incidents(
+    @Req() req: any,
+    @Query('archive') archive?: string
+  ) {
+    return this.reports.incidents(req.user.id, archive === 'archived');
   }
-  
+
   @Patch('incidents/:sessionId/review')
   @Roles(Role.TEACHER)
   reviewProctoring(
@@ -33,11 +37,7 @@ export class ReportsController {
     @Param('sessionId') sessionId: string,
     @Body() body: ReviewProctoringDto
   ) {
-    return this.reports.reviewProctoring(
-      sessionId,
-      req.user.id,
-      body.decision
-    );
+    return this.reports.reviewProctoring(sessionId, req.user.id, body.decision);
   }
 
   @Delete('incidents/:sessionId') @Roles(Role.TEACHER) removeIncident(
@@ -45,6 +45,12 @@ export class ReportsController {
     @Param('sessionId') sessionId: string
   ) {
     return this.reports.removeIncident(sessionId, req.user.id);
+  }
+
+  @Patch('incidents/:sessionId/restore')
+  @Roles(Role.TEACHER)
+  restoreIncident(@Req() req: any, @Param('sessionId') sessionId: string) {
+    return this.reports.restoreIncident(sessionId, req.user.id);
   }
 
   @Get(':sessionId/export') @Roles(Role.TEACHER) export(
@@ -69,7 +75,7 @@ export class ReportsController {
     );
     return new StreamableFile(report.buffer);
   }
-  
+
   @Get('exams/:examId/correlation') @Roles(Role.TEACHER) correlation(
     @Req() req: any,
     @Param('examId') examId: string

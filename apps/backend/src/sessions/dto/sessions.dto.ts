@@ -2,6 +2,7 @@ import {
   IsArray,
   IsDateString,
   IsIn,
+  IsInt,
   IsNotEmpty,
   IsNumber,
   IsObject,
@@ -44,6 +45,12 @@ export enum TeacherSessionAction {
   warn = 'warn',
   lock = 'lock',
   unlock = 'unlock',
+}
+export class SendWarningDto {
+  @IsString() @IsNotEmpty() @MaxLength(500) message!: string;
+}
+export class AddExtraTimeDto {
+  @IsInt() @Min(1) @Max(240) minutes!: number;
 }
 export class AnswerDto {
   @IsString() questionId!: string;
