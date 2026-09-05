@@ -128,6 +128,11 @@ export default function JoinSession() {
     gradeStatus: string;
   }>();
   const [remainingSeconds, setRemainingSeconds] = useState(0);
+  const [activeWarning, setActiveWarning] = useState<{
+    id: string;
+    message: string;
+    sentAt: string;
+  }>();
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>(
     'saved'
   );
@@ -166,7 +171,8 @@ export default function JoinSession() {
     onError: (error) =>
       setNotice(
         axios.isAxiosError(error)
-          ? (error.response?.data?.message ?? 'Could not send the join request.')
+          ? (error.response?.data?.message ??
+              'Could not send the join request.')
           : 'Could not send the join request.'
       ),
   });
@@ -243,6 +249,8 @@ export default function JoinSession() {
       setRemainingSeconds(
         joined.session.remainingSeconds ?? joined.exam.durationMinutes * 60
       );
+      setLocked(Boolean(joined.session.isLocked));
+      setActiveWarning(joined.pendingWarning ?? undefined);
       suppressIncidentRef.current = false;
       endingRecordingRef.current = false;
       setExam(joined);
@@ -329,8 +337,17 @@ export default function JoinSession() {
     };
     document.addEventListener('visibilitychange', visibility);
     document.addEventListener('fullscreenchange', fullscreen);
-    const warn = (message: { message: string }) => setNotice(message.message);
+    const warn = (message: { id: string; message: string; sentAt: string }) =>
+      setActiveWarning(message);
     const lock = (message: { locked: boolean }) => setLocked(message.locked);
+    const timeAdjusted = (message: { remainingSeconds: number }) => {
+      setRemainingSeconds(message.remainingSeconds);
+      setNotice('Your teacher granted additional exam time.');
+    };
+    const resume = () => {
+      setLocked(false);
+      setNotice('Your teacher authorized this attempt to resume.');
+    };
     const examEnded = async (message: { message?: string }) => {
       setNotice(message.message ?? 'This assessment has ended.');
       setLocked(false);
@@ -345,6 +362,8 @@ export default function JoinSession() {
     socket.on('connect', joinStudentRoom);
     socket.on('student:warn', warn);
     socket.on('student:lock', lock);
+    socket.on('student:time-adjusted', timeAdjusted);
+    socket.on('student:resume', resume);
     socket.on('student:exam-ended', examEnded);
     socket.on('webrtc:request', watch);
     socket.on('webrtc:signal', signal);
@@ -482,7 +501,8 @@ export default function JoinSession() {
           uploadClip(pending.eventId, 'INCIDENT', incident);
         };
         const recordSegment = () => {
-          if (!active || screen.getVideoTracks()[0]?.readyState !== 'live') return;
+          if (!active || screen.getVideoTracks()[0]?.readyState !== 'live')
+            return;
           const startedAt = new Date();
           const chunks: Blob[] = [];
           const segmentRecorder = new MediaRecorder(screen, {
@@ -539,13 +559,16 @@ export default function JoinSession() {
             });
           if (!response) return;
           if (!response.data?.eventId || !response.data?.occurredAt) {
-            setNotice('The incident was recorded, but its evidence clip could not be linked.');
+            setNotice(
+              'The incident was recorded, but its evidence clip could not be linked.'
+            );
             return;
           }
           const occurredAtMs = +new Date(response.data.occurredAt);
           const incidentIndex = completedSegments.findIndex(
             (segment) =>
-              +segment.startedAt <= occurredAtMs && occurredAtMs <= +segment.endedAt
+              +segment.startedAt <= occurredAtMs &&
+              occurredAtMs <= +segment.endedAt
           );
           if (incidentIndex >= 0) {
             const incident = completedSegments[incidentIndex];
@@ -682,6 +705,8 @@ export default function JoinSession() {
       socket.off('connect', joinStudentRoom);
       socket.off('student:warn', warn);
       socket.off('student:lock', lock);
+      socket.off('student:time-adjusted', timeAdjusted);
+      socket.off('student:resume', resume);
       socket.off('student:exam-ended', examEnded);
       socket.off('webrtc:request', watch);
       socket.off('webrtc:signal', signal);
@@ -1125,12 +1150,47 @@ export default function JoinSession() {
   return (
     <DashboardLayout role="student" pageTitle="Exam">
       <div className="fixed inset-0 z-50 overflow-auto bg-gradient-to-br from-slate-50 via-violet-50 to-cyan-50 p-4 sm:p-6">
+        {activeWarning && (
+          <div
+            className="fixed inset-0 z-[100] grid place-items-center bg-black/75 p-5"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="private-warning-title"
+          >
+            <div className="w-full max-w-lg rounded-2xl bg-white p-6 text-slate-900 shadow-2xl">
+              <AlertTriangle className="mb-3 text-amber-600" size={34} />
+              <h2 id="private-warning-title" className="text-xl font-bold">
+                Private message from your teacher
+              </h2>
+              <p className="my-4 whitespace-pre-wrap rounded-xl bg-amber-50 p-4 text-sm leading-6">
+                {activeWarning.message}
+              </p>
+              <Button
+                onClick={() => {
+                  const warning = activeWarning;
+                  setActiveWarning(undefined);
+                  void api
+                    .post(
+                      `/sessions/${exam.session.id}/warnings/${warning.id}/acknowledge`
+                    )
+                    .catch(() =>
+                      setNotice('Warning acknowledgment could not be sent.')
+                    );
+                }}
+              >
+                I understand
+              </Button>
+            </div>
+          </div>
+        )}
         {notice && (
           <div className="mb-4 rounded bg-amber-100 p-3">{notice}</div>
         )}
         {(locked || nativeBlocked) && (
           <div className="fixed inset-0 z-[60] grid place-items-center bg-black/60 text-xl text-white">
-            {nativeBlocked ? 'Close prohibited applications to continue.' : 'Exam locked by teacher.'}
+            {nativeBlocked
+              ? 'Close prohibited applications to continue.'
+              : 'Exam locked by teacher.'}
           </div>
         )}
         {fullscreenLost && !submitted && (

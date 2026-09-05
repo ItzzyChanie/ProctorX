@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { CheckCircle2, Clock3, PlayCircle, Search, TriangleAlert, UserRound } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
@@ -68,9 +69,13 @@ const duration = (seconds: number | null | undefined) => {
 };
 
 export default function Recordings() {
+  const [searchParams] = useSearchParams();
+  const linkedSessionId = searchParams.get('sessionId')?.trim() ?? '';
+  const lastAutoLoadedSessionId = useRef('');
   const { dark } = useTheme();
   const palette = useChartPalette(dark);
   const [input, setInput] = useState('');
+  const [loadedLookup, setLoadedLookup] = useState('');
   const [manifest, setManifest] = useState<PlaybackManifest | null>(null);
   const [selectedId, setSelectedId] = useState('');
   const [selectedClipId, setSelectedClipId] = useState('');
@@ -81,18 +86,51 @@ export default function Recordings() {
     window.setTimeout(() => setToast(null), 4_000);
   };
   const loadPlayback = useMutation({
-    mutationFn: async (id: string) => (await api.get<PlaybackManifest>(`/teacher/sessions/${id}/playback`)).data,
-    onSuccess: data => {
+    mutationFn: async ({
+      lookup,
+    }: {
+      lookup: string;
+      selectedSessionId?: string;
+    }) =>
+      (
+        await api.get<PlaybackManifest>(
+          '/teacher/sessions/' + lookup + '/playback'
+        )
+      ).data,
+    onSuccess: (data, request) => {
       setManifest(data);
-      setSelectedId('');
+      setLoadedLookup(request.lookup);
+      setSelectedId(
+        request.selectedSessionId &&
+          data.sessions.some(
+            session => session.sessionId === request.selectedSessionId
+          )
+          ? request.selectedSessionId
+          : ''
+      );
+      setSelectedClipId('');
       notify(`${data.sessions.length} completed student session${data.sessions.length === 1 ? '' : 's'} loaded.`);
     },
     onError: (error: any) => {
       setManifest(null);
+      setLoadedLookup('');
       setSelectedId('');
       notify(error.response?.data?.message ?? 'Playback could not be loaded. Confirm that the exam has ended.', true);
     },
   });
+  useEffect(() => {
+    if (
+      !linkedSessionId ||
+      lastAutoLoadedSessionId.current === linkedSessionId
+    )
+      return;
+    lastAutoLoadedSessionId.current = linkedSessionId;
+    setInput(linkedSessionId);
+    loadPlayback.mutate({
+      lookup: linkedSessionId,
+      selectedSessionId: linkedSessionId,
+    });
+  }, [linkedSessionId]);
   const reviewProctoring = useMutation({
     mutationFn: async ({ sessionId, decision }: { sessionId: string; decision: 'NEGATIVE' | 'POSITIVE' }) =>
       (await api.patch(`/reports/incidents/${sessionId}/review`, { decision })).data,
@@ -129,7 +167,7 @@ export default function Recordings() {
   const load = (event: React.FormEvent) => {
     event.preventDefault();
     const id = input.trim();
-    if (id) loadPlayback.mutate(id);
+    if (id) loadPlayback.mutate({ lookup: id });
   };
   const incidentClips = selected?.events.flatMap(event =>
     event.clips.map(clip => ({ ...clip, event }))
@@ -138,11 +176,13 @@ export default function Recordings() {
   const videoSource = selectedClip
     ? `${api.defaults.baseURL}${selectedClip.playbackUrl}`
     : undefined;
+  const isLoadedInput =
+    !!manifest && input.trim() === loadedLookup;
 
   return <DashboardLayout role="teacher" pageTitle="Recordings & Playback" userName="Professor" userTag="College of Computer Studies">
     {toast && <div role={toast.error ? 'alert' : 'status'} className={`fixed bottom-5 right-5 z-[70] rounded px-4 py-3 text-sm text-white ${toast.error ? 'bg-red-600' : 'bg-emerald-600'}`}>{toast.message}</div>}
     <div className="flex flex-col gap-5">
-      <Card><CardHeader title="Open a session playback" subtitle="Enter an exam room code, exam ID, or any student session ID. Playback is available only after the exam has ended." /><form onSubmit={load} className="flex gap-2"><input value={input} onChange={event => setInput(event.target.value)} placeholder="Room code, exam ID, or session ID" className="min-w-0 flex-1 rounded border border-border bg-surface p-2 text-text-1" /><Button disabled={!input.trim() || loadPlayback.isPending} icon={Search}>{loadPlayback.isPending ? 'Loading…' : 'Load'}</Button></form></Card>
+      <Card><CardHeader title="Open a session playback" subtitle="Enter an exam room code, exam ID, or any student session ID. Playback is available only after the exam has ended." /><form onSubmit={load} className="flex gap-2"><input value={input} onChange={event => setInput(event.target.value)} placeholder="Room code, exam ID, or session ID" className="min-w-0 flex-1 rounded border border-border bg-surface p-2 text-text-1" /><Button disabled={!input.trim() || loadPlayback.isPending} icon={isLoadedInput ? CheckCircle2 : Search}>{loadPlayback.isPending && !isLoadedInput ? 'Loading…' : isLoadedInput ? 'Loaded' : 'Load'}</Button></form></Card>
       {manifest && <div className="grid gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
         <Card padded={false}><div className="border-b border-border p-5"><CardHeader title={manifest.exam.title} subtitle={`${manifest.exam.subjectCode} · ${manifest.exam.subjectName}`} /></div>{!manifest.sessions.length && <p className="p-5 text-sm text-text-2">No completed student sessions were found.</p>}{manifest.sessions.map(session => <button key={session.sessionId} type="button" onClick={() => { setSelectedId(session.sessionId); setSelectedClipId(''); }} className={`flex w-full items-center gap-3 border-b border-border p-4 text-left transition-colors last:border-b-0 ${selectedId === session.sessionId ? 'bg-brand-soft' : 'hover:bg-canvas'}`}>{session.student.profilePicture ? <img src={session.student.profilePicture} alt={`${session.student.fullName} profile`} className="h-10 w-10 shrink-0 rounded-xl object-cover" /> : <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand"><UserRound size={18} /></span>}<span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-text-1">{session.student.fullName}</span><span className="mt-1 flex items-center gap-1 text-xs text-text-3"><Clock3 size={12} />{session.events.reduce((count, event) => count + event.clips.length, 0)} evidence clips</span></span><PlayCircle size={18} className={session.events.some(event => event.clips.length) ? 'text-brand' : 'text-text-3'} /></button>)}</Card>
         <Card>{!selected && <div className="grid min-h-[360px] place-items-center text-center text-text-3"><div><PlayCircle className="mx-auto mb-3" size={42} /><p className="text-sm">Select a student to open the recorded exam screen.</p></div></div>}{selected && <><div className="flex items-center gap-3">
