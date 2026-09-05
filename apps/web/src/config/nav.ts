@@ -20,6 +20,7 @@ import {
   TrendingUp,
   BookOpen,
   Layers3,
+  Library,
 } from "lucide-react";
 import type { NavItem, Role } from "../types/dashboard";
 
@@ -98,6 +99,7 @@ export const NAV: Record<Role, NavItem[]> = {
         { key: "class-sections", label: "Class Sections", icon: Layers3, path: "/teacher/class-sections" },
         { key: "student-rosters", label: "Student Rosters", icon: Users, path: "/teacher/rosters" },
         { key: "submitted-exams", label: "Submitted Exams", icon: ClipboardList, path: "/teacher/submitted-exams" },
+        { key: "question-bank", label: "Question Bank", icon: Library, path: "/teacher/question-bank" },
       ],
     },
     {
