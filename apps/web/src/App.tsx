@@ -29,6 +29,7 @@ import ClassSections from './pages/teacher/ClassSections';
 import StudentRosters from './pages/teacher/StudentRosters';
 import SubmittedExams from './pages/teacher/SubmittedExams';
 import Messages from './pages/teacher/Messages';
+import QuestionBank from './pages/teacher/QuestionBank';
 
 import DeanDashboard from './pages/dean/DeanDashboard';
 import DeanProfile from './pages/dean/Profile';
@@ -58,11 +59,13 @@ function SessionBootstrap({ children }: { children: React.ReactNode }) {
       .finally(finishSessionCheck);
   }, [finishSessionCheck, setAuth]);
   useEffect(() => {
-    if (!isAuthenticated || user?.role !== Role.STUDENT) {
+    if (!isAuthenticated || !user) {
       notificationSocket.disconnect();
       return;
     }
     notificationSocket.connect();
+    if (user.role !== Role.STUDENT)
+      return () => notificationSocket.disconnect();
     const heartbeat = () => {
       void api.post('/auth/heartbeat').catch(() => {
         signOut();
@@ -130,6 +133,7 @@ export default function App() {
             <Route path="/teacher/rosters" element={<StudentRosters />} />
             <Route path="/teacher/submitted-exams" element={<SubmittedExams />} />
             <Route path="/teacher/messages" element={<Messages />} />
+            <Route path="/teacher/question-bank" element={<QuestionBank />} />
             <Route path="/teacher/profile" element={<TeacherProfile />} />
             <Route
               path="/teacher/students"
