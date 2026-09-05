@@ -14,6 +14,7 @@ statsmodels
 scipy
 pandas
 python-pptx
+python-docx
 pdfplumber
 PyMuPDF
 matplotlib

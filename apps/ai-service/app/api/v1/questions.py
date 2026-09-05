@@ -15,8 +15,8 @@ router = APIRouter(prefix="/v1/questions", tags=["questions"])
 @router.post("/generate", dependencies=[Depends(verify_internal_api_key)])
 async def generate(file: UploadFile = File(...), counts: str = Form(...)):
     extension = Path(file.filename or "").suffix.lower()
-    if extension not in {".pdf", ".ppt", ".pptx"}:
-        raise HTTPException(415, "Only PDF, PPT, and PPTX files are supported")
+    if extension not in {".pdf", ".ppt", ".pptx", ".docx"}:
+        raise HTTPException(415, "Only PDF, PPT, PPTX, and DOCX files are supported")
     data = await file.read()
     if not data:
         raise HTTPException(422, "Uploaded file is empty")

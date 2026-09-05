@@ -67,6 +67,9 @@ export class CreateExamDto {
   @IsIn(['MANUAL', 'AI_GENERATED', 'GOOGLE_FORMS_IMPORT'])
   sourceType?: 'MANUAL' | 'AI_GENERATED' | 'GOOGLE_FORMS_IMPORT';
   @IsOptional() @IsString() @MaxLength(2000) externalFormUrl?: string;
+  @IsOptional() @IsUUID() sourceExamId?: string;
+  @IsOptional() @IsBoolean() randomizeQuestions?: boolean;
+  @IsOptional() @IsBoolean() randomizeOptions?: boolean;
   @IsInt() @Min(1) durationMinutes!: number;
   @IsBoolean() requireCamera!: boolean;
   @IsBoolean() requireMicrophone!: boolean;
@@ -80,6 +83,30 @@ export class CreateExamDto {
   @ValidateNested({ each: true })
   @Type(() => QuestionDto)
   questions?: QuestionDto[];
+}
+
+export class QuestionBankItemDto {
+  @IsOptional() @IsUUID() subjectId?: string;
+  @IsIn(['MULTIPLE_CHOICE', 'ENUMERATION', 'ESSAY', 'IDENTIFICATION']) type!:
+    | 'MULTIPLE_CHOICE'
+    | 'ENUMERATION'
+    | 'ESSAY'
+    | 'IDENTIFICATION';
+  @IsString() @IsNotEmpty() @MaxLength(5000) prompt!: string;
+  @IsInt() @Min(1) points!: number;
+  @IsBoolean() isRequired!: boolean;
+  @IsOptional() correctAnswer?: unknown;
+  @IsOptional() @IsString() @MaxLength(5000) rubric?: string;
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => QuestionOptionDto)
+  options?: QuestionOptionDto[];
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(80, { each: true })
+  topics!: string[];
+  @IsIn(['EASY', 'MEDIUM', 'HARD']) difficulty!: 'EASY' | 'MEDIUM' | 'HARD';
 }
 
 export class UpdateExamScheduleDto {

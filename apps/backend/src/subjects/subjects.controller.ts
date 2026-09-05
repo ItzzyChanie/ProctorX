@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   Req,
+  Query,
   UseGuards,
   UploadedFile,
   UseInterceptors,
@@ -24,6 +25,7 @@ import {
   UpdateSubjectDto,
   UpdateExamScheduleDto,
   AssignSectionDto,
+  QuestionBankItemDto,
 } from './dto/subjects.dto';
 import { SubjectsService } from './subjects.service';
 import type { QuestionCounts } from '../ai/ai.service';
@@ -33,6 +35,105 @@ export class SubjectsController {
   constructor(private subjects: SubjectsService) {}
   @Get('mine') @Roles(Role.TEACHER, Role.STUDENT) mine(@Req() req: any) {
     return this.subjects.mine(req.user.id, req.user.role);
+  }
+  @Get('question-bank') @Roles(Role.TEACHER) questionBank(
+    @Req() req: any,
+    @Query() query: Record<string, string | undefined>
+  ) {
+    return this.subjects.questionBank(req.user.id, query);
+  }
+  @Get('question-bank/exam-groups')
+  @Roles(Role.TEACHER)
+  questionBankExamGroups(
+    @Req() req: any,
+    @Query('archive') archive?: string
+  ) {
+    return this.subjects.questionBankExamGroups(
+      req.user.id,
+      archive === 'archived'
+    );
+  }
+  @Get('question-bank/exam-groups/:examId')
+  @Roles(Role.TEACHER)
+  questionBankExamItems(
+    @Req() req: any,
+    @Param('examId') examId: string,
+    @Query('archive') archive?: string
+  ) {
+    return this.subjects.questionBankExamItems(
+      examId,
+      req.user.id,
+      archive === 'archived'
+    );
+  }
+  @Delete('question-bank/exam-groups/:examId')
+  @Roles(Role.TEACHER)
+  archiveQuestionBankExam(
+    @Req() req: any,
+    @Param('examId') examId: string
+  ) {
+    return this.subjects.archiveQuestionBankExam(examId, req.user.id);
+  }
+  @Patch('question-bank/exam-groups/:examId/restore')
+  @Roles(Role.TEACHER)
+  restoreQuestionBankExam(
+    @Req() req: any,
+    @Param('examId') examId: string
+  ) {
+    return this.subjects.restoreQuestionBankExam(examId, req.user.id);
+  }
+  @Post('question-bank') @Roles(Role.TEACHER) createBankItem(
+    @Req() req: any,
+    @Body() body: QuestionBankItemDto
+  ) {
+    return this.subjects.createBankItem(req.user.id, body);
+  }
+  @Patch('question-bank/:itemId') @Roles(Role.TEACHER) updateBankItem(
+    @Req() req: any,
+    @Param('itemId') itemId: string,
+    @Body() body: QuestionBankItemDto
+  ) {
+    return this.subjects.updateBankItem(itemId, req.user.id, body);
+  }
+  @Delete('question-bank/:itemId') @Roles(Role.TEACHER) archiveBankItem(
+    @Req() req: any,
+    @Param('itemId') itemId: string
+  ) {
+    return this.subjects.archiveBankItem(itemId, req.user.id);
+  }
+  @Post('question-bank/import-document')
+  @Roles(Role.TEACHER)
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 20_000_000, files: 1 } })
+  )
+  importQuestionBankDocument(
+    @Req() req: any,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body('subjectId') subjectId: string,
+    @Body('counts') rawCounts: string
+  ) {
+    if (!file)
+      throw new BadRequestException('Choose a PDF, PPT, PPTX, or DOCX file');
+    if (!file.originalname.toLowerCase().match(/\.(pdf|ppt|pptx|docx)$/))
+      throw new BadRequestException(
+        'Only PDF, PPT, PPTX, and DOCX files are supported'
+      );
+    if (!subjectId)
+      throw new BadRequestException('Choose a subject for these questions');
+    return this.subjects.importQuestionBankDocument(
+      req.user.id,
+      subjectId,
+      file,
+      this.parseQuestionCounts(rawCounts)
+    );
+  }
+  @Post('question-bank/import-exam/:examId')
+  @Roles(Role.TEACHER)
+  importExamToQuestionBank(
+    @Req() req: any,
+    @Param('examId') examId: string
+  ) {
+    return this.subjects.importExamToQuestionBank(examId, req.user.id);
   }
   @Post() @Roles(Role.TEACHER) create(
     @Req() req: any,
@@ -105,6 +206,18 @@ export class SubjectsController {
   ) {
     return this.subjects.exams(id, req.user.id);
   }
+  @Get(':id/exams/:examId/copy') @Roles(Role.TEACHER) examCopy(
+    @Param('examId') examId: string,
+    @Req() req: any
+  ) {
+    return this.subjects.examCopy(examId, req.user.id);
+  }
+  @Get(':id/exams/:examId/versions') @Roles(Role.TEACHER) examVersions(
+    @Param('examId') examId: string,
+    @Req() req: any
+  ) {
+    return this.subjects.examVersions(examId, req.user.id);
+  }
   @Post(':id/exams') @Roles(Role.TEACHER) exam(
     @Param('id') id: string,
     @Req() req: any,
@@ -140,14 +253,24 @@ export class SubjectsController {
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body('counts') rawCounts: string
   ) {
-    if (!file) throw new BadRequestException('Choose a PDF, PPT, or PPTX file');
+    if (!file)
+      throw new BadRequestException('Choose a PDF, PPT, PPTX, or DOCX file');
     const extension = file.originalname
       .toLowerCase()
-      .match(/\.(pdf|ppt|pptx)$/)?.[1];
+      .match(/\.(pdf|ppt|pptx|docx)$/)?.[1];
     if (!extension)
       throw new BadRequestException(
-        'Only PDF, PPT, and PPTX files are supported'
+        'Only PDF, PPT, PPTX, and DOCX files are supported'
       );
+    return this.subjects.generateQuestions(
+      id,
+      req.user.id,
+      file,
+      this.parseQuestionCounts(rawCounts)
+    );
+  }
+
+  private parseQuestionCounts(rawCounts: string) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawCounts);
@@ -175,6 +298,6 @@ export class SubjectsController {
       values.reduce((sum, value) => sum + value, 0) > 50
     )
       throw new BadRequestException('Request between 1 and 50 total questions');
-    return this.subjects.generateQuestions(id, req.user.id, file, counts);
+    return counts;
   }
 }

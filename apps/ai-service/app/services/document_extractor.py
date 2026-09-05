@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pymupdf
 from pptx import Presentation
+from docx import Document
 
 from app.core.config import settings
 
@@ -67,6 +68,23 @@ def _convert_ppt(data: bytes) -> bytes:
         return converted.read_bytes()
 
 
+def _extract_docx(data: bytes) -> str:
+    try:
+        document = Document(io.BytesIO(data))
+    except Exception as error:
+        raise DocumentExtractionError("Unable to read the uploaded Word document") from error
+    sections: list[str] = []
+    for paragraph in document.paragraphs:
+        if paragraph.text.strip():
+            sections.append(paragraph.text.strip())
+    for table in document.tables:
+        for row in table.rows:
+            values = [cell.text.strip() for cell in row.cells]
+            if any(values):
+                sections.append(" | ".join(values))
+    return "\n".join(sections)
+
+
 def extract_document(data: bytes, extension: str) -> str:
     extension = extension.lower()
     if extension == ".pdf":
@@ -75,8 +93,10 @@ def extract_document(data: bytes, extension: str) -> str:
         text = _extract_pptx(data)
     elif extension == ".ppt":
         text = _extract_pptx(_convert_ppt(data))
+    elif extension == ".docx":
+        text = _extract_docx(data)
     else:
-        raise DocumentExtractionError("Only PDF, PPT, and PPTX files are supported")
+        raise DocumentExtractionError("Only PDF, PPT, PPTX, and DOCX files are supported")
     normalized = "\n".join(line.strip() for line in text.splitlines() if line.strip())
     if len(normalized) < 100:
         raise DocumentExtractionError("The document does not contain enough readable text. Scanned PDFs require OCR")

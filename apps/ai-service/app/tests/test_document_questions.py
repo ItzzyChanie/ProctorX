@@ -3,6 +3,7 @@ import io
 import pymupdf
 import pytest
 from pptx import Presentation
+from docx import Document
 
 from app.services.document_extractor import DocumentExtractionError, extract_document
 from app.services.question_generator import Counts, GeneratedDraft, _validate_semantics
@@ -27,6 +28,21 @@ def test_extracts_pptx_text_with_slide_reference():
     result = extract_document(buffer.getvalue(), ".pptx")
     assert "[Slide 1]" in result
     assert "primary key" in result
+
+
+def test_extracts_docx_paragraphs_and_tables():
+    document = Document()
+    document.add_paragraph(
+        "Computer networks connect devices so they can exchange data and share resources securely."
+    )
+    table = document.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "Protocol"
+    table.cell(0, 1).text = "HTTP"
+    buffer = io.BytesIO()
+    document.save(buffer)
+    result = extract_document(buffer.getvalue(), ".docx")
+    assert "Computer networks" in result
+    assert "Protocol | HTTP" in result
 
 
 def test_rejects_documents_without_enough_text():

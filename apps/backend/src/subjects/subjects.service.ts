@@ -26,6 +26,7 @@ import {
 } from './dto/subjects.dto';
 import { AiService, QuestionCounts } from '../ai/ai.service';
 import { SessionsGateway } from '../sessions/sessions.gateway';
+import { QuestionBankItemDto } from './dto/subjects.dto';
 
 @Injectable()
 export class SubjectsService implements OnModuleInit, OnModuleDestroy {
@@ -55,12 +56,15 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     return user.institutionId;
   }
   private async closeExpiredExams() {
-    const expired = await this.prisma.exam.findMany({
-      where: { status: ExamStatus.PUBLISHED, endsAt: { lte: new Date() } },
+    const now = new Date();
+    const candidates = await this.prisma.exam.findMany({
+      where: { status: ExamStatus.PUBLISHED, endsAt: { lte: now } },
       select: {
         id: true,
         title: true,
         assessmentType: true,
+        endsAt: true,
+        studentOverrides: { select: { extraTimeMinutes: true } },
         subject: {
           select: {
             subjectCode: true,
@@ -68,6 +72,15 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
           },
         },
       },
+    });
+    const expired = candidates.filter((exam) => {
+      const maximumExtraMinutes = Math.max(
+        0,
+        ...exam.studentOverrides.map((item) => item.extraTimeMinutes)
+      );
+      return (
+        !exam.endsAt || +exam.endsAt + maximumExtraMinutes * 60_000 <= +now
+      );
     });
     if (!expired.length) return;
     const ids = expired.map(({ id }) => id);
@@ -361,10 +374,9 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
         where: {
           subject: { teacherId: userId },
           status: ExamStatus.PUBLISHED,
-          OR: [
-            { endsAt: { lte: now } },
-            ...(completedIds.length ? [{ id: { in: completedIds } }] : []),
-          ],
+          ...(completedIds.length
+            ? { id: { in: completedIds } }
+            : { id: { in: [] } }),
         },
         data: { status: ExamStatus.ARCHIVED },
       });
@@ -375,11 +387,16 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
           exams: {
             where: {
               status: ExamStatus.PUBLISHED,
-              OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+              OR: [
+                { endsAt: null },
+                { endsAt: { gt: now } },
+                { sessions: { some: { status: SessionStatus.IN_PROGRESS } } },
+              ],
             },
             select: {
               id: true,
               title: true,
+              version: true,
               assessmentType: true,
               term: true,
               academicPeriod: {
@@ -693,6 +710,350 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       throw new ConflictException('Student is already enrolled');
     }
   }
+
+  async questionBank(
+    teacherId: string,
+    filters: {
+      search?: string;
+      subjectId?: string;
+      topic?: string;
+      difficulty?: string;
+      archive?: string;
+      includeGrouped?: string;
+    }
+  ) {
+    return this.prisma.questionBankItem.findMany({
+      where: {
+        teacherId,
+        archivedAt: filters.archive === 'archived' ? { not: null } : null,
+        ...(filters.includeGrouped === 'true' ? {} : { sourceExamId: null }),
+        ...(filters.subjectId ? { subjectId: filters.subjectId } : {}),
+        ...(filters.topic ? { topics: { has: filters.topic } } : {}),
+        ...(filters.difficulty
+          ? { difficulty: filters.difficulty as any }
+          : {}),
+        ...(filters.search
+          ? {
+              OR: [
+                {
+                  prompt: {
+                    contains: filters.search,
+                    mode: 'insensitive' as const,
+                  },
+                },
+                { topics: { has: filters.search } },
+              ],
+            }
+          : {}),
+      },
+      include: {
+        subject: { select: { id: true, subjectCode: true, name: true } },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async questionBankExamGroups(teacherId: string, archived: boolean) {
+    const rows = await this.prisma.questionBankItem.findMany({
+      where: {
+        teacherId,
+        sourceExamId: { not: null },
+        archivedAt: archived ? { not: null } : null,
+      },
+      select: {
+        sourceExamId: true,
+        createdAt: true,
+        sourceExam: {
+          select: {
+            id: true,
+            title: true,
+            version: true,
+            status: true,
+            subject: { select: { code: true, name: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    const groups = new Map<
+      string,
+      {
+        examId: string;
+        title: string;
+        version: number;
+        status: string;
+        subject: { code: string; name: string };
+        questionCount: number;
+        importedAt: Date;
+      }
+    >();
+    rows.forEach((row) => {
+      if (!row.sourceExamId || !row.sourceExam) return;
+      const existing = groups.get(row.sourceExamId);
+      if (existing) existing.questionCount += 1;
+      else
+        groups.set(row.sourceExamId, {
+          examId: row.sourceExamId,
+          title: row.sourceExam.title,
+          version: row.sourceExam.version,
+          status: row.sourceExam.status,
+          subject: row.sourceExam.subject,
+          questionCount: 1,
+          importedAt: row.createdAt,
+        });
+    });
+    return [...groups.values()];
+  }
+
+  async questionBankExamItems(
+    examId: string,
+    teacherId: string,
+    archived: boolean
+  ) {
+    const exam = await this.prisma.exam.findFirst({
+      where: { id: examId, subject: { teacherId } },
+      select: { id: true },
+    });
+    if (!exam)
+      throw new NotFoundException('Imported exam questionnaire not found');
+    return this.prisma.questionBankItem.findMany({
+      where: {
+        teacherId,
+        sourceExamId: examId,
+        archivedAt: archived ? { not: null } : null,
+      },
+      include: {
+        subject: { select: { id: true, subjectCode: true, name: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async archiveQuestionBankExam(examId: string, teacherId: string) {
+    const result = await this.prisma.questionBankItem.updateMany({
+      where: { teacherId, sourceExamId: examId, archivedAt: null },
+      data: { archivedAt: new Date() },
+    });
+    if (!result.count)
+      throw new NotFoundException('Imported exam questionnaire not found');
+    return { archived: true, count: result.count };
+  }
+
+  async restoreQuestionBankExam(examId: string, teacherId: string) {
+    const result = await this.prisma.questionBankItem.updateMany({
+      where: { teacherId, sourceExamId: examId, archivedAt: { not: null } },
+      data: { archivedAt: null },
+    });
+    if (!result.count)
+      throw new NotFoundException('Archived exam questionnaire not found');
+    return { restored: true, count: result.count };
+  }
+
+  private async validateBankSubject(
+    subjectId: string | undefined,
+    teacherId: string
+  ) {
+    if (subjectId) await this.owned(subjectId, teacherId);
+  }
+
+  private validateBankItem(dto: QuestionBankItemDto) {
+    if (
+      dto.type === 'MULTIPLE_CHOICE' &&
+      (!dto.options ||
+        dto.options.length < 2 ||
+        dto.options.filter((option) => option.isCorrect).length !== 1)
+    )
+      throw new BadRequestException(
+        'Multiple-choice bank questions need at least two options and exactly one correct answer'
+      );
+    if (
+      dto.type === 'IDENTIFICATION' &&
+      (typeof dto.correctAnswer !== 'string' || !dto.correctAnswer.trim())
+    )
+      throw new BadRequestException(
+        'Identification questions need a correct answer'
+      );
+    if (
+      dto.type === 'ENUMERATION' &&
+      (!Array.isArray(dto.correctAnswer) ||
+        !dto.correctAnswer.some((answer) => String(answer).trim()))
+    )
+      throw new BadRequestException(
+        'Enumeration questions need accepted answers'
+      );
+    if (dto.type === 'ESSAY' && !dto.rubric?.trim())
+      throw new BadRequestException('Essay questions need a rubric');
+  }
+
+  async createBankItem(teacherId: string, dto: QuestionBankItemDto) {
+    await this.validateBankSubject(dto.subjectId, teacherId);
+    this.validateBankItem(dto);
+    return this.prisma.questionBankItem.create({
+      data: {
+        teacherId,
+        subjectId: dto.subjectId,
+        type: dto.type as QuestionType,
+        prompt: dto.prompt.trim(),
+        points: dto.points,
+        isRequired: dto.isRequired,
+        correctAnswer: dto.correctAnswer as any,
+        rubric: dto.rubric?.trim(),
+        options: dto.options as any,
+        topics: [
+          ...new Set(dto.topics.map((topic) => topic.trim()).filter(Boolean)),
+        ],
+        difficulty: dto.difficulty,
+      },
+    });
+  }
+
+  async updateBankItem(
+    itemId: string,
+    teacherId: string,
+    dto: QuestionBankItemDto
+  ) {
+    const item = await this.prisma.questionBankItem.findFirst({
+      where: { id: itemId, teacherId, archivedAt: null },
+    });
+    if (!item) throw new NotFoundException('Question bank item not found');
+    await this.validateBankSubject(dto.subjectId, teacherId);
+    this.validateBankItem(dto);
+    return this.prisma.questionBankItem.update({
+      where: { id: itemId },
+      data: {
+        subjectId: dto.subjectId ?? null,
+        type: dto.type as QuestionType,
+        prompt: dto.prompt.trim(),
+        points: dto.points,
+        isRequired: dto.isRequired,
+        correctAnswer: dto.correctAnswer as any,
+        rubric: dto.rubric?.trim() || null,
+        options: dto.options as any,
+        topics: [
+          ...new Set(dto.topics.map((topic) => topic.trim()).filter(Boolean)),
+        ],
+        difficulty: dto.difficulty,
+      },
+    });
+  }
+
+  async archiveBankItem(itemId: string, teacherId: string) {
+    const result = await this.prisma.questionBankItem.updateMany({
+      where: { id: itemId, teacherId, archivedAt: null },
+      data: { archivedAt: new Date() },
+    });
+    if (!result.count)
+      throw new NotFoundException('Question bank item not found');
+    return { archived: true };
+  }
+
+  async importQuestionBankDocument(
+    teacherId: string,
+    subjectId: string,
+    file: Express.Multer.File,
+    counts: QuestionCounts
+  ) {
+    const generated = await this.generateQuestions(
+      subjectId,
+      teacherId,
+      file,
+      counts
+    );
+    const questions = generated.questions ?? [];
+    if (!questions.length)
+      throw new BadRequestException(
+        'No questions could be generated from the document'
+      );
+    await this.prisma.questionBankItem.createMany({
+      data: questions.map((question: any) => ({
+        teacherId,
+        subjectId,
+        type: question.type as QuestionType,
+        prompt: String(question.prompt).trim(),
+        points: Number(question.points) || 1,
+        isRequired: question.isRequired !== false,
+        correctAnswer:
+          question.type === 'ENUMERATION'
+            ? question.answers
+            : question.type === 'IDENTIFICATION'
+              ? question.answers?.[0]
+              : undefined,
+        rubric: question.type === 'ESSAY' ? question.rubric : undefined,
+        options:
+          question.type === 'MULTIPLE_CHOICE' ? question.options : undefined,
+        topics: [],
+        difficulty: 'MEDIUM',
+        source: ExamSourceType.AI_GENERATED,
+      })),
+    });
+    return { imported: questions.length };
+  }
+
+  async importExamToQuestionBank(examId: string, teacherId: string) {
+    const exam = await this.prisma.exam.findFirst({
+      where: { id: examId, subject: { teacherId } },
+      include: { questions: { include: { options: true } } },
+    });
+    if (!exam) throw new NotFoundException('Previous exam not found');
+    if (!exam.questions.length) return { imported: 0 };
+    const existing = await this.prisma.questionBankItem.count({
+      where: { teacherId, sourceExamId: examId },
+    });
+    if (existing)
+      throw new ConflictException(
+        'This exam questionnaire is already in the question bank'
+      );
+    await this.prisma.questionBankItem.createMany({
+      data: exam.questions.map((question) => ({
+        teacherId,
+        subjectId: exam.subjectId,
+        sourceExamId: exam.id,
+        type: question.type,
+        prompt: question.prompt,
+        points: question.points,
+        isRequired: question.isRequired,
+        correctAnswer: question.correctAnswer ?? undefined,
+        rubric: question.rubric,
+        options: question.options as any,
+        topics: [],
+        difficulty: 'MEDIUM',
+        source: question.source,
+      })),
+    });
+    return { imported: exam.questions.length };
+  }
+
+  async examCopy(examId: string, teacherId: string) {
+    const exam = await this.prisma.exam.findFirst({
+      where: { id: examId, subject: { teacherId } },
+      include: {
+        questions: { include: { options: true }, orderBy: { order: 'asc' } },
+      },
+    });
+    if (!exam) throw new NotFoundException('Previous exam not found');
+    return exam;
+  }
+
+  async examVersions(examId: string, teacherId: string) {
+    const exam = await this.prisma.exam.findFirst({
+      where: { id: examId, subject: { teacherId } },
+      select: { versionGroupId: true },
+    });
+    if (!exam) throw new NotFoundException('Exam not found');
+    return this.prisma.exam.findMany({
+      where: { versionGroupId: exam.versionGroupId },
+      select: {
+        id: true,
+        title: true,
+        version: true,
+        status: true,
+        publishedAt: true,
+        createdAt: true,
+        _count: { select: { questions: true, sessions: true } },
+      },
+      orderBy: { version: 'desc' },
+    });
+  }
   async createExam(subjectId: string, teacherId: string, dto: CreateExamDto) {
     const subject = await this.owned(subjectId, teacherId);
     const institutionId = await this.institutionFor(teacherId);
@@ -719,9 +1080,25 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     });
     if (activeExam)
       throw new ConflictException(
-        'Stop the active exam or quiz before creating another one'
+        'Stop or cancel the current scheduled exam or quiz before creating another one'
       );
     const questions = dto.questions ?? [];
+    const versionSource = dto.sourceExamId
+      ? await this.prisma.exam.findFirst({
+          where: { id: dto.sourceExamId, subjectId, subject: { teacherId } },
+          select: { versionGroupId: true },
+        })
+      : null;
+    if (dto.sourceExamId && !versionSource)
+      throw new NotFoundException('Source exam version not found');
+    const nextVersion = versionSource
+      ? ((
+          await this.prisma.exam.aggregate({
+            where: { versionGroupId: versionSource.versionGroupId },
+            _max: { version: true },
+          })
+        )._max.version ?? 0) + 1
+      : 1;
     const sourceType = dto.sourceType ?? 'MANUAL';
     if (sourceType !== 'GOOGLE_FORMS_IMPORT' && questions.length === 0)
       throw new ConflictException('At least one question is required');
@@ -775,6 +1152,11 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
           appPolicyMode: dto.appPolicyMode as AppPolicyMode,
           appPolicyList: dto.appPolicyList,
           status: ExamStatus.PUBLISHED,
+          randomizeQuestions: dto.randomizeQuestions ?? false,
+          randomizeOptions: dto.randomizeOptions ?? false,
+          versionGroupId: versionSource?.versionGroupId,
+          version: nextVersion,
+          publishedAt: new Date(),
           scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
           endsAt: dto.endsAt ? new Date(dto.endsAt) : null,
           sourceType: sourceType as ExamSourceType,
@@ -823,7 +1205,10 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
         data: enrollments.map(({ studentId }) => ({
           userId: studentId,
           type: 'ASSESSMENT_CREATED',
-          message: `${exam.assessmentType === AssessmentType.QUIZ ? 'Quiz' : 'Exam'} "${exam.title}" is now available for ${subject.subjectCode ?? subject.name}.`,
+          message:
+            exam.scheduledAt && exam.scheduledAt > new Date()
+              ? `${exam.assessmentType === AssessmentType.QUIZ ? 'Quiz' : 'Exam'} "${exam.title}" for ${subject.subjectCode ?? subject.name} is scheduled for ${exam.scheduledAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.`
+              : `${exam.assessmentType === AssessmentType.QUIZ ? 'Quiz' : 'Exam'} "${exam.title}" is now available for ${subject.subjectCode ?? subject.name}.`,
         })),
       });
     return exam;
@@ -839,14 +1224,44 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     const endsAt = new Date(input.endsAt);
     if (endsAt <= scheduledAt)
       throw new ConflictException('End time must be after the scheduled start');
-    const exam = await this.prisma.exam.findFirst({ where: { id: examId, subjectId } });
+    const exam = await this.prisma.exam.findFirst({
+      where: { id: examId, subjectId },
+    });
     if (!exam) throw new NotFoundException('Assessment not found');
-    const enrollments = await this.prisma.enrollment.findMany({ where: { subjectId }, select: { studentId: true } });
+    const enrollments = await this.prisma.enrollment.findMany({
+      where: { subjectId },
+      select: { studentId: true },
+    });
     const saved = await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.exam.update({ where: { id: examId }, data: { scheduledAt, endsAt, durationMinutes: Math.max(1, Math.round((+endsAt - +scheduledAt) / 60000)) } });
+      const updated = await tx.exam.update({
+        where: { id: examId },
+        data: {
+          scheduledAt,
+          endsAt,
+          durationMinutes: Math.max(
+            1,
+            Math.round((+endsAt - +scheduledAt) / 60000)
+          ),
+        },
+      });
       if (enrollments.length)
-        await tx.notification.createMany({ data: enrollments.map(({ studentId }) => ({ userId: studentId, type: 'ASSESSMENT_SCHEDULE_CHANGED', message: `The schedule for ${exam.title} in ${subject.subjectCode ?? subject.name} changed to ${scheduledAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.`, link: '/student/calendar' })) });
-      await tx.auditLog.create({ data: { actorId: teacherId, action: 'EXAM_SCHEDULE_UPDATED', targetType: 'Exam', targetId: examId, metadata: { scheduledAt, endsAt } } });
+        await tx.notification.createMany({
+          data: enrollments.map(({ studentId }) => ({
+            userId: studentId,
+            type: 'ASSESSMENT_SCHEDULE_CHANGED',
+            message: `The schedule for ${exam.title} in ${subject.subjectCode ?? subject.name} changed to ${scheduledAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.`,
+            link: '/student/calendar',
+          })),
+        });
+      await tx.auditLog.create({
+        data: {
+          actorId: teacherId,
+          action: 'EXAM_SCHEDULE_UPDATED',
+          targetType: 'Exam',
+          targetId: examId,
+          metadata: { scheduledAt, endsAt },
+        },
+      });
       return updated;
     });
     return saved;

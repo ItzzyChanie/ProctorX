@@ -178,27 +178,33 @@ enum ProctorReviewDecision {
   POSITIVE
 }
 
+enum QuestionDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
 model User {
-  id                    String               @id @default(uuid())
+  id                    String                @id @default(uuid())
   institutionId         String?
   role                  Role
-  loginId               String               @unique
-  email                 String?              @unique
+  loginId               String                @unique
+  email                 String?               @unique
   passwordHash          String
   fullName              String
-  profilePicture        String?              @db.Text
-  mustChangePassword    Boolean              @default(true)
-  isActive              Boolean              @default(true)
-  status                AccountStatus        @default(ACTIVE)
-  createdAt             DateTime             @default(now())
-  updatedAt             DateTime             @updatedAt
+  profilePicture        String?               @db.Text
+  mustChangePassword    Boolean               @default(true)
+  isActive              Boolean               @default(true)
+  status                AccountStatus         @default(ACTIVE)
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
   permissionOverrides   UserPermission[]
   deanProfile           DeanProfile?
   teacherProfile        TeacherProfile?
   studentProfile        StudentProfile?
   activationCodes       ActivationCode[]
-  uploadedImportBatches StudentImportBatch[] @relation("ImportBatchUploader")
-  taughtSubjects        Subject[]            @relation("SubjectTeacher")
+  uploadedImportBatches StudentImportBatch[]  @relation("ImportBatchUploader")
+  taughtSubjects        Subject[]             @relation("SubjectTeacher")
   enrollments           Enrollment[]
   subjectJoinRequests   SubjectJoinRequest[]
   examSessions          ExamSession[]
@@ -206,6 +212,10 @@ model User {
   notifications         Notification[]
   studentLoginSession   StudentLoginSession?
   requestedReports      GeneratedReport[]
+  questionBankItems     QuestionBankItem[]
+  examStudentOverrides  ExamStudentOverride[]
+  proctorReviews        ProctorReview[]       @relation("ProctorReviewTeacher")
+  proctorWarnings       ProctorWarning[]      @relation("ProctorWarningTeacher")
 
   @@index([institutionId, role])
   @@map("users")
@@ -322,6 +332,7 @@ model GeneratedReport {
   downloadPath  String?
   errorMessage  String?
   createdAt     DateTime        @default(now())
+  staleAt       DateTime?
   requestedBy   User            @relation(fields: [requestedById], references: [id])
 
   @@index([requestedById, createdAt])
@@ -407,6 +418,7 @@ model Subject {
   joinRequests       SubjectJoinRequest[]
   exams              Exam[]
   sectionAssignments SubjectSection[]
+  questionBankItems  QuestionBankItem[]
 
   @@unique([teacherId, subjectCode])
   @@index([teacherId])
@@ -458,35 +470,86 @@ model SubjectSection {
 }
 
 model Exam {
-  id                 String         @id @default(uuid())
+  id                 String                @id @default(uuid())
   subjectId          String
   academicPeriodId   String
   term               AcademicTerm
   title              String
-  assessmentType     AssessmentType @default(EXAM)
+  assessmentType     AssessmentType        @default(EXAM)
   instructions       String?
   totalPoints        Int
   durationMinutes    Int
-  roomCode           String         @unique
-  requireCamera      Boolean        @default(false)
-  requireMicrophone  Boolean        @default(false)
-  appPolicyMode      AppPolicyMode  @default(BLACKLIST)
-  appPolicyList      String[]       @default([])
-  status             ExamStatus     @default(DRAFT)
+  roomCode           String                @unique
+  requireCamera      Boolean               @default(false)
+  requireMicrophone  Boolean               @default(false)
+  appPolicyMode      AppPolicyMode         @default(BLACKLIST)
+  appPolicyList      String[]              @default([])
+  status             ExamStatus            @default(DRAFT)
   scheduledAt        DateTime?
   endsAt             DateTime?
-  sourceType         ExamSourceType @default(MANUAL)
+  sourceType         ExamSourceType        @default(MANUAL)
   externalFormUrl    String?
-  showCorrectAnswers Boolean        @default(false)
-  createdAt          DateTime       @default(now())
-  subject            Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  academicPeriod     AcademicPeriod @relation(fields: [academicPeriodId], references: [id])
+  showCorrectAnswers Boolean               @default(false)
+  randomizeQuestions Boolean               @default(false)
+  randomizeOptions   Boolean               @default(false)
+  versionGroupId     String                @default(uuid())
+  version            Int                   @default(1)
+  publishedAt        DateTime?
+  createdAt          DateTime              @default(now())
+  subject            Subject               @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  academicPeriod     AcademicPeriod        @relation(fields: [academicPeriodId], references: [id])
   questions          Question[]
   sessions           ExamSession[]
+  studentOverrides   ExamStudentOverride[]
+  questionBankCopies QuestionBankItem[]       @relation("QuestionBankSourceExam")
 
+  @@unique([versionGroupId, version])
   @@index([subjectId])
   @@index([academicPeriodId, term])
   @@map("exams")
+}
+
+model ExamStudentOverride {
+  id               String   @id @default(uuid())
+  examId           String
+  studentId        String
+  extraTimeMinutes Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  exam             Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student          User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, studentId])
+  @@index([studentId])
+  @@map("exam_student_overrides")
+}
+
+model QuestionBankItem {
+  id            String             @id @default(uuid())
+  teacherId     String
+  subjectId     String?
+  sourceExamId  String?
+  type          QuestionType
+  prompt        String
+  points        Int                @default(1)
+  isRequired    Boolean            @default(true)
+  correctAnswer Json?
+  rubric        String?
+  options       Json?
+  topics        String[]           @default([])
+  difficulty    QuestionDifficulty @default(MEDIUM)
+  source        ExamSourceType     @default(MANUAL)
+  archivedAt    DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  teacher       User               @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  subject       Subject?           @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  sourceExam    Exam?              @relation("QuestionBankSourceExam", fields: [sourceExamId], references: [id], onDelete: SetNull)
+
+  @@index([teacherId, archivedAt])
+  @@index([subjectId])
+  @@index([sourceExamId, archivedAt])
+  @@map("question_bank_items")
 }
 
 model AcademicPeriod {
@@ -584,6 +647,12 @@ model ExamSession {
   activeStartedAt           DateTime?
   lastHeartbeatAt           DateTime?
   remainingSeconds          Int?
+  extraTimeSeconds          Int                      @default(0)
+  questionOrder             String[]                 @default([])
+  optionOrder               Json?
+  isLocked                  Boolean                  @default(false)
+  resumeAuthorizedAt        DateTime?
+  integrityArchivedAt       DateTime?
   studentActivityArchivedAt DateTime?
   proctorReviewDecision     ProctorReviewDecision    @default(PENDING)
   proctorReviewedAt         DateTime?
@@ -597,6 +666,8 @@ model ExamSession {
   raiseHandRequests         RaiseHandRequest[]
   incidents                 Incident[]
   evidenceClips             EvidenceClip[]
+  proctorReviews            ProctorReview[]
+  proctorWarnings           ProctorWarning[]
 
   @@unique([examId, studentId])
   @@index([studentId])
@@ -604,6 +675,34 @@ model ExamSession {
   @@index([proctorReviewDecision])
   @@index([status, lastHeartbeatAt])
   @@map("exam_sessions")
+}
+
+model ProctorReview {
+  id               String                @id @default(uuid())
+  sessionId        String
+  teacherId        String
+  previousDecision ProctorReviewDecision
+  decision         ProctorReviewDecision
+  createdAt        DateTime              @default(now())
+  session          ExamSession           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  teacher          User                  @relation("ProctorReviewTeacher", fields: [teacherId], references: [id])
+
+  @@index([sessionId, createdAt])
+  @@map("proctor_reviews")
+}
+
+model ProctorWarning {
+  id             String      @id @default(uuid())
+  sessionId      String
+  teacherId      String
+  message        String
+  sentAt         DateTime    @default(now())
+  acknowledgedAt DateTime?
+  session        ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  teacher        User        @relation("ProctorWarningTeacher", fields: [teacherId], references: [id])
+
+  @@index([sessionId, sentAt])
+  @@map("proctor_warnings")
 }
 
 model Incident {

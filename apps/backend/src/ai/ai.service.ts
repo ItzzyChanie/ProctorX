@@ -1,6 +1,7 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import { calculateCorrelation, CorrelationPair } from './correlation';
 
 export type ReducedFuzzyIndicators = {
   tab_switch_count: number;
@@ -111,9 +112,8 @@ export class AiService {
     try { const { data } = await axios.get(`${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/jobs/${jobId}`, { headers: { 'X-Internal-Api-Key': this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key' }, timeout: 5000 }); return data; }
     catch { throw new ServiceUnavailableException('Report job service is unavailable.'); }
   }
-  async correlation(pairs: { suspicion_score: number; exam_score: number }[]) {
-    try { const { data } = await axios.post(`${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/analytics/correlation`, { pairs }, { headers: { 'X-Internal-Api-Key': this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key' }, timeout: 5000 }); return data; }
-    catch { throw new ServiceUnavailableException('Analytics service is unavailable.'); }
+  async correlation(pairs: CorrelationPair[]) {
+    return calculateCorrelation(pairs);
   }
   async generateQuestions(file: Express.Multer.File, counts: QuestionCounts) {
     const bytes = file.buffer.buffer.slice(
