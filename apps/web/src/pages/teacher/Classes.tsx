@@ -16,6 +16,7 @@ type Subject = {
   exams: {
     id: string;
     title: string;
+    version: number;
     assessmentType: 'EXAM' | 'QUIZ';
     term: 'UNSPECIFIED' | 'PRELIMINARY' | 'MIDTERM' | 'SEMI_FINAL' | 'FINAL';
     academicPeriod: { academicYear: string; semester: 'FIRST' | 'SECOND' };
@@ -80,7 +81,9 @@ const blank = (type: QType = 'MULTIPLE_CHOICE'): Question => ({
 const localDateTimeValue = (value: string | null) => {
   if (!value) return '';
   const date = new Date(value);
-  return new Date(+date - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  return new Date(+date - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 16);
 };
 const displayName = (fullName: string) => {
   const parts = fullName.trim().split(/\s+/);
@@ -123,6 +126,9 @@ export default function Classes() {
     [source, setSource] = useState(''),
     [sourceFile, setSourceFile] = useState<File>(),
     [draftGenerated, setDraftGenerated] = useState(false),
+    [sourceExamId, setSourceExamId] = useState(''),
+    [previousExamId, setPreviousExamId] = useState(''),
+    [selectedBankIds, setSelectedBankIds] = useState<string[]>([]),
     [counts, setCounts] = useState<Record<QType, number>>({
       MULTIPLE_CHOICE: 0,
       ENUMERATION: 0,
@@ -138,10 +144,17 @@ export default function Classes() {
       requireCamera: false,
       requireMicrophone: false,
       blockThirdPartyApps: true,
+      randomizeQuestions: false,
+      randomizeOptions: false,
     }),
     [questions, setQuestions] = useState<Question[]>([blank()]);
   const [assessmentClock, setAssessmentClock] = useState(() => Date.now());
-  const [rescheduling, setRescheduling] = useState<{ subject: Subject; exam: Subject['exams'][number]; scheduledAt: string; endsAt: string }>();
+  const [rescheduling, setRescheduling] = useState<{
+    subject: Subject;
+    exam: Subject['exams'][number];
+    scheduledAt: string;
+    endsAt: string;
+  }>();
   const noticeIsError =
     /could not|cannot|check|enter|choose|set at least|complete the|need|invalid|required|declined|failed|error|unsupported|exceed|unavailable|rate limit/i.test(
       notice
@@ -152,28 +165,39 @@ export default function Classes() {
     refetchInterval: 3_000,
     refetchIntervalInBackground: true,
   });
-  const activeExamFor = (subject: Subject) =>
+  const currentExamFor = (subject: Subject) =>
     subject.exams.find(
       (exam) =>
         !exam.endsAt || new Date(exam.endsAt).getTime() > assessmentClock
     );
+  const assessmentStateFor = (subject: Subject) => {
+    const exam = currentExamFor(subject);
+    if (!exam) return 'INACTIVE' as const;
+    if (
+      exam.scheduledAt &&
+      new Date(exam.scheduledAt).getTime() > assessmentClock
+    )
+      return 'PENDING' as const;
+    return 'ACTIVE' as const;
+  };
   useEffect(() => {
-    const deadlines =
+    const transitions =
       subjects.data
         ?.flatMap((subject) => subject.exams)
-        .map((exam) => (exam.endsAt ? new Date(exam.endsAt).getTime() : NaN))
+        .flatMap((exam) => [exam.scheduledAt, exam.endsAt])
+        .map((value) => (value ? new Date(value).getTime() : NaN))
         .filter(
-          (deadline) => Number.isFinite(deadline) && deadline > Date.now()
+          (transition) => Number.isFinite(transition) && transition > Date.now()
         ) ?? [];
-    if (!deadlines.length) return;
-    const nextDeadline = Math.min(...deadlines);
+    if (!transitions.length) return;
+    const nextTransition = Math.min(...transitions);
     const timer = window.setTimeout(
       () => {
         setAssessmentClock(Date.now());
         setStopping(undefined);
         void qc.invalidateQueries({ queryKey: ['subjects'] });
       },
-      Math.max(0, nextDeadline - Date.now() + 100)
+      Math.max(0, nextTransition - Date.now() + 100)
     );
     return () => window.clearTimeout(timer);
   }, [subjects.data, qc, assessmentClock]);
@@ -204,6 +228,22 @@ export default function Classes() {
       ).data;
       return rows.filter((row): row is Enrollment => Boolean(row?.student?.id));
     },
+  });
+  const bankItems = useQuery({
+    queryKey: ['question-bank-builder', active?.subject.id],
+    enabled: Boolean(active),
+    queryFn: async () =>
+      (
+        await api.get<any[]>('/subjects/question-bank', {
+          params: { includeGrouped: 'true' },
+        })
+      ).data,
+  });
+  const previousExams = useQuery({
+    queryKey: ['previous-exams', active?.subject.id],
+    enabled: Boolean(active),
+    queryFn: async () =>
+      (await api.get<any[]>('/subjects/' + active!.subject.id + '/exams')).data,
   });
   const createSubject = useMutation({
     mutationFn: () => api.post<Subject>('/subjects', subjectForm),
@@ -261,28 +301,42 @@ export default function Classes() {
   const stopExam = useMutation({
     mutationFn: (subject: Subject) =>
       api.post(
-        `/subjects/${subject.id}/exams/${activeExamFor(subject)!.id}/stop`
+        `/subjects/${subject.id}/exams/${currentExamFor(subject)!.id}/stop`
       ),
-    onSuccess: () => {
+    onSuccess: (_response, subject) => {
+      const wasPending = assessmentStateFor(subject) === 'PENDING';
       setStopping(undefined);
       setNotice(
-        'Exam/Quiz stopped successfully. You can now create a new one.'
+        wasPending
+          ? 'Scheduled exam/quiz cancelled. You can now create a new one.'
+          : 'Exam/Quiz stopped successfully. You can now create a new one.'
       );
       void qc.invalidateQueries({ queryKey: ['subjects'] });
     },
     onError: () => setNotice('Could not stop the exam/quiz.'),
   });
   const updateSchedule = useMutation({
-    mutationFn: () => api.patch(`/subjects/${rescheduling!.subject.id}/exams/${rescheduling!.exam.id}/schedule`, {
-      scheduledAt: new Date(rescheduling!.scheduledAt).toISOString(),
-      endsAt: new Date(rescheduling!.endsAt).toISOString(),
-    }),
+    mutationFn: () =>
+      api.patch(
+        `/subjects/${rescheduling!.subject.id}/exams/${rescheduling!.exam.id}/schedule`,
+        {
+          scheduledAt: new Date(rescheduling!.scheduledAt).toISOString(),
+          endsAt: new Date(rescheduling!.endsAt).toISOString(),
+        }
+      ),
     onSuccess: () => {
-      setNotice('Assessment schedule updated. Enrolled students were notified.');
+      setAssessmentClock(Date.now());
+      setNotice(
+        'Assessment schedule updated. Enrolled students were notified.'
+      );
       setRescheduling(undefined);
       void qc.invalidateQueries({ queryKey: ['subjects'] });
     },
-    onError: (error: any) => setNotice(error?.response?.data?.message ?? 'Could not update the assessment schedule.'),
+    onError: (error: any) =>
+      setNotice(
+        error?.response?.data?.message ??
+          'Could not update the assessment schedule.'
+      ),
   });
   const review = useMutation({
     mutationFn: (v: { id: string; status: 'APPROVED' | 'DECLINED' }) =>
@@ -302,6 +356,9 @@ export default function Classes() {
     setSource('');
     setSourceFile(undefined);
     setDraftGenerated(false);
+    setSourceExamId('');
+    setPreviousExamId('');
+    setSelectedBankIds([]);
     setAcademicPeriodId('');
     setTerm('');
     setForm({
@@ -313,6 +370,8 @@ export default function Classes() {
       requireCamera: false,
       requireMicrophone: false,
       blockThirdPartyApps: true,
+      randomizeQuestions: false,
+      randomizeOptions: false,
     });
     setQuestions([blank()]);
   };
@@ -349,6 +408,9 @@ export default function Classes() {
               ? 'AI_GENERATED'
               : 'MANUAL',
         externalFormUrl: mode === 'google' ? source.trim() : undefined,
+        sourceExamId: sourceExamId || undefined,
+        randomizeQuestions: form.randomizeQuestions,
+        randomizeOptions: form.randomizeOptions,
         requireCamera: form.requireCamera,
         requireMicrophone: form.requireMicrophone,
         appPolicyMode: 'BLACKLIST',
@@ -483,6 +545,81 @@ export default function Classes() {
       );
     },
   });
+  const loadPreviousExam = useMutation({
+    mutationFn: async () =>
+      (
+        await api.get<any>(
+          '/subjects/' +
+            active!.subject.id +
+            '/exams/' +
+            previousExamId +
+            '/copy'
+        )
+      ).data,
+    onSuccess: (exam) => {
+      setSourceExamId(exam.id);
+      setForm((current) => ({
+        ...current,
+        title: exam.title + ' (Revised)',
+        instructions: exam.instructions ?? '',
+        durationMinutes: exam.durationMinutes,
+        requireCamera: exam.requireCamera,
+        requireMicrophone: exam.requireMicrophone,
+        randomizeQuestions: exam.randomizeQuestions,
+        randomizeOptions: exam.randomizeOptions,
+      }));
+      setQuestions(
+        exam.questions.map((question: any) => ({
+          type: question.type,
+          prompt: question.prompt,
+          points: question.points,
+          isRequired: question.isRequired,
+          answers: Array.isArray(question.correctAnswer)
+            ? question.correctAnswer.map(String)
+            : [String(question.correctAnswer ?? '')],
+          rubric: question.rubric ?? '',
+          options: question.options.map((option: any) => ({
+            label: option.label,
+            isCorrect: option.isCorrect,
+          })),
+        }))
+      );
+      setMode('manual');
+      setNotice(
+        'Previous exam loaded as a new immutable version. Review it before publishing.'
+      );
+    },
+    onError: () => setNotice('Could not load the previous exam.'),
+  });
+  const addBankQuestions = () => {
+    const selected = (bankItems.data ?? []).filter((item) =>
+      selectedBankIds.includes(item.id)
+    );
+    if (!selected.length)
+      return setNotice('Select at least one bank question.');
+    const mapped = selected.map((item) => ({
+      type: item.type as QType,
+      prompt: item.prompt,
+      points: item.points,
+      isRequired: item.isRequired,
+      answers: Array.isArray(item.correctAnswer)
+        ? item.correctAnswer.map(String)
+        : [String(item.correctAnswer ?? '')],
+      rubric: item.rubric ?? '',
+      options: (item.options ?? []).map((option: any) => ({
+        label: option.label,
+        isCorrect: option.isCorrect,
+      })),
+    }));
+    setQuestions((current) => {
+      const useful = current.filter((question) => question.prompt.trim());
+      return [...useful, ...mapped];
+    });
+    setSelectedBankIds([]);
+    setNotice(
+      String(mapped.length) + ' reusable question(s) added to this exam.'
+    );
+  };
   return (
     <DashboardLayout role="teacher" pageTitle="Subjects & Exam Builder">
       {notice && (
@@ -603,23 +740,36 @@ export default function Classes() {
                     <td className="p-4">{s._count.exams}</td>
                     <td className="p-4">
                       <span
-                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${activeExamFor(s) ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                          assessmentStateFor(s) === 'PENDING'
+                            ? 'bg-amber-100 text-amber-800'
+                            : assessmentStateFor(s) === 'ACTIVE'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-slate-100 text-slate-600'
+                        }`}
                       >
-                        {activeExamFor(s)
-                          ? `Active · ${s.exams[0].term.replace('_', ' ')}`
+                        {currentExamFor(s)
+                          ? `${assessmentStateFor(s) === 'PENDING' ? 'Pending' : 'Active'} · ${currentExamFor(s)!.term.replace('_', ' ')} · v${currentExamFor(s)!.version}`
                           : 'Not Active'}
                       </span>
                     </td>
                     <td className="p-4">
                       <div className="flex gap-2">
-                        {activeExamFor(s) ? (
+                        {currentExamFor(s) ? (
                           <>
                             <Button
                               variant="ghost"
                               icon={Pencil}
                               onClick={() => {
-                                const exam = activeExamFor(s)!;
-                                setRescheduling({ subject: s, exam, scheduledAt: localDateTimeValue(exam.scheduledAt), endsAt: localDateTimeValue(exam.endsAt) });
+                                const exam = currentExamFor(s)!;
+                                setRescheduling({
+                                  subject: s,
+                                  exam,
+                                  scheduledAt: localDateTimeValue(
+                                    exam.scheduledAt
+                                  ),
+                                  endsAt: localDateTimeValue(exam.endsAt),
+                                });
                               }}
                             >
                               Reschedule
@@ -628,7 +778,9 @@ export default function Classes() {
                               variant="danger"
                               onClick={() => setStopping(s)}
                             >
-                              Stop
+                              {assessmentStateFor(s) === 'PENDING'
+                                ? 'Cancel'
+                                : 'Stop'}
                             </Button>
                           </>
                         ) : (
@@ -745,16 +897,93 @@ export default function Classes() {
                   {m === 'manual'
                     ? 'Manual'
                     : m === 'file'
-                      ? 'Generate from PPT/PDF'
+                      ? 'Generate from PPT/PDF/DOCX'
                       : 'Import / Embed Google Form'}
                 </Button>
               ))}
             </div>
+            {mode === 'manual' && (
+              <div className="mb-5 grid items-start gap-5 rounded-xl border border-border bg-canvas p-4 lg:grid-cols-2">
+                <div className="min-w-0">
+                  <p className="mb-2 text-sm font-bold">
+                    Start from a previous exam
+                  </p>
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
+                    <select
+                      value={previousExamId}
+                      onChange={(e) => setPreviousExamId(e.target.value)}
+                      className={input}
+                    >
+                      <option value="">Select a previous exam</option>
+                      {previousExams.data?.map((exam) => (
+                        <option key={exam.id} value={exam.id}>
+                          {exam.title} · version {exam.version ?? 1}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      type="button"
+                      disabled={!previousExamId || loadPreviousExam.isPending}
+                      onClick={() => loadPreviousExam.mutate()}
+                    >
+                      Load
+                    </Button>
+                  </div>
+                  {sourceExamId && (
+                    <p className="mt-2 text-xs text-brand">
+                      Publishing will create the next immutable version.
+                    </p>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="mb-2 text-sm font-bold">
+                    Add reusable bank questions
+                  </p>
+                  <div className="max-h-32 space-y-1 overflow-y-auto rounded-lg border border-border bg-surface p-2">
+                    {!bankItems.data?.length && (
+                      <p className="text-xs text-text-3">
+                        No questions saved for this subject yet.
+                      </p>
+                    )}
+                    {bankItems.data?.map((item) => (
+                      <label
+                        key={item.id}
+                        className="flex gap-2 text-xs text-text-2"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedBankIds.includes(item.id)}
+                          onChange={(e) =>
+                            setSelectedBankIds((current) =>
+                              e.target.checked
+                                ? [...current, item.id]
+                                : current.filter((id) => id !== item.id)
+                            )
+                          }
+                        />
+                        <span>
+                          <b>{item.difficulty}</b> · {item.prompt}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <Button
+                    className="mt-2"
+                    type="button"
+                    variant="ghost"
+                    disabled={!selectedBankIds.length}
+                    onClick={addBankQuestions}
+                  >
+                    Add selected questions
+                  </Button>
+                </div>
+              </div>
+            )}
             {mode === 'file' && (
               <div className="mb-5 rounded-xl border border-brand/20 bg-brand-soft p-4">
                 <input
                   type="file"
-                  accept=".ppt,.pptx,.pdf"
+                  accept=".ppt,.pptx,.pdf,.docx"
                   onChange={(e) => {
                     setSourceFile(e.target.files?.[0]);
                     setDraftGenerated(false);
@@ -782,8 +1011,8 @@ export default function Classes() {
                   ))}
                 </div>
                 <p className="my-3 text-xs">
-                  AI will suggest its best answers from the source. Review and
-                  edit everything before saving.
+                  AI will suggest its best answers from the PDF, PowerPoint, or
+                  Word source. Review and edit everything before saving.
                 </p>
                 <Button
                   type="button"
@@ -881,105 +1110,131 @@ export default function Classes() {
               </form>
             ) : (
               <form className="space-y-5" onSubmit={submit}>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label className="text-xs font-semibold">
-                    Academic semester
-                    <select
-                      className={`${input} mt-1`}
-                      value={academicPeriodId}
-                      onChange={(e) => setAcademicPeriodId(e.target.value)}
-                      required
-                    >
-                      <option value="">Select semester</option>
-                      {activePeriods.map((period) => (
-                        <option key={period.id} value={period.id}>
-                          {period.academicYear} ·{' '}
-                          {period.semester === 'FIRST'
-                            ? 'First Semester'
-                            : 'Second Semester'}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="text-xs font-semibold">
-                    Term
-                    <select
-                      className={`${input} mt-1`}
-                      value={term}
-                      onChange={(e) => setTerm(e.target.value)}
-                      required
-                    >
-                      <option value="">Select term</option>
-                      <option value="PRELIMINARY">Preliminary</option>
-                      <option value="MIDTERM">Midterm</option>
-                      <option value="SEMI_FINAL">Semi-final</option>
-                      <option value="FINAL">Final</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <input
-                    className={`${input} md:col-span-2`}
-                    maxLength={200}
-                    value={form.title}
-                    onChange={(e) =>
-                      setForm({ ...form, title: e.target.value })
-                    }
-                    placeholder="Title"
-                  />
-                  <label className="text-xs font-semibold">
-                    Start date and time
-                    <input
-                      className={`${input} mt-1`}
-                      type="datetime-local"
-                      value={form.scheduledAt}
-                      onChange={(e) =>
-                        setForm({ ...form, scheduledAt: e.target.value })
-                      }
-                    />
-                  </label>
-                </div>
-                <label className="block text-xs font-semibold">
-                  End date and time
-                  <input
-                    className={`${input} mt-1`}
-                    type="datetime-local"
-                    value={form.endsAt}
-                    onChange={(e) =>
-                      setForm({ ...form, endsAt: e.target.value })
-                    }
-                  />
-                </label>
-                <textarea
-                  className={input}
-                  value={form.instructions}
-                  onChange={(e) =>
-                    setForm({ ...form, instructions: e.target.value })
-                  }
-                  placeholder="Instructions"
-                />
-                {mode === 'manual' && (
-                  <div className="flex flex-wrap gap-5 text-sm">
-                    {(
-                      [
-                        ['requireCamera', 'Require camera'],
-                        ['requireMicrophone', 'Require microphone'],
-                        ['blockThirdPartyApps', 'Block third-party apps'],
-                      ] as const
-                    ).map(([k, l]) => (
-                      <label key={k}>
-                        <input
-                          className="mr-2"
-                          type="checkbox"
-                          checked={form[k]}
-                          onChange={(e) =>
-                            setForm({ ...form, [k]: e.target.checked })
-                          }
-                        />
-                        {l}
-                      </label>
-                    ))}
+                <section className="rounded-xl border border-border p-4 sm:p-5">
+                  <div className="mb-4">
+                    <h3 className="font-semibold text-text-1">Exam details</h3>
+                    <p className="text-xs text-text-3">
+                      Set the exam identity, semester, and availability period.
+                    </p>
                   </div>
+                  <div className="grid items-start gap-4 md:grid-cols-2">
+                    <label className="block min-w-0 text-xs font-semibold">
+                      Academic semester
+                      <select
+                        className={`${input} mt-1`}
+                        value={academicPeriodId}
+                        onChange={(e) => setAcademicPeriodId(e.target.value)}
+                        required
+                      >
+                        <option value="">Select semester</option>
+                        {activePeriods.map((period) => (
+                          <option key={period.id} value={period.id}>
+                            {period.academicYear} ·{' '}
+                            {period.semester === 'FIRST'
+                              ? 'First Semester'
+                              : 'Second Semester'}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block min-w-0 text-xs font-semibold">
+                      Term
+                      <select
+                        className={`${input} mt-1`}
+                        value={term}
+                        onChange={(e) => setTerm(e.target.value)}
+                        required
+                      >
+                        <option value="">Select term</option>
+                        <option value="PRELIMINARY">Preliminary</option>
+                        <option value="MIDTERM">Midterm</option>
+                        <option value="SEMI_FINAL">Semi-final</option>
+                        <option value="FINAL">Final</option>
+                      </select>
+                    </label>
+                    <label className="block min-w-0 text-xs font-semibold md:col-span-2">
+                      Exam title
+                      <input
+                        className={`${input} mt-1`}
+                        maxLength={200}
+                        value={form.title}
+                        onChange={(e) =>
+                          setForm({ ...form, title: e.target.value })
+                        }
+                        placeholder="Enter exam title"
+                      />
+                    </label>
+                    <label className="block min-w-0 text-xs font-semibold">
+                      Start date and time
+                      <input
+                        className={`${input} mt-1`}
+                        type="datetime-local"
+                        value={form.scheduledAt}
+                        onChange={(e) =>
+                          setForm({ ...form, scheduledAt: e.target.value })
+                        }
+                      />
+                    </label>
+                    <label className="block min-w-0 text-xs font-semibold">
+                      End date and time
+                      <input
+                        className={`${input} mt-1`}
+                        type="datetime-local"
+                        value={form.endsAt}
+                        onChange={(e) =>
+                          setForm({ ...form, endsAt: e.target.value })
+                        }
+                      />
+                    </label>
+                    <label className="block min-w-0 text-xs font-semibold md:col-span-2">
+                      Instructions
+                      <textarea
+                        className={`${input} mt-1 min-h-24 resize-y`}
+                        value={form.instructions}
+                        onChange={(e) =>
+                          setForm({ ...form, instructions: e.target.value })
+                        }
+                        placeholder="Enter instructions for students"
+                      />
+                    </label>
+                  </div>
+                </section>
+                {(mode === 'manual' || mode === 'file') && (
+                  <section className="rounded-xl border border-border p-4 sm:p-5">
+                    <div className="mb-4">
+                      <h3 className="font-semibold text-text-1">
+                        Exam settings
+                      </h3>
+                      <p className="text-xs text-text-3">
+                        Choose the monitoring and randomization rules.
+                      </p>
+                    </div>
+                    <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                      {(
+                        [
+                          ['requireCamera', 'Require camera'],
+                          ['requireMicrophone', 'Require microphone'],
+                          ['blockThirdPartyApps', 'Block third-party apps'],
+                          ['randomizeQuestions', 'Randomize question order'],
+                          ['randomizeOptions', 'Randomize answer order'],
+                        ] as const
+                      ).map(([k, l]) => (
+                        <label
+                          key={k}
+                          className="flex min-h-10 items-center gap-2 rounded-lg border border-border bg-canvas/40 px-3 py-2"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={form[k]}
+                            onChange={(e) =>
+                              setForm({ ...form, [k]: e.target.checked })
+                            }
+                          />
+                          {l}
+                        </label>
+                      ))}
+                    </div>
+                  </section>
                 )}
                 {(mode === 'manual' || draftGenerated) &&
                   questions.map((q, i) => (
@@ -987,42 +1242,47 @@ export default function Classes() {
                       key={i}
                       className="rounded-xl border border-border p-4"
                     >
-                      <div className="mb-3 flex flex-wrap items-center gap-2">
-                        <b>{i + 1}.</b>
-                        <select
-                          className="rounded border border-border p-2"
-                          value={q.type}
-                          onChange={(e) =>
-                            patchQ(i, {
-                              type: e.target.value as QType,
-                              answers: [''],
-                              options: blank().options,
-                            })
-                          }
-                        >
-                          {(
-                            [
-                              'MULTIPLE_CHOICE',
-                              'ENUMERATION',
-                              'IDENTIFICATION',
-                              'ESSAY',
-                            ] as QType[]
-                          ).map((t) => (
-                            <option key={t}>{t}</option>
-                          ))}
-                        </select>
-                        <input
-                          className="w-16 rounded border p-2"
-                          type="number"
-                          min="1"
-                          value={q.points}
-                          onChange={(e) =>
-                            patchQ(i, { points: +e.target.value })
-                          }
-                        />
-                        <label className="ml-auto text-sm">
+                      <div className="mb-4 grid items-end gap-3 sm:grid-cols-[auto_minmax(0,14rem)_6rem_1fr_auto]">
+                        <b className="self-center text-text-2">{i + 1}.</b>
+                        <label className="block min-w-0 text-xs font-semibold">
+                          Question type
+                          <select
+                            className={`${input} mt-1`}
+                            value={q.type}
+                            onChange={(e) =>
+                              patchQ(i, {
+                                type: e.target.value as QType,
+                                answers: [''],
+                                options: blank().options,
+                              })
+                            }
+                          >
+                            {(
+                              [
+                                'MULTIPLE_CHOICE',
+                                'ENUMERATION',
+                                'IDENTIFICATION',
+                                'ESSAY',
+                              ] as QType[]
+                            ).map((t) => (
+                              <option key={t}>{t.replace(/_/g, ' ')}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block text-xs font-semibold">
+                          Points
                           <input
-                            className="mr-2"
+                            className={`${input} mt-1`}
+                            type="number"
+                            min="1"
+                            value={q.points}
+                            onChange={(e) =>
+                              patchQ(i, { points: +e.target.value })
+                            }
+                          />
+                        </label>
+                        <label className="flex min-h-10 items-center gap-2 self-end text-sm sm:justify-self-end">
+                          <input
                             type="checkbox"
                             checked={q.isRequired}
                             onChange={(e) =>
@@ -1033,6 +1293,7 @@ export default function Classes() {
                         </label>
                         <button
                           type="button"
+                          className="grid min-h-10 min-w-10 place-items-center self-end rounded-lg text-text-3 hover:bg-red-50 hover:text-risk-high disabled:opacity-40"
                           disabled={questions.length === 1}
                           onClick={() =>
                             setQuestions((v) => v.filter((_, n) => n !== i))
@@ -1041,12 +1302,17 @@ export default function Classes() {
                           <Trash2 size={17} />
                         </button>
                       </div>
-                      <textarea
-                        className={input}
-                        value={q.prompt}
-                        onChange={(e) => patchQ(i, { prompt: e.target.value })}
-                        placeholder="Question"
-                      />
+                      <label className="block text-xs font-semibold">
+                        Question prompt
+                        <textarea
+                          className={`${input} mt-1 min-h-20 resize-y`}
+                          value={q.prompt}
+                          onChange={(e) =>
+                            patchQ(i, { prompt: e.target.value })
+                          }
+                          placeholder="Enter the question"
+                        />
+                      </label>
                       {q.type === 'MULTIPLE_CHOICE' && (
                         <div className="mt-3 space-y-2">
                           {q.options.map((o, n) => (
@@ -1289,10 +1555,58 @@ export default function Classes() {
       {rescheduling && (
         <div className="fixed inset-0 z-[65] grid place-items-center bg-black/50 p-4">
           <Card className="w-full max-w-md">
-            <CardHeader title="Reschedule assessment" subtitle={`${rescheduling.exam.title} · enrolled students will be notified`} />
-            <label className="mb-3 block text-sm font-semibold">New start<input type="datetime-local" value={rescheduling.scheduledAt} onChange={event => setRescheduling({ ...rescheduling, scheduledAt: event.target.value })} className={`${input} mt-1`} /></label>
-            <label className="mb-5 block text-sm font-semibold">New deadline<input type="datetime-local" value={rescheduling.endsAt} onChange={event => setRescheduling({ ...rescheduling, endsAt: event.target.value })} className={`${input} mt-1`} /></label>
-            <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setRescheduling(undefined)}>Cancel</Button><Button disabled={updateSchedule.isPending || !rescheduling.scheduledAt || !rescheduling.endsAt || new Date(rescheduling.endsAt) <= new Date(rescheduling.scheduledAt)} onClick={() => updateSchedule.mutate()}>{updateSchedule.isPending ? 'Saving…' : 'Save schedule'}</Button></div>
+            <CardHeader
+              title="Reschedule assessment"
+              subtitle={`${rescheduling.exam.title} · enrolled students will be notified`}
+            />
+            <label className="mb-3 block text-sm font-semibold">
+              New start
+              <input
+                type="datetime-local"
+                value={rescheduling.scheduledAt}
+                onChange={(event) =>
+                  setRescheduling({
+                    ...rescheduling,
+                    scheduledAt: event.target.value,
+                  })
+                }
+                className={`${input} mt-1`}
+              />
+            </label>
+            <label className="mb-5 block text-sm font-semibold">
+              New deadline
+              <input
+                type="datetime-local"
+                value={rescheduling.endsAt}
+                onChange={(event) =>
+                  setRescheduling({
+                    ...rescheduling,
+                    endsAt: event.target.value,
+                  })
+                }
+                className={`${input} mt-1`}
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => setRescheduling(undefined)}
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={
+                  updateSchedule.isPending ||
+                  !rescheduling.scheduledAt ||
+                  !rescheduling.endsAt ||
+                  new Date(rescheduling.endsAt) <=
+                    new Date(rescheduling.scheduledAt)
+                }
+                onClick={() => updateSchedule.mutate()}
+              >
+                {updateSchedule.isPending ? 'Saving…' : 'Save schedule'}
+              </Button>
+            </div>
           </Card>
         </div>
       )}
@@ -1300,13 +1614,25 @@ export default function Classes() {
         <div className="fixed inset-0 z-[60] grid place-items-center bg-black/50 p-4">
           <Card className="w-full max-w-md">
             <CardHeader
-              title="Stop Exam/Quiz"
-              subtitle="Students will no longer be able to join this assessment."
+              title={
+                assessmentStateFor(stopping) === 'PENDING'
+                  ? 'Cancel Scheduled Exam/Quiz'
+                  : 'Stop Exam/Quiz'
+              }
+              subtitle={
+                assessmentStateFor(stopping) === 'PENDING'
+                  ? 'The scheduled assessment will be cancelled before it starts.'
+                  : 'Students will no longer be able to join this assessment.'
+              }
             />
             <p className="mb-5 text-sm">
-              Are you sure you want to stop{' '}
-              <b>{activeExamFor(stopping)?.title}</b> early? This action cannot
-              be undone.
+              Are you sure you want to{' '}
+              {assessmentStateFor(stopping) === 'PENDING' ? 'cancel' : 'stop'}{' '}
+              <b>{currentExamFor(stopping)?.title}</b>
+              {assessmentStateFor(stopping) === 'PENDING'
+                ? ' before it starts'
+                : ' early'}
+              ? This action cannot be undone.
             </p>
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={() => setStopping(undefined)}>
@@ -1317,7 +1643,13 @@ export default function Classes() {
                 disabled={stopExam.isPending}
                 onClick={() => stopExam.mutate(stopping)}
               >
-                {stopExam.isPending ? 'Stopping…' : 'Stop exam/quiz'}
+                {stopExam.isPending
+                  ? assessmentStateFor(stopping) === 'PENDING'
+                    ? 'Cancelling…'
+                    : 'Stopping…'
+                  : assessmentStateFor(stopping) === 'PENDING'
+                    ? 'Cancel exam/quiz'
+                    : 'Stop exam/quiz'}
               </Button>
             </div>
           </Card>

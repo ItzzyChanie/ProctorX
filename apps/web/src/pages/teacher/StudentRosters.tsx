@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Search, Trash2 } from 'lucide-react';
+import { Clock3, Search, Trash2 } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -29,6 +29,9 @@ export default function StudentRosters() {
     [limit, setLimit] = useState(15),
     [page, setPage] = useState(1),
     [remove, setRemove] = useState<Student | null>(null),
+    [grant, setGrant] = useState<Student | null>(null),
+    [grantExamId, setGrantExamId] = useState(''),
+    [grantMinutes, setGrantMinutes] = useState(10),
     [toast, setToast] = useState('');
   const subjects = useQuery({
     queryKey: ['subjects-mine'],
@@ -48,12 +51,24 @@ export default function StudentRosters() {
           }[]
         >(`/subjects/${active}/students`)
       ).data;
-      return rows.filter((x) => Boolean(x?.student?.id)).map((x) => ({
-        ...x.student,
-        enrolledAt: x.enrolledAt,
-        status: x.student.status || x.assessmentStatus,
-      }));
+      return rows
+        .filter((x) => Boolean(x?.student?.id))
+        .map((x) => ({
+          ...x.student,
+          enrolledAt: x.enrolledAt,
+          status: x.student.status || x.assessmentStatus,
+        }));
     },
+  });
+  const exams = useQuery({
+    queryKey: ['roster-exams', active],
+    enabled: !!active,
+    queryFn: async () =>
+      (
+        await api.get<
+          { id: string; title: string; version: number; status: string }[]
+        >('/subjects/' + active + '/exams')
+      ).data,
   });
   const rows = useMemo(() => {
     let x = (roster.data ?? []).filter(
@@ -91,6 +106,32 @@ export default function StudentRosters() {
       setToast('Student removed from the subject successfully.');
       setTimeout(() => setToast(''), 3000);
     },
+  });
+  const addTime = useMutation({
+    mutationFn: () =>
+      api.patch(
+        '/sessions/exam/' +
+          grantExamId +
+          '/student/' +
+          grant?.id +
+          '/extra-time',
+        { minutes: grantMinutes }
+      ),
+    onSuccess: () => {
+      setToast(
+        String(grantMinutes) +
+          ' extra minutes granted to ' +
+          grant?.fullName +
+          '.'
+      );
+      setGrant(null);
+      setGrantExamId('');
+      setTimeout(() => setToast(''), 3000);
+    },
+    onError: (error: any) =>
+      setToast(
+        error?.response?.data?.message ?? 'Extra time could not be granted.'
+      ),
   });
   return (
     <DashboardLayout
@@ -243,6 +284,17 @@ export default function StudentRosters() {
                     </td>
                     <td className="px-3">
                       <button
+                        onClick={() => {
+                          setGrant(s);
+                          setGrantExamId(exams.data?.[0]?.id ?? '');
+                        }}
+                        className="rounded p-2 text-brand hover:bg-brand-soft"
+                        aria-label={`Grant extra time to ${s.fullName}`}
+                        title="Grant individual extra time"
+                      >
+                        <Clock3 size={16} />
+                      </button>
+                      <button
                         onClick={() => setRemove(s)}
                         className="rounded p-2 text-risk-high hover:bg-red-50"
                         aria-label={`Remove ${s.fullName}`}
@@ -307,6 +359,64 @@ export default function StudentRosters() {
                 onClick={() => del.mutate()}
               >
                 {del.isPending ? 'Removing…' : 'Remove student'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      {grant && (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-surface p-5">
+            <h2 className="text-lg font-bold">Grant individual extra time</h2>
+            <p className="mt-2 text-sm text-text-2">
+              Only {grant.fullName} will receive this time adjustment.
+            </p>
+            <label className="mt-4 block text-xs font-semibold">
+              Exam or quiz
+              <select
+                value={grantExamId}
+                onChange={(e) => setGrantExamId(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2"
+              >
+                <option value="">Select assessment</option>
+                {exams.data?.map((exam) => (
+                  <option key={exam.id} value={exam.id}>
+                    {exam.title} · v{exam.version} · {exam.status.toLowerCase()}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="mt-3 block text-xs font-semibold">
+              Additional minutes
+              <input
+                type="number"
+                min={1}
+                max={240}
+                value={grantMinutes}
+                onChange={(e) =>
+                  setGrantMinutes(
+                    Math.max(1, Math.min(240, Number(e.target.value) || 1))
+                  )
+                }
+                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2"
+              />
+            </label>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setGrant(null);
+                  setGrantExamId('');
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                icon={Clock3}
+                disabled={!grantExamId || addTime.isPending}
+                onClick={() => addTime.mutate()}
+              >
+                {addTime.isPending ? 'Granting…' : 'Grant extra time'}
               </Button>
             </div>
           </div>
