@@ -2806,3 +2806,18 @@
     transform: translateX(-50%) scale(0.375);
   }
 }
+/* Emphasize and gently group the four value statements on large displays only. */
+@media (min-width: 1280px) {
+  .lp-values .lp-container {
+    width: min(1000px, calc(100% - 48px));
+    min-height: 96px;
+  }
+  .lp-values span {
+    gap: 8px;
+    font-size: 13px;
+  }
+  .lp-values svg {
+    width: 22px;
+    height: 22px;
+  }
+}
