@@ -102,7 +102,7 @@ async def generate_questions(text: str, counts: Counts) -> GeneratedDraft:
         raise RuntimeError("GEMINI_API_KEY is not configured")
     prompt = f"""Create an editable assessment draft using ONLY the source document below.
 Requested counts: {json.dumps(counts.model_dump())}
-Requirements: exactly four plausible choices and one correct choice for multiple choice; enumeration answers must list all expected items; identification must have a concise accepted answer; essays need a suggested rubric; avoid duplicates; sourceReference must cite a page or slide marker from the source. Do not invent facts. If the source cannot support the requested questions, fail rather than fabricate.
+Requirements: use content across all supplied source documents; exactly four plausible choices and one correct choice for multiple choice; enumeration answers must list all expected items; identification must have a concise accepted answer; essays need a suggested rubric; avoid duplicates; sourceReference must cite the source filename and its page or slide marker. Do not invent facts. If the sources cannot support the requested questions, fail rather than fabricate.
 
 SOURCE DOCUMENT:
 {text}"""

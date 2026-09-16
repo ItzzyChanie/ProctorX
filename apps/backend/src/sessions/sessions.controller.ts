@@ -206,6 +206,15 @@ export class SessionsController {
   ) {
     return this.s.monitor(id, r.user.id);
   }
+  @Get('extra-time-options/subject/:subjectId/student/:studentId')
+  @Roles(Role.TEACHER)
+  extraTimeOptions(
+    @Req() r: any,
+    @Param('subjectId') subjectId: string,
+    @Param('studentId') studentId: string
+  ) {
+    return this.s.extraTimeOptions(subjectId, studentId, r.user.id);
+  }
   @Patch('exam/:examId/student/:studentId/extra-time')
   @Roles(Role.TEACHER)
   grantPreExamExtraTime(

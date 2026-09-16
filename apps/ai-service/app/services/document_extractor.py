@@ -100,4 +100,4 @@ def extract_document(data: bytes, extension: str) -> str:
     normalized = "\n".join(line.strip() for line in text.splitlines() if line.strip())
     if len(normalized) < 100:
         raise DocumentExtractionError("The document does not contain enough readable text. Scanned PDFs require OCR")
-    return normalized[: settings.max_document_characters]
+    return normalized

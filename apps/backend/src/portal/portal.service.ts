@@ -638,9 +638,12 @@ export class PortalService {
     return { attempts, subjects };
   }
 
-  async teacherExams(teacherId: string) {
+  async teacherExams(teacherId: string, archived = false) {
     const exams = await this.prisma.exam.findMany({
-      where: { subject: { teacherId } },
+      where: {
+        subject: { teacherId },
+        sessionsArchivedAt: archived ? { not: null } : null,
+      },
       include: {
         subject: { include: { _count: { select: { enrollments: true } } } },
         academicPeriod: true,
@@ -650,17 +653,26 @@ export class PortalService {
     });
 
     return exams.map((x) => {
-      const ended =
-        x.status !== 'PUBLISHED' || (!!x.endsAt && x.endsAt <= new Date());
-      const live = ended
-        ? 0
-        : x.sessions.filter((s) => s.status === SessionStatus.IN_PROGRESS)
-            .length;
       const completed =
         x.subject._count.enrollments > 0 &&
         x.sessions.filter(
           (session) => session.status === SessionStatus.COMPLETED
         ).length >= x.subject._count.enrollments;
+      const now = new Date();
+      const ended =
+        x.status === 'ARCHIVED' ||
+        completed ||
+        (!!x.endsAt && x.endsAt <= now);
+      const withinWindow =
+        x.status === 'PUBLISHED' &&
+        !!x.scheduledAt &&
+        x.scheduledAt <= now &&
+        !!x.endsAt &&
+        x.endsAt > now;
+      const live = ended
+        ? 0
+        : x.sessions.filter((s) => s.status === SessionStatus.IN_PROGRESS)
+            .length;
       return {
         id: x.id,
         examId: x.id,
@@ -672,19 +684,77 @@ export class PortalService {
         term: x.term,
         academicPeriod: x.academicPeriod,
         roomCode: x.roomCode,
+        sessionsArchivedAt: x.sessionsArchivedAt,
         status: ended
           ? 'Ended'
-          : live
+          : withinWindow
             ? 'Live'
-            : completed
-              ? 'Ended'
-              : x.status === 'PUBLISHED'
-                ? 'Scheduled'
-                : x.status,
+            : x.status === 'PUBLISHED'
+              ? 'Scheduled'
+              : x.status,
         liveSessionCount: live,
         studentCount: x.subject._count.enrollments,
       };
     });
+  }
+
+  async setTeacherExamArchived(
+    teacherId: string,
+    examId: string,
+    archived: boolean
+  ) {
+    const exam = await this.prisma.exam.findFirst({
+      where: { id: examId, subject: { teacherId } },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        endsAt: true,
+        sessionsArchivedAt: true,
+        subject: {
+          select: { _count: { select: { enrollments: true } } },
+        },
+        sessions: { select: { status: true } },
+      },
+    });
+    if (!exam) throw new NotFoundException('Assessment not found');
+    const completed =
+      exam.subject._count.enrollments > 0 &&
+      exam.sessions.filter(
+        (session) => session.status === SessionStatus.COMPLETED
+      ).length >= exam.subject._count.enrollments;
+    if (
+      archived &&
+      exam.status === 'PUBLISHED' &&
+      !completed &&
+      (!exam.endsAt || exam.endsAt > new Date())
+    )
+      throw new ConflictException(
+        'Only ended assessments can be archived from Sessions'
+      );
+    if (archived === Boolean(exam.sessionsArchivedAt))
+      return {
+        id: exam.id,
+        sessionsArchivedAt: exam.sessionsArchivedAt,
+        unchanged: true,
+      };
+    const updated = await this.prisma.exam.update({
+      where: { id: exam.id },
+      data: { sessionsArchivedAt: archived ? new Date() : null },
+      select: { id: true, sessionsArchivedAt: true },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: archived
+          ? 'TEACHER_SESSION_ROW_ARCHIVED'
+          : 'TEACHER_SESSION_ROW_RESTORED',
+        targetType: 'Exam',
+        targetId: exam.id,
+        metadata: { title: exam.title },
+      },
+    });
+    return updated;
   }
 
   async playback(teacherId: string, id: string) {

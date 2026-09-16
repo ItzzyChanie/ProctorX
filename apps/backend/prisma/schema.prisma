@@ -495,6 +495,7 @@ model Exam {
   versionGroupId     String                @default(uuid())
   version            Int                   @default(1)
   publishedAt        DateTime?
+  sessionsArchivedAt DateTime?
   createdAt          DateTime              @default(now())
   subject            Subject               @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   academicPeriod     AcademicPeriod        @relation(fields: [academicPeriodId], references: [id])
@@ -506,6 +507,7 @@ model Exam {
   @@unique([versionGroupId, version])
   @@index([subjectId])
   @@index([academicPeriodId, term])
+  @@index([sessionsArchivedAt])
   @@map("exams")
 }
 

@@ -1,4 +1,8 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  HttpException,
+  Injectable,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import { calculateCorrelation, CorrelationPair } from './correlation';
@@ -104,24 +108,64 @@ export class AiService {
       );
     }
   }
-  async requestReport(payload: unknown, format: "pdf" | "html" | "excel") {
-    try { const { data } = await axios.post(`${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/jobs/reports`, { payload, format }, { headers: { 'X-Internal-Api-Key': this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key' }, timeout: 5000 }); return data; }
-    catch { throw new ServiceUnavailableException('Report job service is unavailable.'); }
+  async requestReport(payload: unknown, format: 'pdf' | 'html' | 'excel') {
+    try {
+      const { data } = await axios.post(
+        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/jobs/reports`,
+        { payload, format },
+        {
+          headers: {
+            'X-Internal-Api-Key':
+              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+          },
+          timeout: 5000,
+        }
+      );
+      return data;
+    } catch {
+      throw new ServiceUnavailableException(
+        'Report job service is unavailable.'
+      );
+    }
   }
   async jobStatus(jobId: string) {
-    try { const { data } = await axios.get(`${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/jobs/${jobId}`, { headers: { 'X-Internal-Api-Key': this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key' }, timeout: 5000 }); return data; }
-    catch { throw new ServiceUnavailableException('Report job service is unavailable.'); }
+    try {
+      const { data } = await axios.get(
+        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/jobs/${jobId}`,
+        {
+          headers: {
+            'X-Internal-Api-Key':
+              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+          },
+          timeout: 5000,
+        }
+      );
+      return data;
+    } catch {
+      throw new ServiceUnavailableException(
+        'Report job service is unavailable.'
+      );
+    }
   }
   async correlation(pairs: CorrelationPair[]) {
     return calculateCorrelation(pairs);
   }
-  async generateQuestions(file: Express.Multer.File, counts: QuestionCounts) {
-    const bytes = file.buffer.buffer.slice(
-      file.buffer.byteOffset,
-      file.buffer.byteOffset + file.buffer.byteLength
-    ) as ArrayBuffer;
+  async generateQuestions(
+    files: Express.Multer.File[],
+    counts: QuestionCounts
+  ) {
     const form = new FormData();
-    form.append('file', new Blob([bytes], { type: file.mimetype }), file.originalname);
+    for (const file of files) {
+      const bytes = file.buffer.buffer.slice(
+        file.buffer.byteOffset,
+        file.buffer.byteOffset + file.buffer.byteLength
+      ) as ArrayBuffer;
+      form.append(
+        'files',
+        new Blob([bytes], { type: file.mimetype }),
+        file.originalname
+      );
+    }
     form.append('counts', JSON.stringify(counts));
     try {
       const { data } = await axios.post(
@@ -138,9 +182,14 @@ export class AiService {
       return data;
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.data?.detail) {
-        throw new ServiceUnavailableException(String(error.response.data.detail));
+        throw new HttpException(
+          String(error.response.data.detail),
+          error.response.status
+        );
       }
-      throw new ServiceUnavailableException('AI question generation service is unavailable.');
+      throw new ServiceUnavailableException(
+        'AI question generation service is unavailable.'
+      );
     }
   }
 }

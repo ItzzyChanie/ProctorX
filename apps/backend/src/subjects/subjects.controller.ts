@@ -10,10 +10,11 @@ import {
   Query,
   UseGuards,
   UploadedFile,
+  UploadedFiles,
   UseInterceptors,
   BadRequestException,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
@@ -245,27 +246,36 @@ export class SubjectsController {
   @Post(':id/questions/generate')
   @Roles(Role.TEACHER)
   @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: 20_000_000, files: 1 } })
+    FilesInterceptor('files', 20, {
+      limits: { fileSize: 20_000_000, files: 20 },
+    })
   )
   generateQuestions(
     @Param('id') id: string,
     @Req() req: any,
-    @UploadedFile() file: Express.Multer.File | undefined,
+    @UploadedFiles() files: Express.Multer.File[] | undefined,
     @Body('counts') rawCounts: string
   ) {
-    if (!file)
-      throw new BadRequestException('Choose a PDF, PPT, PPTX, or DOCX file');
-    const extension = file.originalname
-      .toLowerCase()
-      .match(/\.(pdf|ppt|pptx|docx)$/)?.[1];
-    if (!extension)
+    if (!files?.length)
       throw new BadRequestException(
-        'Only PDF, PPT, PPTX, and DOCX files are supported'
+        'Choose at least one PDF, PPT, PPTX, or DOCX file'
+      );
+    const invalid = files.find(
+      (file) => !file.originalname.toLowerCase().match(/\.(pdf|ppt|pptx|docx)$/)
+    );
+    if (invalid)
+      throw new BadRequestException(
+        `Unsupported document ${invalid.originalname}. Only PDF, PPT, PPTX, and DOCX files are supported`
+      );
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    if (totalBytes > 100_000_000)
+      throw new BadRequestException(
+        'The combined document upload cannot exceed 100 MB'
       );
     return this.subjects.generateQuestions(
       id,
       req.user.id,
-      file,
+      files,
       this.parseQuestionCounts(rawCounts)
     );
   }

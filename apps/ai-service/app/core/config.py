@@ -11,7 +11,9 @@ class Settings(BaseSettings):
     llm_provider: str = "gemini"
     gemini_api_key: str | None = None
     max_document_size_mb: int = 20
-    max_document_characters: int = 100_000
+    max_document_files: int = 20
+    max_document_total_size_mb: int = 100
+    max_combined_document_characters: int = 500_000
     max_generated_questions: int = 50
     question_generation_timeout_seconds: int = 120
     libreoffice_path: str = r"C:\Program Files\LibreOffice\program\soffice.exe"

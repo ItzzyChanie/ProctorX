@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Copy, Plus } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Archive, Copy, Plus, RotateCcw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
@@ -16,20 +16,30 @@ type Exam = {
   liveSessionCount: number;
   studentCount: number;
   term?: string;
+  sessionsArchivedAt?: string | null;
   academicPeriod?: { id:string; academicYear:string; semester:'FIRST'|'SECOND' };
 };
 export default function Sessions() {
   const nav = useNavigate(),
+    client = useQueryClient(),
     [toast, setToast] = useState(''),
+    [toastError, setToastError] = useState(false),
     [periodId,setPeriodId]=useState(''),
-    [term,setTerm]=useState('');
+    [term,setTerm]=useState(''),
+    [archiveTab, setArchiveTab] = useState<'active' | 'archived'>('active'),
+    [archiving, setArchiving] = useState<Exam | null>(null);
   const {
     data: rows = [],
     isLoading,
     isError,
   } = useQuery({
-    queryKey: ['teacher-exams'],
-    queryFn: async () => (await api.get<Exam[]>('/teacher/exams')).data,
+    queryKey: ['teacher-exams', archiveTab],
+    queryFn: async () =>
+      (
+        await api.get<Exam[]>('/teacher/exams', {
+          params: archiveTab === 'archived' ? { archive: 'archived' } : undefined,
+        })
+      ).data,
     refetchInterval: 5_000,
   });
   const periodOptions=useQuery({queryKey:['academic-periods'],queryFn:async()=>(await api.get<{id:string;academicYear:string;semester:'FIRST'|'SECOND'}[]>('/academic-periods')).data});
@@ -37,9 +47,47 @@ export default function Sessions() {
   const visible=useMemo(()=>rows.filter(x=>(!periodId||x.academicPeriod?.id===periodId)&&(!term||x.term===term)),[rows,periodId,term]);
   const copy = async (code: string) => {
     await navigator.clipboard.writeText(code);
+    setToastError(false);
     setToast('Room code copied.');
     window.setTimeout(() => setToast(''), 2500);
   };
+  const archiveExam = useMutation({
+    mutationFn: (examId: string) =>
+      api.patch(`/teacher/exams/${examId}/archive`),
+    onSuccess: () => {
+      setArchiving(null);
+      setToastError(false);
+      setToast('Assessment archived from Sessions.');
+      void client.invalidateQueries({ queryKey: ['teacher-exams'] });
+      window.setTimeout(() => setToast(''), 3000);
+    },
+    onError: (error: any) => {
+      setToastError(true);
+      setToast(
+        error?.response?.data?.message ??
+          'The assessment could not be archived.'
+      );
+      window.setTimeout(() => setToast(''), 5000);
+    },
+  });
+  const restoreExam = useMutation({
+    mutationFn: (examId: string) =>
+      api.patch(`/teacher/exams/${examId}/restore`),
+    onSuccess: () => {
+      setToastError(false);
+      setToast('Assessment restored to active Sessions.');
+      void client.invalidateQueries({ queryKey: ['teacher-exams'] });
+      window.setTimeout(() => setToast(''), 3000);
+    },
+    onError: (error: any) => {
+      setToastError(true);
+      setToast(
+        error?.response?.data?.message ??
+          'The assessment could not be restored.'
+      );
+      window.setTimeout(() => setToast(''), 5000);
+    },
+  });
   return (
     <DashboardLayout
       role="teacher"
@@ -51,7 +99,9 @@ export default function Sessions() {
         {toast && (
           <div
             role="status"
-            className="fixed bottom-5 right-5 rounded bg-emerald-600 px-4 py-3 text-sm text-white"
+            className={`fixed bottom-5 right-5 z-[80] rounded px-4 py-3 text-sm text-white ${
+              toastError ? 'bg-red-600' : 'bg-emerald-600'
+            }`}
           >
             {toast}
           </div>
@@ -67,6 +117,22 @@ export default function Sessions() {
             }
           />
         </Card>
+        <Card>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant={archiveTab === 'active' ? 'primary' : 'ghost'}
+              onClick={() => setArchiveTab('active')}
+            >
+              Active sessions
+            </Button>
+            <Button
+              variant={archiveTab === 'archived' ? 'primary' : 'ghost'}
+              onClick={() => setArchiveTab('archived')}
+            >
+              Archived sessions
+            </Button>
+          </div>
+        </Card>
         <Card><div className="grid gap-3 md:grid-cols-2"><select value={periodId} onChange={e=>setPeriodId(e.target.value)} className="rounded border border-border bg-surface p-2"><option value="">All semesters</option>{periods.map(x=><option key={x.id} value={x.id}>{x.academicYear} · {x.semester==='FIRST'?'First':'Second'} Semester</option>)}</select><select value={term} onChange={e=>setTerm(e.target.value)} className="rounded border border-border bg-surface p-2"><option value="">All terms</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option></select></div></Card>
         <Card padded={false}>
           {isLoading && (
@@ -77,9 +143,11 @@ export default function Sessions() {
               Could not load your exams.
             </div>
           )}
-          {!isLoading && !isError && !rows.length && (
+          {!isLoading && !isError && !visible.length && (
             <div className="p-5 text-sm text-text-2">
-              Create an exam to generate its student room code.
+              {archiveTab === 'archived'
+                ? 'No archived assessments match the selected filters.'
+                : 'No active assessments match the selected filters.'}
             </div>
           )}
           {visible.map((r, i) => (
@@ -117,11 +185,62 @@ export default function Sessions() {
                 >
                   {r.status}
                 </Chip>
+                {archiveTab === 'archived' ? (
+                  <Button
+                    variant="ghost"
+                    icon={RotateCcw}
+                    disabled={restoreExam.isPending}
+                    onClick={() => restoreExam.mutate(r.examId)}
+                  >
+                    Restore
+                  </Button>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    icon={Archive}
+                    disabled={r.status !== 'Ended' || archiveExam.isPending}
+                    title={
+                      r.status === 'Ended'
+                        ? 'Archive assessment'
+                        : 'Only ended assessments can be archived'
+                    }
+                    onClick={() => setArchiving(r)}
+                  >
+                    Archive
+                  </Button>
+                )}
               </div>
             </div>
           ))}
         </Card>
       </div>
+      {archiving && (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-surface p-5">
+            <h2 className="text-lg font-bold">Archive assessment?</h2>
+            <p className="mt-2 text-sm text-text-2">
+              Archive <b>{archiving.title}</b> from the Sessions list? Exam
+              records, submissions, and monitoring history will be retained.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                disabled={archiveExam.isPending}
+                onClick={() => setArchiving(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                icon={Archive}
+                disabled={archiveExam.isPending}
+                onClick={() => archiveExam.mutate(archiving.examId)}
+              >
+                {archiveExam.isPending ? 'Archiving…' : 'Archive assessment'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   );
 }

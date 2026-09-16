@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Clock3, Search, Trash2 } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
@@ -20,6 +20,23 @@ type Student = {
   status: string;
   enrolledAt: string;
 };
+type ExtraTimeOption = {
+  id: string;
+  title: string;
+  assessmentType: 'EXAM' | 'QUIZ';
+  version: number;
+  scheduledAt: string;
+  endsAt: string;
+  lifecycle: 'LIVE';
+  assessmentStatus:
+    | 'NOT_STARTED'
+    | 'IN_PROGRESS'
+    | 'DISCONNECTED'
+    | 'COMPLETED';
+  extraTimeMinutes: number;
+  eligible: boolean;
+  ineligibleReason?: string | null;
+};
 export default function StudentRosters() {
   const client = useQueryClient(),
     [subjectId, setSubjectId] = useState(''),
@@ -32,7 +49,9 @@ export default function StudentRosters() {
     [grant, setGrant] = useState<Student | null>(null),
     [grantExamId, setGrantExamId] = useState(''),
     [grantMinutes, setGrantMinutes] = useState(10),
-    [toast, setToast] = useState('');
+    [confirmGrant, setConfirmGrant] = useState(false),
+    [toast, setToast] = useState(''),
+    [toastError, setToastError] = useState(false);
   const subjects = useQuery({
     queryKey: ['subjects-mine'],
     queryFn: async () => (await api.get<Subject[]>('/subjects/mine')).data,
@@ -60,16 +79,28 @@ export default function StudentRosters() {
         }));
     },
   });
-  const exams = useQuery({
-    queryKey: ['roster-exams', active],
-    enabled: !!active,
+  const extraTimeOptions = useQuery({
+    queryKey: ['extra-time-options', active, grant?.id],
+    enabled: !!active && !!grant,
     queryFn: async () =>
       (
-        await api.get<
-          { id: string; title: string; version: number; status: string }[]
-        >('/subjects/' + active + '/exams')
+        await api.get<ExtraTimeOption[]>(
+          `/sessions/extra-time-options/subject/${active}/student/${grant!.id}`
+        )
       ).data,
+    refetchInterval: grant ? 5_000 : false,
   });
+  useEffect(() => {
+    if (
+      grant &&
+      extraTimeOptions.data?.length &&
+      !extraTimeOptions.data.some((exam) => exam.id === grantExamId)
+    )
+      setGrantExamId(extraTimeOptions.data[0].id);
+  }, [grant, grantExamId, extraTimeOptions.data]);
+  const selectedAssessment = extraTimeOptions.data?.find(
+    (exam) => exam.id === grantExamId
+  );
   const rows = useMemo(() => {
     let x = (roster.data ?? []).filter(
       (s) =>
@@ -103,6 +134,7 @@ export default function StudentRosters() {
         queryKey: ['classes-subject-roster', active],
       });
       setRemove(null);
+      setToastError(false);
       setToast('Student removed from the subject successfully.');
       setTimeout(() => setToast(''), 3000);
     },
@@ -118,6 +150,7 @@ export default function StudentRosters() {
         { minutes: grantMinutes }
       ),
     onSuccess: () => {
+      setToastError(false);
       setToast(
         String(grantMinutes) +
           ' extra minutes granted to ' +
@@ -126,12 +159,19 @@ export default function StudentRosters() {
       );
       setGrant(null);
       setGrantExamId('');
+      setConfirmGrant(false);
+      void client.invalidateQueries({ queryKey: ['extra-time-options'] });
       setTimeout(() => setToast(''), 3000);
     },
-    onError: (error: any) =>
+    onError: (error: any) => {
+      setToastError(true);
       setToast(
         error?.response?.data?.message ?? 'Extra time could not be granted.'
-      ),
+      );
+      setConfirmGrant(false);
+      void extraTimeOptions.refetch();
+      setTimeout(() => setToast(''), 5000);
+    },
   });
   return (
     <DashboardLayout
@@ -286,7 +326,8 @@ export default function StudentRosters() {
                       <button
                         onClick={() => {
                           setGrant(s);
-                          setGrantExamId(exams.data?.[0]?.id ?? '');
+                          setGrantExamId('');
+                          setConfirmGrant(false);
                         }}
                         className="rounded p-2 text-brand hover:bg-brand-soft"
                         aria-label={`Grant extra time to ${s.fullName}`}
@@ -375,17 +416,66 @@ export default function StudentRosters() {
               Exam or quiz
               <select
                 value={grantExamId}
-                onChange={(e) => setGrantExamId(e.target.value)}
+                onChange={(e) => {
+                  setGrantExamId(e.target.value);
+                  setConfirmGrant(false);
+                }}
                 className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2"
               >
                 <option value="">Select assessment</option>
-                {exams.data?.map((exam) => (
+                {extraTimeOptions.data?.map((exam) => (
                   <option key={exam.id} value={exam.id}>
-                    {exam.title} · v{exam.version} · {exam.status.toLowerCase()}
+                    {exam.title} · v{exam.version} · live
                   </option>
                 ))}
               </select>
             </label>
+            {extraTimeOptions.isLoading && (
+              <p className="mt-3 text-sm text-text-2">
+                Checking live assessments…
+              </p>
+            )}
+            {extraTimeOptions.isError && (
+              <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-risk-high">
+                Live assessment status could not be loaded.
+              </p>
+            )}
+            {!extraTimeOptions.isLoading &&
+              !extraTimeOptions.isError &&
+              !extraTimeOptions.data?.length && (
+                <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                  There is no assessment happening live for this subject.
+                </p>
+              )}
+            {selectedAssessment && (
+              <div className="mt-3 rounded-lg border border-border bg-canvas p-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-semibold">Assessment status</span>
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-xs font-bold ${
+                      selectedAssessment.eligible
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-red-100 text-red-700'
+                    }`}
+                  >
+                    {selectedAssessment.assessmentStatus
+                      .replace('_', ' ')
+                      .toLowerCase()}
+                  </span>
+                </div>
+                <p className="mt-2 text-xs text-text-2">
+                  Live until{' '}
+                  {new Date(selectedAssessment.endsAt).toLocaleString()} ·{' '}
+                  {selectedAssessment.extraTimeMinutes} extra minutes already
+                  granted
+                </p>
+                {!selectedAssessment.eligible && (
+                  <p className="mt-2 text-xs font-semibold text-risk-high">
+                    {selectedAssessment.ineligibleReason}
+                  </p>
+                )}
+              </div>
+            )}
             <label className="mt-3 block text-xs font-semibold">
               Additional minutes
               <input
@@ -407,16 +497,79 @@ export default function StudentRosters() {
                 onClick={() => {
                   setGrant(null);
                   setGrantExamId('');
+                  setConfirmGrant(false);
                 }}
               >
                 Cancel
               </Button>
               <Button
                 icon={Clock3}
-                disabled={!grantExamId || addTime.isPending}
+                disabled={
+                  !selectedAssessment?.eligible ||
+                  extraTimeOptions.isLoading ||
+                  addTime.isPending
+                }
+                onClick={() => setConfirmGrant(true)}
+              >
+                Review grant
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      {grant && selectedAssessment && confirmGrant && (
+        <div className="fixed inset-0 z-[75] grid place-items-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-surface p-5">
+            <h2 className="text-lg font-bold">Confirm extra time grant</h2>
+            <p className="mt-2 text-sm text-text-2">
+              Confirm this live assessment adjustment before it is applied.
+            </p>
+            <dl className="mt-4 space-y-2 rounded-xl border border-border bg-canvas p-4 text-sm">
+              <div className="flex justify-between gap-4">
+                <dt className="text-text-2">Student</dt>
+                <dd className="text-right font-semibold">{grant.fullName}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-text-2">Assessment</dt>
+                <dd className="text-right font-semibold">
+                  {selectedAssessment.title}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-text-2">Status</dt>
+                <dd className="text-right font-semibold">
+                  {selectedAssessment.assessmentStatus
+                    .replace('_', ' ')
+                    .toLowerCase()}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-text-2">Time adjustment</dt>
+                <dd className="text-right font-semibold">
+                  +{grantMinutes} minutes
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-text-2">New extra-time total</dt>
+                <dd className="text-right font-semibold">
+                  {selectedAssessment.extraTimeMinutes + grantMinutes} minutes
+                </dd>
+              </div>
+            </dl>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                disabled={addTime.isPending}
+                onClick={() => setConfirmGrant(false)}
+              >
+                Back
+              </Button>
+              <Button
+                icon={Clock3}
+                disabled={addTime.isPending || !selectedAssessment.eligible}
                 onClick={() => addTime.mutate()}
               >
-                {addTime.isPending ? 'Granting…' : 'Grant extra time'}
+                {addTime.isPending ? 'Granting…' : 'Confirm grant'}
               </Button>
             </div>
           </div>
@@ -425,7 +578,9 @@ export default function StudentRosters() {
       {toast && (
         <div
           role="status"
-          className="fixed bottom-5 right-5 z-[80] rounded-lg bg-emerald-600 px-4 py-3 text-sm text-white"
+          className={`fixed bottom-5 right-5 z-[80] max-w-md rounded-lg px-4 py-3 text-sm text-white ${
+            toastError ? 'bg-red-600' : 'bg-emerald-600'
+          }`}
         >
           {toast}
         </div>

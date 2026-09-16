@@ -26,6 +26,7 @@ import { join } from 'path';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsGateway } from './sessions.gateway';
+import { extraTimeWindowError } from './extra-time-policy';
 
 @Injectable()
 export class SessionsService {
@@ -675,6 +676,89 @@ export class SessionsService {
     return session;
   }
 
+  private assertExtraTimeWindow(exam: {
+    status: string;
+    scheduledAt: Date | null;
+    endsAt: Date | null;
+  }) {
+    const error = extraTimeWindowError(exam);
+    if (error) throw new ConflictException(error);
+  }
+
+  async extraTimeOptions(
+    subjectId: string,
+    studentId: string,
+    teacherId: string
+  ) {
+    const enrollment = await this.prisma.enrollment.findFirst({
+      where: { subjectId, studentId, subject: { teacherId } },
+      select: { id: true },
+    });
+    if (!enrollment)
+      throw new NotFoundException(
+        'The student is not enrolled in this subject'
+      );
+    const now = new Date();
+    const exams = await this.prisma.exam.findMany({
+      where: {
+        subjectId,
+        status: 'PUBLISHED',
+        scheduledAt: { lte: now },
+        endsAt: { gt: now },
+      },
+      select: {
+        id: true,
+        title: true,
+        assessmentType: true,
+        version: true,
+        scheduledAt: true,
+        endsAt: true,
+        sessions: {
+          where: { studentId },
+          select: { status: true, extraTimeSeconds: true },
+          take: 1,
+        },
+        studentOverrides: {
+          where: { studentId },
+          select: { extraTimeMinutes: true },
+          take: 1,
+        },
+      },
+      orderBy: { scheduledAt: 'desc' },
+    });
+    return exams.map((exam) => {
+      const session = exam.sessions[0];
+      const assessmentStatus =
+        session?.status === SessionStatus.COMPLETED
+          ? 'COMPLETED'
+          : session?.status === SessionStatus.IN_PROGRESS
+            ? 'IN_PROGRESS'
+            : session?.status === SessionStatus.DISCONNECTED
+              ? 'DISCONNECTED'
+              : 'NOT_STARTED';
+      const extraTimeMinutes = Math.max(
+        exam.studentOverrides[0]?.extraTimeMinutes ?? 0,
+        Math.floor((session?.extraTimeSeconds ?? 0) / 60)
+      );
+      return {
+        id: exam.id,
+        title: exam.title,
+        assessmentType: exam.assessmentType,
+        version: exam.version,
+        scheduledAt: exam.scheduledAt,
+        endsAt: exam.endsAt,
+        lifecycle: 'LIVE',
+        assessmentStatus,
+        extraTimeMinutes,
+        eligible: assessmentStatus !== 'COMPLETED',
+        ineligibleReason:
+          assessmentStatus === 'COMPLETED'
+            ? 'This student has already completed the assessment'
+            : null,
+      };
+    });
+  }
+
   async sendWarning(sessionId: string, teacherId: string, rawMessage: string) {
     const session = await this.teacherSession(sessionId, teacherId);
     if (session.status === SessionStatus.COMPLETED)
@@ -724,8 +808,11 @@ export class SessionsService {
 
   async addExtraTime(sessionId: string, teacherId: string, minutes: number) {
     const session = await this.teacherSession(sessionId, teacherId);
+    this.assertExtraTimeWindow(session.exam);
     if (session.status === SessionStatus.COMPLETED)
-      throw new ConflictException('This assessment attempt has ended');
+      throw new ConflictException(
+        'This student has already completed the assessment'
+      );
     const now = new Date();
     const elapsed = session.activeStartedAt
       ? Math.max(0, Math.floor((+now - +session.activeStartedAt) / 1000))
@@ -737,17 +824,44 @@ export class SessionsService {
     const addedSeconds = minutes * 60;
     const remainingSeconds = currentRemaining + addedSeconds;
     const extraTimeSeconds = session.extraTimeSeconds + addedSeconds;
-    await this.prisma.$transaction([
-      this.prisma.examSession.update({
-        where: { id: sessionId },
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.examSession.updateMany({
+        where: {
+          id: sessionId,
+          status: { not: SessionStatus.COMPLETED },
+          exam: {
+            status: 'PUBLISHED',
+            scheduledAt: { lte: now },
+            endsAt: { gt: now },
+          },
+        },
         data: {
           remainingSeconds,
           extraTimeSeconds,
           activeStartedAt: now,
           lastHeartbeatAt: now,
         },
-      }),
-      this.prisma.examStudentOverride.upsert({
+      });
+      if (!updated.count) {
+        const current = await tx.examSession.findUnique({
+          where: { id: sessionId },
+          select: {
+            status: true,
+            exam: {
+              select: { status: true, scheduledAt: true, endsAt: true },
+            },
+          },
+        });
+        if (current?.status === SessionStatus.COMPLETED)
+          throw new ConflictException(
+            'This student has already completed the assessment'
+          );
+        if (current) this.assertExtraTimeWindow(current.exam);
+        throw new ConflictException(
+          'The assessment is no longer eligible for extra time'
+        );
+      }
+      await tx.examStudentOverride.upsert({
         where: {
           examId_studentId: {
             examId: session.examId,
@@ -760,8 +874,8 @@ export class SessionsService {
           extraTimeMinutes: minutes,
         },
         update: { extraTimeMinutes: { increment: minutes } },
-      }),
-      this.prisma.auditLog.create({
+      });
+      await tx.auditLog.create({
         data: {
           actorId: teacherId,
           action: 'EXAM_EXTRA_TIME_GRANTED',
@@ -769,8 +883,16 @@ export class SessionsService {
           targetId: sessionId,
           metadata: { minutes, remainingSeconds },
         },
-      }),
-    ]);
+      });
+      await tx.notification.create({
+        data: {
+          userId: session.studentId,
+          type: 'EXAM_EXTRA_TIME_GRANTED',
+          message: `Your teacher granted ${minutes} additional minutes for "${session.exam.title}".`,
+          link: '/student/calendar',
+        },
+      });
+    });
     this.gateway.timeAdjusted(
       session.examId,
       sessionId,
@@ -799,34 +921,57 @@ export class SessionsService {
           enrollments: { some: { studentId } },
         },
       },
-      select: { id: true, title: true },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        scheduledAt: true,
+        endsAt: true,
+      },
     });
     if (!exam)
       throw new NotFoundException('Exam or enrolled student not found');
+    this.assertExtraTimeWindow(exam);
     const session = await this.prisma.examSession.findUnique({
       where: { examId_studentId: { examId, studentId } },
       select: { id: true, status: true },
     });
     if (session?.status === SessionStatus.COMPLETED)
       throw new ConflictException(
-        'A completed attempt cannot receive extra time'
+        'This student has already completed the assessment'
       );
     if (session) return this.addExtraTime(session.id, teacherId, minutes);
-    const [override] = await this.prisma.$transaction([
-      this.prisma.examStudentOverride.upsert({
+    const override = await this.prisma.$transaction(async (tx) => {
+      const currentExam = await tx.exam.findUnique({
+        where: { id: examId },
+        select: { status: true, scheduledAt: true, endsAt: true },
+      });
+      if (!currentExam) throw new NotFoundException('Assessment not found');
+      this.assertExtraTimeWindow(currentExam);
+      const currentSession = await tx.examSession.findUnique({
+        where: { examId_studentId: { examId, studentId } },
+        select: { status: true },
+      });
+      if (currentSession)
+        throw new ConflictException(
+          currentSession.status === SessionStatus.COMPLETED
+            ? 'This student has already completed the assessment'
+            : 'The assessment attempt changed. Refresh the status and try again'
+        );
+      const savedOverride = await tx.examStudentOverride.upsert({
         where: { examId_studentId: { examId, studentId } },
         create: { examId, studentId, extraTimeMinutes: minutes },
         update: { extraTimeMinutes: { increment: minutes } },
-      }),
-      this.prisma.notification.create({
+      });
+      await tx.notification.create({
         data: {
           userId: studentId,
           type: 'EXAM_EXTRA_TIME_GRANTED',
           message: `Your teacher granted ${minutes} additional minutes for "${exam.title}".`,
           link: '/student/calendar',
         },
-      }),
-      this.prisma.auditLog.create({
+      });
+      await tx.auditLog.create({
         data: {
           actorId: teacherId,
           action: 'EXAM_EXTRA_TIME_GRANTED',
@@ -834,8 +979,9 @@ export class SessionsService {
           targetId: examId,
           metadata: { studentId, minutes, beforeStart: true },
         },
-      }),
-    ]);
+      });
+      return savedOverride;
+    });
     return override;
   }
 

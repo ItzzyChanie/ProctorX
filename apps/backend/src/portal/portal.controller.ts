@@ -139,8 +139,23 @@ export class PortalController {
     return this.p.readNotification(r.user.id, id);
   }
 
-  @Get('teacher/exams') @Roles(Role.TEACHER) exams(@Req() r: any) {
-    return this.p.teacherExams(r.user.id);
+  @Get('teacher/exams') @Roles(Role.TEACHER) exams(
+    @Req() r: any,
+    @Query('archive') archive?: string
+  ) {
+    return this.p.teacherExams(r.user.id, archive === 'archived');
+  }
+
+  @Patch('teacher/exams/:id/archive')
+  @Roles(Role.TEACHER)
+  archiveTeacherExam(@Req() r: any, @Param('id') id: string) {
+    return this.p.setTeacherExamArchived(r.user.id, id, true);
+  }
+
+  @Patch('teacher/exams/:id/restore')
+  @Roles(Role.TEACHER)
+  restoreTeacherExam(@Req() r: any, @Param('id') id: string) {
+    return this.p.setTeacherExamArchived(r.user.id, id, false);
   }
 
   @Get('teacher/sessions/:id/playback') @Roles(Role.TEACHER) playback(

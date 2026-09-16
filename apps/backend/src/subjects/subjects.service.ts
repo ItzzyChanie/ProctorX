@@ -626,11 +626,11 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
   async generateQuestions(
     subjectId: string,
     teacherId: string,
-    file: Express.Multer.File,
+    files: Express.Multer.File[],
     counts: QuestionCounts
   ) {
     await this.owned(subjectId, teacherId);
-    const generated = await this.ai.generateQuestions(file, counts);
+    const generated = await this.ai.generateQuestions(files, counts);
     return {
       ...generated,
       questions: (generated.questions ?? []).map((question: any) => {
@@ -956,7 +956,7 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     const generated = await this.generateQuestions(
       subjectId,
       teacherId,
-      file,
+      [file],
       counts
     );
     const questions = generated.questions ?? [];

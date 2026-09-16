@@ -124,7 +124,7 @@ export default function Classes() {
     }>(),
     [mode, setMode] = useState<'manual' | 'file' | 'google'>('manual'),
     [source, setSource] = useState(''),
-    [sourceFile, setSourceFile] = useState<File>(),
+    [sourceFiles, setSourceFiles] = useState<File[]>([]),
     [draftGenerated, setDraftGenerated] = useState(false),
     [sourceExamId, setSourceExamId] = useState(''),
     [previousExamId, setPreviousExamId] = useState(''),
@@ -354,7 +354,7 @@ export default function Classes() {
     setActive(undefined);
     setMode('manual');
     setSource('');
-    setSourceFile(undefined);
+    setSourceFiles([]);
     setDraftGenerated(false);
     setSourceExamId('');
     setPreviousExamId('');
@@ -506,14 +506,15 @@ export default function Classes() {
   };
   const generateDraft = useMutation({
     mutationFn: async () => {
-      if (!sourceFile) throw new Error('Choose a PPT/PDF file first.');
+      if (!sourceFiles.length)
+        throw new Error('Choose at least one PPT, PDF, or DOCX file first.');
       const total = Object.values(counts).reduce(
         (sum, value) => sum + value,
         0
       );
       if (!total) throw new Error('Set at least one question count.');
       const data = new FormData();
-      data.append('file', sourceFile);
+      sourceFiles.forEach((file) => data.append('files', file));
       data.append('counts', JSON.stringify(counts));
       return (
         await api.post<{ questions: Question[] }>(
@@ -983,12 +984,62 @@ export default function Classes() {
               <div className="mb-5 rounded-xl border border-brand/20 bg-brand-soft p-4">
                 <input
                   type="file"
+                  multiple
                   accept=".ppt,.pptx,.pdf,.docx"
                   onChange={(e) => {
-                    setSourceFile(e.target.files?.[0]);
+                    const incoming = Array.from(e.target.files ?? []);
+                    setSourceFiles((current) => {
+                      const unique = new Map(
+                        [...current, ...incoming].map((file) => [
+                          `${file.name}:${file.size}:${file.lastModified}`,
+                          file,
+                        ])
+                      );
+                      return [...unique.values()].slice(0, 20);
+                    });
                     setDraftGenerated(false);
+                    e.currentTarget.value = '';
                   }}
                 />
+                {!!sourceFiles.length && (
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between text-xs text-text-2">
+                      <span>
+                        {sourceFiles.length} document
+                        {sourceFiles.length === 1 ? '' : 's'} selected
+                      </span>
+                      <span>
+                        {(
+                          sourceFiles.reduce((sum, file) => sum + file.size, 0) /
+                          1_000_000
+                        ).toFixed(1)}{' '}
+                        MB total
+                      </span>
+                    </div>
+                    {sourceFiles.map((file) => (
+                      <div
+                        key={`${file.name}:${file.size}:${file.lastModified}`}
+                        className="flex items-center justify-between rounded-lg border border-border bg-surface px-3 py-2 text-xs"
+                      >
+                        <span className="min-w-0 truncate pr-3">
+                          {file.name} · {(file.size / 1_000_000).toFixed(1)} MB
+                        </span>
+                        <button
+                          type="button"
+                          className="font-semibold text-risk-high"
+                          onClick={() => {
+                            setSourceFiles((current) =>
+                              current.filter((item) => item !== file)
+                            );
+                            setDraftGenerated(false);
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="mt-4 grid gap-2 sm:grid-cols-4">
                   {(Object.keys(counts) as QType[]).map((t) => (
                     <label className="text-xs font-semibold" key={t}>
@@ -1011,16 +1062,17 @@ export default function Classes() {
                   ))}
                 </div>
                 <p className="my-3 text-xs">
-                  AI will suggest its best answers from the PDF, PowerPoint, or
-                  Word source. Review and edit everything before saving.
+                  Upload up to 20 mixed PDF, PowerPoint, or Word documents. AI
+                  will read them together and suggest answers with source
+                  references. Review and edit everything before saving.
                 </p>
                 <Button
                   type="button"
-                  disabled={generateDraft.isPending}
+                  disabled={!sourceFiles.length || generateDraft.isPending}
                   onClick={() => generateDraft.mutate()}
                 >
                   {generateDraft.isPending
-                    ? 'Reading file and generating…'
+                    ? 'Reading documents and generating…'
                     : 'Generate review draft'}
                 </Button>
               </div>

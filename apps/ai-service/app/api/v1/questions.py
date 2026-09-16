@@ -13,18 +13,44 @@ router = APIRouter(prefix="/v1/questions", tags=["questions"])
 
 
 @router.post("/generate", dependencies=[Depends(verify_internal_api_key)])
-async def generate(file: UploadFile = File(...), counts: str = Form(...)):
-    extension = Path(file.filename or "").suffix.lower()
-    if extension not in {".pdf", ".ppt", ".pptx", ".docx"}:
-        raise HTTPException(415, "Only PDF, PPT, PPTX, and DOCX files are supported")
-    data = await file.read()
-    if not data:
-        raise HTTPException(422, "Uploaded file is empty")
-    if len(data) > settings.max_document_size_mb * 1_000_000:
-        raise HTTPException(413, f"Document exceeds the {settings.max_document_size_mb} MB size limit")
+async def generate(files: list[UploadFile] = File(...), counts: str = Form(...)):
+    if not files:
+        raise HTTPException(422, "Choose at least one document")
+    if len(files) > settings.max_document_files:
+        raise HTTPException(413, f"Upload at most {settings.max_document_files} documents")
     try:
         requested = Counts.model_validate(json.loads(counts))
-        text = extract_document(data, extension)
+        sources: list[str] = []
+        total_bytes = 0
+        for index, file in enumerate(files, start=1):
+            filename = Path(file.filename or f"document-{index}").name
+            extension = Path(filename).suffix.lower()
+            if extension not in {".pdf", ".ppt", ".pptx", ".docx"}:
+                raise DocumentExtractionError(f'Unsupported document "{filename}"')
+            data = await file.read()
+            if not data:
+                raise DocumentExtractionError(f'Document "{filename}" is empty')
+            if len(data) > settings.max_document_size_mb * 1_000_000:
+                raise DocumentExtractionError(
+                    f'Document "{filename}" exceeds the {settings.max_document_size_mb} MB size limit'
+                )
+            total_bytes += len(data)
+            if total_bytes > settings.max_document_total_size_mb * 1_000_000:
+                raise DocumentExtractionError(
+                    f"Combined documents exceed the {settings.max_document_total_size_mb} MB size limit"
+                )
+            try:
+                extracted = extract_document(data, extension)
+            except DocumentExtractionError as error:
+                raise DocumentExtractionError(
+                    f'Could not read "{filename}": {error}'
+                ) from error
+            sources.append(f"[Source {index}: {filename}] - {extracted}")
+        text = "\n\n".join(sources)
+        if len(text) > settings.max_combined_document_characters:
+            raise DocumentExtractionError(
+                "The documents contain too much text to process together. Remove a document or split the assessment into smaller batches"
+            )
         draft = await generate_questions(text, requested)
         return draft.model_dump()
     except (json.JSONDecodeError, ValidationError, DocumentExtractionError, ValueError) as error:
