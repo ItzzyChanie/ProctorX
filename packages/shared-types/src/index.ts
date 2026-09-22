@@ -24,6 +24,7 @@ export interface User {
   office?: string | null
   officialTitle?: string | null
   institutionName?: string | null
+  permissions?: Record<string, boolean>
 }
 
 export interface LoginRequest { loginId: string; password: string }

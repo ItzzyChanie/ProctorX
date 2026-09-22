@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bar,
@@ -35,10 +35,27 @@ type Data = {
   }[];
   incidenceRateBySection: Array<{
     program: string;
+    yearLevel: string;
+    sectionName: string;
     section: string;
     rate: number;
     participantCount: number;
     flaggedStudentCount: number;
+  }>;
+  sessionDrilldown: Array<{
+    sessionId: string;
+    studentName: string;
+    studentId: string | null;
+    program: string | null;
+    yearLevel: string | null;
+    section: string;
+    subjectCode: string;
+    subjectName: string;
+    examTitle: string;
+    startedAt: string;
+    reviewDecision: string;
+    suspicion: number | null;
+    incidentCount: number;
   }>;
   correlation: {
     points: Array<{
@@ -52,6 +69,15 @@ type Data = {
     insufficientData: boolean;
   };
 };
+const startedFormatter = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: '2-digit',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  hour12: true,
+});
+
 export default function Analytics() {
   const queryClient = useQueryClient();
   useEffect(() => {
@@ -71,6 +97,11 @@ export default function Analytics() {
     section: '',
     subjectCode: '',
   });
+  const [sessionSearch, setSessionSearch] = useState('');
+  const [sessionReview, setSessionReview] = useState('');
+  const [sessionRisk, setSessionRisk] = useState('');
+  const [sessionRows, setSessionRows] = useState(10);
+  const [sessionPage, setSessionPage] = useState(1);
   const params = Object.fromEntries(
     Object.entries(filters).filter(([, v]) => v)
   );
@@ -79,6 +110,49 @@ export default function Analytics() {
     queryFn: async () =>
       (await api.get<Data>('/dean/analytics', { params })).data,
   });
+  const filteredSessions = useMemo(() => {
+    const search = sessionSearch.trim().toLowerCase();
+    return (data?.sessionDrilldown ?? []).filter((session) => {
+      const matchesSearch =
+        !search ||
+        [
+          session.studentName,
+          session.studentId ?? '',
+          session.program ?? '',
+          session.section,
+          session.subjectCode,
+          session.subjectName,
+          session.examTitle,
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(search);
+      const matchesReview =
+        !sessionReview || session.reviewDecision === sessionReview;
+      const score = session.suspicion;
+      const matchesRisk =
+        !sessionRisk ||
+        (sessionRisk === 'HIGH' && score !== null && score >= 70) ||
+        (sessionRisk === 'MEDIUM' &&
+          score !== null &&
+          score >= 40 &&
+          score < 70) ||
+        (sessionRisk === 'LOW' && score !== null && score < 40) ||
+        (sessionRisk === 'PENDING' && score === null);
+      return matchesSearch && matchesReview && matchesRisk;
+    });
+  }, [data?.sessionDrilldown, sessionReview, sessionRisk, sessionSearch]);
+  const sessionPageCount = Math.max(
+    1,
+    Math.ceil(filteredSessions.length / sessionRows)
+  );
+  const visibleSessions = filteredSessions.slice(
+    (sessionPage - 1) * sessionRows,
+    sessionPage * sessionRows
+  );
+  useEffect(() => {
+    setSessionPage((page) => Math.min(page, sessionPageCount));
+  }, [sessionPageCount]);
   const sectionRates = data?.incidenceRateBySection ?? [];
   const sectionRateChart = (program: 'CS' | 'IT') => {
     const programData = sectionRates.filter((item) => item.program === program);
@@ -116,7 +190,19 @@ export default function Analytics() {
                   `Flagged ${program} student rate`,
                 ]}
               />
-              <Bar dataKey="rate">
+              <Bar
+                dataKey="rate"
+                className="cursor-pointer"
+                onClick={(entry: any) => {
+                  const selected = entry.payload ?? entry;
+                  setFilters({
+                    ...filters,
+                    program: selected.program,
+                    yearLevel: selected.yearLevel,
+                    section: selected.sectionName,
+                  });
+                }}
+              >
                 {programData.map((item, index) => (
                   <Cell key={index} fill={riskTier(item.rate, p).color} />
                 ))}
@@ -286,6 +372,204 @@ export default function Analytics() {
           {sectionRateChart('CS')}
           {sectionRateChart('IT')}
         </div>
+        <Card padded={false}>
+          <div className="p-5">
+            <CardHeader
+              title="Session drill-down"
+              subtitle="Default: active semester and all terms. Up to 100 sessions, ordered by suspicion score."
+              right={
+                Object.values(filters).some(Boolean) ? (
+                  <button
+                    className="text-sm font-semibold text-brand"
+                    onClick={() =>
+                      setFilters({
+                        academicPeriodId: '',
+                        term: '',
+                        dateFrom: '',
+                        dateTo: '',
+                        program: '',
+                        yearLevel: '',
+                        section: '',
+                        subjectCode: '',
+                      })
+                    }
+                  >
+                    Clear filters
+                  </button>
+                ) : undefined
+              }
+            />
+            <p className="text-xs text-text-3">
+              Tip: select a section bar above to drill into that section.
+            </p>
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <input
+                value={sessionSearch}
+                onChange={(event) => {
+                  setSessionSearch(event.target.value);
+                  setSessionPage(1);
+                }}
+                placeholder="Search sessions"
+                className="rounded-lg border border-border bg-canvas px-3 py-2 text-sm"
+              />
+              <select
+                value={sessionReview}
+                onChange={(event) => {
+                  setSessionReview(event.target.value);
+                  setSessionPage(1);
+                }}
+                className="rounded-lg border border-border bg-canvas px-3 py-2 text-sm"
+              >
+                <option value="">All reviews</option>
+                <option value="PENDING">Pending</option>
+                <option value="POSITIVE">Positive</option>
+                <option value="NEGATIVE">Negative</option>
+              </select>
+              <select
+                value={sessionRisk}
+                onChange={(event) => {
+                  setSessionRisk(event.target.value);
+                  setSessionPage(1);
+                }}
+                className="rounded-lg border border-border bg-canvas px-3 py-2 text-sm"
+              >
+                <option value="">All risk levels</option>
+                <option value="HIGH">High (70+)</option>
+                <option value="MEDIUM">Medium (40-69)</option>
+                <option value="LOW">Low (below 40)</option>
+                <option value="PENDING">Pending score</option>
+              </select>
+              <select
+                aria-label="Rows per page"
+                value={sessionRows}
+                onChange={(event) => {
+                  setSessionRows(Number(event.target.value));
+                  setSessionPage(1);
+                }}
+                className="rounded-lg border border-border bg-canvas px-3 py-2 text-sm"
+              >
+                {[10, 25, 50, 100].map((count) => (
+                  <option key={count} value={count}>
+                    {count} rows
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1050px] text-left text-sm">
+              <thead className="border-y border-border bg-surface-2 text-xs uppercase text-text-3">
+                <tr>
+                  {[
+                    'Student',
+                    'Program / Section',
+                    'Subject',
+                    'Assessment',
+                    'Suspicion',
+                    'Incidents',
+                    'Review',
+                    'Started',
+                  ].map((heading) => (
+                    <th key={heading} className="px-4 py-3">
+                      {heading}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleSessions.map((session) => (
+                  <tr
+                    key={session.sessionId}
+                    className="border-b border-border last:border-0"
+                  >
+                    <td className="px-4 py-3">
+                      <p className="font-semibold text-text-1">
+                        {session.studentName}
+                      </p>
+                      <p className="text-xs text-text-3">
+                        {session.studentId ?? 'No student ID'}
+                      </p>
+                    </td>
+                    <td className="px-4 py-3">
+                      {session.program ?? 'Unknown'}
+                      <span aria-hidden="true"> &bull; </span>
+                      {session.section}
+                    </td>
+                    <td className="px-4 py-3">
+                      <p className="font-medium">{session.subjectCode}</p>
+                      <p className="text-xs text-text-3">
+                        {session.subjectName}
+                      </p>
+                    </td>
+                    <td className="px-4 py-3">{session.examTitle}</td>
+                    <td className="px-4 py-3">
+                      {session.suspicion === null
+                        ? 'Pending'
+                        : session.suspicion + '%'}
+                    </td>
+                    <td className="px-4 py-3">{session.incidentCount}</td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={
+                          'rounded-full px-2 py-1 text-xs font-semibold ' +
+                          (session.reviewDecision === 'POSITIVE'
+                            ? 'bg-red-100 text-red-700'
+                            : session.reviewDecision === 'NEGATIVE'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-amber-100 text-amber-700')
+                        }
+                      >
+                        {session.reviewDecision}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-text-3">
+                      {startedFormatter.format(new Date(session.startedAt))}
+                    </td>
+                  </tr>
+                ))}
+                {!visibleSessions.length && (
+                  <tr>
+                    <td
+                      colSpan={8}
+                      className="px-4 py-10 text-center text-text-3"
+                    >
+                      No sessions match the current filters.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-4 text-sm text-text-3">
+            <span>
+              {filteredSessions.length
+                ? `${(sessionPage - 1) * sessionRows + 1}-${Math.min(
+                    sessionPage * sessionRows,
+                    filteredSessions.length
+                  )} of ${filteredSessions.length}`
+                : '0 sessions'}
+            </span>
+            <div className="flex items-center gap-3">
+              <button
+                disabled={sessionPage === 1}
+                onClick={() => setSessionPage((page) => page - 1)}
+                className="rounded-lg border border-border px-3 py-2 font-semibold text-text-1 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <span>
+                Page {sessionPage} of {sessionPageCount}
+              </span>
+              <button
+                disabled={sessionPage === sessionPageCount}
+                onClick={() => setSessionPage((page) => page + 1)}
+                className="rounded-lg border border-border px-3 py-2 font-semibold text-text-1 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </Card>
       </div>
     </DashboardLayout>
   );

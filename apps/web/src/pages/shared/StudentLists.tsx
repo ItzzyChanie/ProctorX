@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   ArrowLeft,
+  ArrowRightLeft,
   GraduationCap,
   Pencil,
   Power,
@@ -107,6 +108,15 @@ export default function StudentLists({ role }: { role: Role }) {
     initialPassword: string;
   }>();
   const [editing, setEditing] = useState<Student | null>(null);
+  const [placement, setPlacement] = useState<{
+    mode: 'transfer' | 'promote';
+    student?: Student;
+  }>();
+  const [placementProgram, setPlacementProgram] = useState('');
+  const [placementYear, setPlacementYear] = useState('');
+  const [placementSections, setPlacementSections] = useState<Section[]>([]);
+  const [placementSectionId, setPlacementSectionId] = useState('');
+  const [placementPending, setPlacementPending] = useState(false);
   const [confirm, setConfirm] = useState<'save' | 'status' | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
@@ -164,6 +174,70 @@ export default function StudentLists({ role }: { role: Role }) {
       .catch(() => setRequestError('Unable to load sections.'))
       .finally(() => setSectionsLoading(false));
   }, [program, yearLevel, role]);
+  useEffect(() => {
+    if (!placement || !placementProgram || !placementYear) return;
+    setPlacementSectionId('');
+    api
+      .get<Section[]>(
+        '/students/sections?program=' +
+          placementProgram +
+          '&yearLevel=' +
+          placementYear
+      )
+      .then(({ data }) => setPlacementSections(data))
+      .catch(() => setRequestError('Unable to load target sections.'));
+  }, [placement, placementProgram, placementYear]);
+  const openTransfer = (student: Student) => {
+    setPlacement({ mode: 'transfer', student });
+    setPlacementProgram(student.studentProfile?.program ?? program ?? '');
+    setPlacementYear(student.studentProfile?.yearLevel ?? yearLevel ?? '');
+    setPlacementSectionId('');
+  };
+  const openPromotion = () => {
+    if (!section || !program || !yearLevel) return;
+    setPlacement({ mode: 'promote' });
+    setPlacementProgram(program);
+    setPlacementYear(String(Math.min(4, Number(yearLevel) + 1)));
+    setPlacementSectionId('');
+  };
+  const savePlacement = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!placement || !placementSectionId) return;
+    setPlacementPending(true);
+    setRequestError(null);
+    try {
+      if (placement.mode === 'transfer' && placement.student) {
+        await api.patch('/students/' + placement.student.id + '/placement', {
+          program: placementProgram,
+          yearLevel: placementYear,
+          sectionId: placementSectionId,
+        });
+        setToast('Student transferred successfully.');
+      } else if (section) {
+        const { data } = await api.post<{ promoted: number }>(
+          '/students/sections/' + section.id + '/promote',
+          { targetSectionId: placementSectionId }
+        );
+        setToast(
+          String(data.promoted) +
+            (data.promoted === 1
+              ? ' student promoted successfully.'
+              : ' students promoted successfully.')
+        );
+      }
+      setPlacement(undefined);
+      window.setTimeout(() => setToast(null), 3500);
+      await refresh();
+    } catch (error) {
+      setRequestError(
+        axios.isAxiosError(error)
+          ? (error.response?.data?.message ?? 'Unable to update placement.')
+          : 'Unable to update placement.'
+      );
+    } finally {
+      setPlacementPending(false);
+    }
+  };
   const createSection = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!program || !yearLevel || !sectionName.trim()) return;
@@ -564,6 +638,14 @@ export default function StudentLists({ role }: { role: Role }) {
             </button>
             {role === 'dean' && (
               <div className="flex gap-2">
+                <button
+                  disabled={rows.length === 0}
+                  onClick={openPromotion}
+                  className="rounded-[10px] border border-border px-3 py-2 font-body text-sm font-medium text-text-2 hover:bg-brand-soft disabled:opacity-50"
+                >
+                  <GraduationCap size={15} className="mr-1 inline" /> Promote
+                  section
+                </button>
                 <label className="cursor-pointer rounded-[10px] border border-border px-3 py-2 font-body text-sm font-medium text-text-2 hover:bg-brand-soft">
                   <Upload size={15} className="mr-1 inline" />{' '}
                   {importing ? 'Importing…' : 'Import Excel'}
@@ -716,6 +798,14 @@ export default function StudentLists({ role }: { role: Role }) {
                       {role === 'dean' && (
                         <td className="px-5 py-4">
                           <button
+                            className="mr-3 text-brand"
+                            title="Transfer student"
+                            aria-label={'Transfer ' + student.fullName}
+                            onClick={() => openTransfer(student)}
+                          >
+                            <ArrowRightLeft size={16} />
+                          </button>
+                          <button
                             className="text-brand"
                             onClick={() => {
                               setEditing(student);
@@ -801,6 +891,113 @@ export default function StudentLists({ role }: { role: Role }) {
             </div>
           </Card>
         </>
+      )}
+      {placement && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4">
+          <form
+            onSubmit={savePlacement}
+            className="w-full max-w-md rounded-[16px] bg-surface p-6 shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="font-head text-xl font-bold text-text-1">
+                  {placement.mode === 'transfer'
+                    ? 'Transfer student'
+                    : 'Promote section'}
+                </h2>
+                <p className="mt-1 text-sm text-text-3">
+                  {placement.mode === 'transfer'
+                    ? 'Move ' +
+                      placement.student?.fullName +
+                      ' to another program, year, or section.'
+                    : 'Move every student in Section ' +
+                      section?.name +
+                      ' to the selected target section.'}
+                </p>
+              </div>
+              <button type="button" onClick={() => setPlacement(undefined)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <label className="text-sm text-text-2">
+                Program
+                <select
+                  value={placementProgram}
+                  onChange={(event) =>
+                    setPlacementProgram(event.target.value)
+                  }
+                  className="mt-1 w-full rounded border border-border bg-surface p-2"
+                >
+                  <option value="CS">CS</option>
+                  <option value="IT">IT</option>
+                </select>
+              </label>
+              <label className="text-sm text-text-2">
+                Year level
+                <select
+                  value={placementYear}
+                  onChange={(event) => setPlacementYear(event.target.value)}
+                  className="mt-1 w-full rounded border border-border bg-surface p-2"
+                >
+                  {years.map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                      {suffix(year)} Year
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="mt-3 block text-sm text-text-2">
+              Target section
+              <select
+                required
+                value={placementSectionId}
+                onChange={(event) =>
+                  setPlacementSectionId(event.target.value)
+                }
+                className="mt-1 w-full rounded border border-border bg-surface p-2"
+              >
+                <option value="">Select a section</option>
+                {placementSections
+                  .filter((item) => item.id !== section?.id)
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item._count.students} students)
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {placement.mode === 'promote' && (
+              <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+                This updates the program, year level, and section for all
+                students currently in this section. Account and assessment
+                history will be preserved.
+              </p>
+            )}
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={placementPending}
+                onClick={() => setPlacement(undefined)}
+                className="px-4 py-2 text-sm text-text-2"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={placementPending || !placementSectionId}
+                className="rounded-[9px] bg-brand px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {placementPending
+                  ? 'Updating...'
+                  : placement.mode === 'transfer'
+                    ? 'Transfer Student'
+                    : 'Promote Students'}
+              </button>
+            </div>
+          </form>
+        </div>
       )}
       {showSectionModal && program && yearLevel && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">

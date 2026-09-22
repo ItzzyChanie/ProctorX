@@ -19,6 +19,10 @@ import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import {
+  PermissionsGuard,
+  RequirePermission,
+} from '../auth/guards/permissions.guard';
+import {
   ConfirmGradeDto,
   EventDto,
   EvidenceClipDto,
@@ -35,7 +39,7 @@ import { MonitoringAnalysisService } from './monitoring-analysis.service';
 import { SessionsService } from './sessions.service';
 
 @Controller('sessions')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 export class SessionsController {
   constructor(
     private s: SessionsService,
@@ -54,7 +58,8 @@ export class SessionsController {
   ) {
     return this.s.preview(b.roomCode, r.user.id);
   }
-  @Get('monitorable-exams') @Roles(Role.TEACHER) monitorableExams(
+  @Get('monitorable-exams') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') monitorableExams(
     @Req() r: any
   ) {
     return this.s.monitorableExams(r.user.id);
@@ -79,13 +84,15 @@ export class SessionsController {
   ) {
     return this.grading.heartbeat(id, r.user.id);
   }
-  @Get('submissions') @Roles(Role.TEACHER) submitted(
+  @Get('submissions') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') submitted(
     @Req() r: any,
     @Query() query: Record<string, string | undefined>
   ) {
     return this.grading.submitted(r.user.id, query);
   }
-  @Get('submissions/:submissionId') @Roles(Role.TEACHER) submissionDetail(
+  @Get('submissions/:submissionId') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') submissionDetail(
     @Req() r: any,
     @Param('submissionId') submissionId: string
   ) {
@@ -93,19 +100,22 @@ export class SessionsController {
   }
   @Post('submissions/:submissionId/restore')
   @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT')
   restoreSubmission(
     @Req() r: any,
     @Param('submissionId') submissionId: string
   ) {
     return this.grading.restoreSubmission(submissionId, r.user.id);
   }
-  @Delete('submissions/:submissionId') @Roles(Role.TEACHER) removeSubmission(
+  @Delete('submissions/:submissionId') @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT') removeSubmission(
     @Req() r: any,
     @Param('submissionId') submissionId: string
   ) {
     return this.grading.removeSubmission(submissionId, r.user.id);
   }
-  @Get('exam/:examId/submissions') @Roles(Role.TEACHER) submissions(
+  @Get('exam/:examId/submissions') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') submissions(
     @Req() r: any,
     @Param('examId') examId: string
   ) {
@@ -113,6 +123,7 @@ export class SessionsController {
   }
   @Patch('submissions/:submissionId/release-settings')
   @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT')
   updateReleaseSettings(
     @Req() r: any,
     @Param('submissionId') submissionId: string,
@@ -120,7 +131,8 @@ export class SessionsController {
   ) {
     return this.grading.updateResultRelease(submissionId, r.user.id, body);
   }
-  @Post('grades/confirm') @Roles(Role.TEACHER) confirm(
+  @Post('grades/confirm') @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT') confirm(
     @Req() r: any,
     @Body() body: ConfirmGradeDto
   ) {
@@ -200,7 +212,8 @@ export class SessionsController {
   ) {
     return this.s.recording(id, r.user.id, f.buffer);
   }
-  @Get('exam/:examId/monitor') @Roles(Role.TEACHER) monitor(
+  @Get('exam/:examId/monitor') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') monitor(
     @Req() r: any,
     @Param('examId') id: string
   ) {
@@ -208,6 +221,7 @@ export class SessionsController {
   }
   @Get('extra-time-options/subject/:subjectId/student/:studentId')
   @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS')
   extraTimeOptions(
     @Req() r: any,
     @Param('subjectId') subjectId: string,
@@ -217,6 +231,7 @@ export class SessionsController {
   }
   @Patch('exam/:examId/student/:studentId/extra-time')
   @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT')
   grantPreExamExtraTime(
     @Req() r: any,
     @Param('examId') examId: string,
@@ -230,14 +245,16 @@ export class SessionsController {
       body.minutes
     );
   }
-  @Patch(':id/extra-time') @Roles(Role.TEACHER) addExtraTime(
+  @Patch(':id/extra-time') @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT') addExtraTime(
     @Req() r: any,
     @Param('id') id: string,
     @Body() body: AddExtraTimeDto
   ) {
     return this.s.addExtraTime(id, r.user.id, body.minutes);
   }
-  @Post(':id/warnings') @Roles(Role.TEACHER) sendWarning(
+  @Post(':id/warnings') @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT') sendWarning(
     @Req() r: any,
     @Param('id') id: string,
     @Body() body: SendWarningDto
@@ -253,13 +270,15 @@ export class SessionsController {
   ) {
     return this.s.acknowledgeWarning(id, warningId, r.user.id);
   }
-  @Post(':id/resume') @Roles(Role.TEACHER) resume(
+  @Post(':id/resume') @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT') resume(
     @Req() r: any,
     @Param('id') id: string
   ) {
     return this.s.resume(id, r.user.id);
   }
-  @Post(':id/:action') @Roles(Role.TEACHER) control(
+  @Post(':id/:action') @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT') control(
     @Req() r: any,
     @Param('id') id: string,
     @Param('action', new ParseEnumPipe(TeacherSessionAction))
@@ -267,7 +286,8 @@ export class SessionsController {
   ) {
     return this.s.control(id, r.user.id, a);
   }
-  @Get(':id/playback') @Roles(Role.TEACHER) playback(
+  @Get(':id/playback') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') playback(
     @Req() r: any,
     @Param('id') id: string
   ) {

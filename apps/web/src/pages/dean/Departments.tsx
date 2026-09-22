@@ -1,6 +1,14 @@
 import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Pencil, Plus, Power, PowerOff, Upload, X } from "lucide-react"
+import {
+  Building2,
+  Pencil,
+  Plus,
+  Power,
+  PowerOff,
+  Upload,
+  X,
+} from "lucide-react"
 import axios from "axios"
 import { DashboardLayout } from "../../components/layout/DashboardLayout"
 import { Card, CardHeader } from "../../components/ui/Card"
@@ -19,6 +27,25 @@ type Faculty = {
   status: string
   createdAt: string
   role: "DEAN" | "TEACHER"
+  department: Department | null
+  workload: number
+  subjects: {
+    id: string
+    code: string
+    name: string
+    schedule: string | null
+    createdAt: string
+    studentCount: number
+    assessmentCount: number
+  }[]
+}
+type Department = {
+  id: string
+  code: string
+  name: string
+  description: string | null
+  isActive: boolean
+  _count: { faculty: number }
 }
 const empty = {
   employeeId: "",
@@ -27,8 +54,10 @@ const empty = {
   lastName: "",
   email: "",
   title: "",
+  departmentId: "",
   profilePicture: "",
 }
+const emptyDepartment = { code: "", name: "", description: "" }
 const imageData = (file?: File) =>
   new Promise<string>((resolve, reject) => {
     if (!file) return resolve("")
@@ -69,8 +98,15 @@ export default function Departments() {
     fullName: "",
     email: "",
     title: "",
+    departmentId: "",
     profilePicture: "",
   })
+  const [departmentForm, setDepartmentForm] = useState(emptyDepartment)
+  const [departmentModal, setDepartmentModal] = useState<
+    "create" | "edit" | undefined
+  >()
+  const [editingDepartment, setEditingDepartment] = useState<Department>()
+  const [viewingWorkload, setViewingWorkload] = useState<Faculty>()
   const [busy, setBusy] = useState(false),
     [toast, setToast] = useState(""),
     [error, setError] = useState(""),
@@ -83,9 +119,65 @@ export default function Departments() {
     queryFn: async () => (await api.get<Faculty[]>("/dean/professors")).data,
     refetchInterval: 5_000,
   })
+  const departments = useQuery({
+    queryKey: ["departments"],
+    queryFn: async () =>
+      (await api.get<Department[]>("/dean/departments")).data,
+  })
   const notify = (message: string) => {
     setToast(message)
     window.setTimeout(() => setToast(""), 3500)
+  }
+  const saveDepartment = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setError("")
+    try {
+      if (departmentModal === "edit" && editingDepartment) {
+        await api.patch(
+          "/dean/departments/" + editingDepartment.id,
+          departmentForm,
+        )
+        notify("Department updated successfully.")
+      } else {
+        await api.post("/dean/departments", departmentForm)
+        notify("Department created successfully.")
+      }
+      setDepartmentModal(undefined)
+      setEditingDepartment(undefined)
+      setDepartmentForm(emptyDepartment)
+      await qc.invalidateQueries({ queryKey: ["departments"] })
+    } catch (requestError) {
+      setError(
+        axios.isAxiosError(requestError)
+          ? requestError.response?.data?.message ?? "Could not save department."
+          : "Could not save department.",
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+  const updateDepartmentStatus = async (department: Department) => {
+    setBusy(true)
+    setError("")
+    try {
+      await api.patch("/dean/departments/" + department.id + "/status", {
+        status: department.isActive ? "ARCHIVED" : "ACTIVE",
+      })
+      notify(
+        department.isActive
+          ? "Department archived."
+          : "Department reactivated.",
+      )
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["departments"] }),
+        qc.invalidateQueries({ queryKey: ["professors"] }),
+      ])
+    } catch {
+      setError("Could not update department status.")
+    } finally {
+      setBusy(false)
+    }
   }
   const rows = [...(faculty.data ?? [])]
     .filter((x) =>
@@ -107,7 +199,10 @@ export default function Departments() {
     try {
       const { data } = await api.post<{
         initialPassword: string
-      }>("/dean/professors/invite", form)
+      }>("/dean/professors/invite", {
+        ...form,
+        departmentId: form.departmentId || null,
+      })
       setCreatedCredentials({
         employeeId: form.employeeId,
         initialPassword: data.initialPassword,
@@ -131,7 +226,10 @@ export default function Departments() {
     if (!editing) return
     setBusy(true)
     try {
-      await api.patch(`/dean/professors/${editing.userId}`, edit)
+      await api.patch("/dean/professors/" + editing.userId, {
+        ...edit,
+        departmentId: edit.departmentId || null,
+      })
       if (editing.userId === user?.id) {
         updateUser((await api.get<User>("/auth/me")).data)
       }
@@ -196,6 +294,118 @@ export default function Departments() {
           {error}
         </div>
       )}
+      <div className="flex flex-col gap-5">
+      <Card>
+        <CardHeader
+          title="Departments"
+          subtitle="Create official departments and assign faculty consistently."
+          right={
+            <Button
+              icon={Plus}
+              onClick={() => {
+                setDepartmentForm(emptyDepartment)
+                setEditingDepartment(undefined)
+                setDepartmentModal("create")
+              }}
+            >
+              Add Department
+            </Button>
+          }
+        />
+        {departments.isLoading ? (
+          <p className="text-sm text-text-3">Loading departments...</p>
+        ) : departments.data?.length ? (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {departments.data.map((department) => (
+              <article
+                key={department.id}
+                className={
+                  "rounded-xl border p-4 " +
+                  (department.isActive
+                    ? "border-border bg-surface-2"
+                    : "border-border bg-surface-2 opacity-60")
+                }
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 gap-3">
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-brand-soft text-brand">
+                      <Building2 size={18} />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-semibold">{department.name}</p>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-text-3">
+                        {department.code}
+                      </p>
+                    </div>
+                  </div>
+                  <span
+                    className={
+                      "rounded-full px-2 py-1 text-[11px] font-semibold " +
+                      (department.isActive
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-slate-200 text-slate-600")
+                    }
+                  >
+                    {department.isActive ? "ACTIVE" : "ARCHIVED"}
+                  </span>
+                </div>
+                <p className="mt-3 min-h-10 text-sm text-text-3">
+                  {department.description || "No description provided."}
+                </p>
+                <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
+                  <span className="text-sm text-text-3">
+                    {department._count.faculty} faculty
+                  </span>
+                  <div className="flex gap-3">
+                    <button
+                      className="text-brand"
+                      aria-label={"Edit " + department.name}
+                      onClick={() => {
+                        setEditingDepartment(department)
+                        setDepartmentForm({
+                          code: department.code,
+                          name: department.name,
+                          description: department.description ?? "",
+                        })
+                        setDepartmentModal("edit")
+                      }}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      disabled={busy}
+                      className={
+                        department.isActive
+                          ? "text-red-600"
+                          : "text-emerald-600"
+                      }
+                      aria-label={
+                        (department.isActive ? "Archive " : "Reactivate ") +
+                        department.name
+                      }
+                      onClick={() => void updateDepartmentStatus(department)}
+                    >
+                      {department.isActive ? (
+                        <PowerOff size={16} />
+                      ) : (
+                        <Power size={16} />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-border p-8 text-center">
+            <Building2 className="mx-auto text-text-3" />
+            <p className="mt-2 font-medium">No departments yet</p>
+            <p className="mt-1 text-sm text-text-3">
+              Add the institution's first department to begin organizing faculty.
+            </p>
+          </div>
+        )}
+      </Card>
       <Card padded={false}>
         <div className="p-5">
           <CardHeader
@@ -256,7 +466,7 @@ export default function Departments() {
           </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1050px] text-left text-sm">
+          <table className="w-full min-w-[1250px] text-left text-sm">
             <thead className="border-y border-border bg-surface-2 text-xs uppercase text-text-3">
               <tr>
                 {[
@@ -265,6 +475,8 @@ export default function Departments() {
                   "Full Name",
                   "Email Address",
                   "Title/Position",
+                  "Department",
+                  "Workload",
                   "Status",
                   "Date & Time Created",
                   "Actions",
@@ -295,6 +507,29 @@ export default function Departments() {
                   <td className="p-3">{x.email}</td>
                   <td className="p-3">{x.title}</td>
                   <td className="p-3">
+                    {x.department ? (
+                      <span className="font-medium">{x.department.name}</span>
+                    ) : (
+                      <span className="text-text-3">Unassigned</span>
+                    )}
+                  </td>
+                  <td className="p-3">
+                    {x.role === "TEACHER" ? (
+                      <button
+                        type="button"
+                        className="whitespace-nowrap font-medium text-brand hover:underline"
+                        onClick={() => setViewingWorkload(x)}
+                        aria-label={`View ${x.name}'s faculty workload`}
+                      >
+                        {x.workload} {x.workload === 1 ? "subject" : "subjects"}
+                      </button>
+                    ) : (
+                      <span className="whitespace-nowrap text-text-2">
+                        {x.workload} {x.workload === 1 ? "subject" : "subjects"}
+                      </span>
+                    )}
+                  </td>
+                  <td className="p-3">
                     <span
                       className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
                         x.status === 'ACTIVE'
@@ -320,6 +555,7 @@ export default function Departments() {
                           fullName: x.name,
                           email: x.email,
                           title: x.title,
+                          departmentId: x.department?.id ?? "",
                           profilePicture: x.profilePicture ?? "",
                         })
                       }}
@@ -361,6 +597,135 @@ export default function Departments() {
           </div>
         </div>
       </Card>
+      </div>
+      {departmentModal && (
+        <Modal
+          title={
+            departmentModal === "create"
+              ? "Add Department"
+              : "Edit Department"
+          }
+          onClose={() => setDepartmentModal(undefined)}
+        >
+          <form onSubmit={saveDepartment} className="space-y-3">
+            <label className="block text-sm">
+              Department Code
+              <input
+                required
+                maxLength={20}
+                value={departmentForm.code}
+                onChange={(event) =>
+                  setDepartmentForm({
+                    ...departmentForm,
+                    code: event.target.value.toUpperCase(),
+                  })
+                }
+                placeholder="e.g. CCS"
+                className="mt-1 w-full rounded border p-2 uppercase"
+              />
+            </label>
+            <label className="block text-sm">
+              Department Name
+              <input
+                required
+                maxLength={120}
+                value={departmentForm.name}
+                onChange={(event) =>
+                  setDepartmentForm({
+                    ...departmentForm,
+                    name: event.target.value,
+                  })
+                }
+                placeholder="College of Computer Studies"
+                className="mt-1 w-full rounded border p-2"
+              />
+            </label>
+            <label className="block text-sm">
+              Description (optional)
+              <textarea
+                maxLength={500}
+                rows={3}
+                value={departmentForm.description}
+                onChange={(event) =>
+                  setDepartmentForm({
+                    ...departmentForm,
+                    description: event.target.value,
+                  })
+                }
+                className="mt-1 w-full rounded border p-2"
+              />
+            </label>
+            <Actions
+              busy={busy}
+              cancel={() => setDepartmentModal(undefined)}
+              label={
+                departmentModal === "create"
+                  ? "Create Department"
+                  : "Save Department"
+              }
+            />
+          </form>
+        </Modal>
+      )}
+      {viewingWorkload && (
+        <Modal
+          title="View Faculty Workload"
+          onClose={() => setViewingWorkload(undefined)}
+        >
+          <p className="mb-4 text-sm text-text-3">
+            Subjects currently handled by{" "}
+            <b className="text-text-1">{viewingWorkload.name}</b>.
+          </p>
+          {viewingWorkload.subjects.length ? (
+            <div className="space-y-3">
+              {viewingWorkload.subjects.map((subject) => (
+                <article
+                  key={subject.id}
+                  className="rounded-xl border border-border bg-surface-2 p-4"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="font-semibold text-text-1">{subject.name}</p>
+                      <p className="mt-1 font-mono text-xs font-semibold text-brand">
+                        {subject.code}
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand">
+                      {subject.assessmentCount}{" "}
+                      {subject.assessmentCount === 1
+                        ? "assessment"
+                        : "assessments"}
+                    </span>
+                  </div>
+                  <dl className="mt-3 grid gap-2 text-xs text-text-3 sm:grid-cols-2">
+                    <div>
+                      <dt className="font-semibold text-text-2">Schedule</dt>
+                      <dd>{subject.schedule || "Not specified"}</dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-text-2">Students</dt>
+                      <dd>{subject.studentCount} enrolled</dd>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <dt className="font-semibold text-text-2">Created</dt>
+                      <dd>{createdAt(subject.createdAt)}</dd>
+                    </div>
+                  </dl>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-text-3">
+              This faculty member has no subjects yet.
+            </div>
+          )}
+          <div className="mt-5 flex justify-end">
+            <Button variant="ghost" onClick={() => setViewingWorkload(undefined)}>
+              Close
+            </Button>
+          </div>
+        </Modal>
+      )}
       {show && (
         <Modal title="Add Faculty" onClose={() => setShow(false)}>
           <form onSubmit={submit} className="space-y-3">
@@ -383,6 +748,25 @@ export default function Departments() {
                 />
               </label>
             ))}
+            <label className="block text-sm">
+              Department
+              <select
+                value={form.departmentId}
+                onChange={(event) =>
+                  setForm({ ...form, departmentId: event.target.value })
+                }
+                className="mt-1 w-full rounded border p-2"
+              >
+                <option value="">Unassigned</option>
+                {departments.data
+                  ?.filter((department) => department.isActive)
+                  .map((department) => (
+                    <option key={department.id} value={department.id}>
+                      {department.code} - {department.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
             <ImageInput
               value={form.profilePicture}
               onChange={(v) => setForm({ ...form, profilePicture: v })}
@@ -453,6 +837,31 @@ export default function Departments() {
                   />
                 </label>
               ),
+            )}
+            {editing.role === "TEACHER" && (
+              <label className="block text-sm">
+                Department
+                <select
+                  value={edit.departmentId}
+                  onChange={(event) =>
+                    setEdit({ ...edit, departmentId: event.target.value })
+                  }
+                  className="mt-1 w-full rounded border p-2"
+                >
+                  <option value="">Unassigned</option>
+                  {departments.data
+                    ?.filter(
+                      (department) =>
+                        department.isActive ||
+                        department.id === editing.department?.id,
+                    )
+                    .map((department) => (
+                      <option key={department.id} value={department.id}>
+                        {department.code} - {department.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
             )}
             <ImageInput
               value={edit.profilePicture}

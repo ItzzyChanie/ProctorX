@@ -19,6 +19,10 @@ import { UpdateStudentDto } from './dto/update-student.dto';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { UpdateSectionDto } from './dto/update-section.dto';
 import { SetAccountStatusDto } from './dto/set-account-status.dto';
+import {
+  PromoteSectionDto,
+  TransferStudentDto,
+} from './dto/student-placement.dto';
 import { UsersService } from './users.service';
 
 @Controller('students')
@@ -49,6 +53,14 @@ export class StudentsController {
     return this.users.updateSection(sectionId, body, req.user.id);
   }
   @RequirePermission('MANAGE_STUDENTS')
+  @Post('sections/:sectionId/promote') @Roles(Role.DEAN) promoteSection(
+    @Param('sectionId') sectionId: string,
+    @Body() body: PromoteSectionDto,
+    @Req() req: any
+  ) {
+    return this.users.promoteSection(sectionId, body, req.user.id);
+  }
+  @RequirePermission('MANAGE_STUDENTS')
   @Delete('sections/:sectionId') @Roles(Role.DEAN) deleteSection(
     @Param('sectionId') sectionId: string,
     @Req() req: any
@@ -61,6 +73,15 @@ export class StudentsController {
     @Req() req: any
   ) {
     return this.users.listStudents(q, req.user.id, req.user.role);
+  }
+
+  @RequirePermission('MANAGE_STUDENTS')
+  @Patch(':id/placement') @Roles(Role.DEAN) transfer(
+    @Param('id') id: string,
+    @Body() body: TransferStudentDto,
+    @Req() req: any
+  ) {
+    return this.users.transferStudent(id, body, req.user.id);
   }
 
   @RequirePermission('MANAGE_STUDENTS')

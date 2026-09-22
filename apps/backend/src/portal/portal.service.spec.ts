@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import bcrypt from 'bcrypt';
 import { PortalService } from './portal.service';
 
@@ -79,4 +79,55 @@ test('uses initials plus @123 for a new faculty account', async () => {
   const result = await service.invite('dean-1', inviteInput);
   assert.equal(result.initialPassword, 'Emf@123');
   assert.equal(await bcrypt.compare('Emf@123', passwordHash), true);
+});
+
+test('creates a normalized department inside the dean institution', async () => {
+  let savedData: any;
+  const prisma = {
+    user: {
+      findUnique: async () => ({ institutionId: 'institution-1' }),
+    },
+    department: {
+      create: async ({ data }: any) => {
+        savedData = data;
+        return { id: 'department-1', ...data };
+      },
+    },
+    auditLog: { create: async () => ({}) },
+  } as any;
+  const service = new PortalService(prisma, {} as any, {} as any);
+
+  const result = await service.createDepartment('dean-1', {
+    code: ' ccs ',
+    name: ' Computer Studies ',
+    description: ' Technology programs ',
+  });
+
+  assert.deepEqual(savedData, {
+    institutionId: 'institution-1',
+    code: 'CCS',
+    name: 'Computer Studies',
+    description: 'Technology programs',
+  });
+  assert.equal(result.id, 'department-1');
+});
+
+test('does not allow permission overrides outside the dean institution', async () => {
+  const prisma = {
+    user: {
+      findUnique: async () => ({ institutionId: 'institution-1' }),
+      findFirst: async () => null,
+    },
+  } as any;
+  const service = new PortalService(prisma, {} as any, {} as any);
+
+  await assert.rejects(
+    service.setPermissionOverride('dean-1', 'outside-faculty', {
+      permissionKey: 'VIEW_STUDENT_ROSTERS',
+      granted: false,
+    }),
+    (error: unknown) =>
+      error instanceof NotFoundException &&
+      error.message === 'Faculty member not found'
+  );
 });

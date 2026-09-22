@@ -6,6 +6,7 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { api } from '../../lib/api';
 import { socket } from '../../lib/socket';
+import { useAuthStore } from '../../store/authStore';
 type HandRequest = {
   id: string;
   reason: string | null;
@@ -13,6 +14,9 @@ type HandRequest = {
   session: { student: { fullName: string }; exam: { title: string; term?:string; academicPeriod?:{academicYear:string;semester:'FIRST'|'SECOND'} } };
 };
 export default function Messages() {
+  const canFlagStudent = useAuthStore(
+    (state) => state.user?.permissions?.FLAG_STUDENT !== false
+  );
   const client = useQueryClient(),
     [toast, setToast] = useState('');
   const {
@@ -61,6 +65,11 @@ export default function Messages() {
           </div>
         )}
         <Card padded={false}>
+          {!canFlagStudent && (
+            <div className="border-b border-border p-4 text-xs font-semibold text-amber-600">
+              Actions restricted by your dean.
+            </div>
+          )}
           {isLoading && (
             <div className="p-5 text-sm text-text-2">Loading queue…</div>
           )}
@@ -98,7 +107,7 @@ export default function Messages() {
                 </span>
                 <Button
                   variant="ghost"
-                  disabled={resolve.isPending}
+                  disabled={resolve.isPending || !canFlagStudent}
                   onClick={() => resolve.mutate(r.id)}
                 >
                   Resolve

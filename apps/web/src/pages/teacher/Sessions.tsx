@@ -7,6 +7,7 @@ import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Chip } from '../../components/ui/Chip';
 import { api } from '../../lib/api';
+import { useAuthStore } from '../../store/authStore';
 type Exam = {
   examId: string;
   title: string;
@@ -20,6 +21,9 @@ type Exam = {
   academicPeriod?: { id:string; academicYear:string; semester:'FIRST'|'SECOND' };
 };
 export default function Sessions() {
+  const canCreateExam = useAuthStore(
+    (state) => state.user?.permissions?.CREATE_EXAM !== false
+  );
   const nav = useNavigate(),
     client = useQueryClient(),
     [toast, setToast] = useState(''),
@@ -111,9 +115,25 @@ export default function Sessions() {
             title="Exams and sessions"
             subtitle="Room codes are generated when you create an exam in the real exam builder."
             right={
-              <Button icon={Plus} onClick={() => nav('/teacher/classes')}>
-                Create exam
-              </Button>
+              <div className="flex flex-col items-end gap-1">
+                <Button
+                  icon={Plus}
+                  disabled={!canCreateExam}
+                  title={
+                    canCreateExam
+                      ? undefined
+                      : 'Creation restricted by your dean'
+                  }
+                  onClick={() => nav('/teacher/classes')}
+                >
+                  Create exam
+                </Button>
+                {!canCreateExam && (
+                  <span className="text-xs font-semibold text-amber-600">
+                    Restricted by your dean.
+                  </span>
+                )}
+              </div>
             }
           />
         </Card>

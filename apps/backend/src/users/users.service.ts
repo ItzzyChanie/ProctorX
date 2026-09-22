@@ -10,6 +10,10 @@ import { StudentQueryDto } from './dto/student-query.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { UpdateSectionDto } from './dto/update-section.dto';
+import {
+  PromoteSectionDto,
+  TransferStudentDto,
+} from './dto/student-placement.dto';
 
 @Injectable()
 export class UsersService {
@@ -192,6 +196,107 @@ export class UsersService {
       }),
     ]);
     return { deleted: true };
+  }
+
+  async transferStudent(
+    id: string,
+    input: TransferStudentDto,
+    actorId: string
+  ) {
+    const institutionId = await this.institutionFor(actorId);
+    const [student, section] = await Promise.all([
+      this.prisma.user.findFirst({
+        where: { id, institutionId, role: Role.STUDENT },
+        select: { id: true },
+      }),
+      this.prisma.studentSection.findFirst({
+        where: {
+          id: input.sectionId,
+          institutionId,
+          program: input.program,
+          yearLevel: input.yearLevel,
+        },
+        select: { id: true },
+      }),
+    ]);
+    if (!student) throw new NotFoundException('Student not found');
+    if (!section)
+      throw new NotFoundException(
+        'Target section does not match the selected program and year level'
+      );
+    await this.prisma.$transaction([
+      this.prisma.studentProfile.update({
+        where: { userId: student.id },
+        data: {
+          program: input.program,
+          yearLevel: input.yearLevel,
+          sectionId: section.id,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actorId,
+          action: 'STUDENT_TRANSFERRED',
+          targetType: 'User',
+          targetId: student.id,
+        },
+      }),
+    ]);
+    return { studentId: student.id, ...input };
+  }
+
+  async promoteSection(
+    sourceSectionId: string,
+    input: PromoteSectionDto,
+    actorId: string
+  ) {
+    const institutionId = await this.institutionFor(actorId);
+    const [source, target] = await Promise.all([
+      this.prisma.studentSection.findFirst({
+        where: { id: sourceSectionId, institutionId },
+      }),
+      this.prisma.studentSection.findFirst({
+        where: { id: input.targetSectionId, institutionId },
+      }),
+    ]);
+    if (!source) throw new NotFoundException('Source section not found');
+    if (!target) throw new NotFoundException('Target section not found');
+    if (source.id === target.id)
+      throw new ConflictException('Choose a different target section');
+    const result = await this.prisma.$transaction(async (tx) => {
+      const moved = await tx.studentProfile.updateMany({
+        where: {
+          sectionId: source.id,
+          user: { institutionId, role: Role.STUDENT },
+          ...(input.studentIds?.length
+            ? { userId: { in: input.studentIds } }
+            : {}),
+        },
+        data: {
+          program: target.program,
+          yearLevel: target.yearLevel,
+          sectionId: target.id,
+        },
+      });
+      if (!moved.count)
+        throw new ConflictException('No students were eligible for promotion');
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: 'STUDENT_SECTION_PROMOTED',
+          targetType: 'StudentSection',
+          targetId: source.id,
+        },
+      });
+      return moved;
+    });
+    return {
+      promoted: result.count,
+      sourceSectionId: source.id,
+      targetSectionId: target.id,
+      program: target.program,
+      yearLevel: target.yearLevel,
+    };
   }
 
   async updateStudent(id: string, input: UpdateStudentDto, actorId: string) {

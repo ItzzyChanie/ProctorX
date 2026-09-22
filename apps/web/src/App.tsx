@@ -45,6 +45,17 @@ import { Role } from './types';
 import { api } from './lib/api';
 import { useAuthStore } from './store/authStore';
 import { notificationSocket } from './lib/socket';
+import { TeacherPermissionGate } from './components/TeacherPermissionGate';
+
+const teacherGate = (
+  permission: string,
+  pageTitle: string,
+  children: React.ReactNode
+) => (
+  <TeacherPermissionGate permission={permission} pageTitle={pageTitle}>
+    {children}
+  </TeacherPermissionGate>
+);
 
 function SessionBootstrap({ children }: { children: React.ReactNode }) {
   const { setAuth, finishSessionCheck, user, isAuthenticated, signOut } =
@@ -79,6 +90,18 @@ function SessionBootstrap({ children }: { children: React.ReactNode }) {
       notificationSocket.disconnect();
     };
   }, [isAuthenticated, signOut, user?.role]);
+  useEffect(() => {
+    if (!isAuthenticated || user?.role !== Role.TEACHER) return;
+    const refreshPermissions = () => {
+      void api.get('/auth/me').then(({ data }) => setAuth(data));
+    };
+    const timer = window.setInterval(refreshPermissions, 30_000);
+    window.addEventListener('focus', refreshPermissions);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshPermissions);
+    };
+  }, [isAuthenticated, setAuth, user?.role]);
   return <>{children}</>;
 }
 
@@ -121,23 +144,23 @@ export default function App() {
           </Route>
 
           <Route element={<ProtectedRoute roles={[Role.TEACHER]} />}>
-            <Route path="/teacher" element={<TeacherDashboard />} />
-            <Route path="/teacher/monitoring" element={<LiveMonitoring />} />
-            <Route path="/teacher/live" element={<LiveMonitoring />} />
-            <Route path="/teacher/sessions" element={<Sessions />} />
-            <Route path="/teacher/recordings" element={<Recordings />} />
-            <Route path="/teacher/incidents" element={<Incidents />} />
-            <Route path="/teacher/correlation" element={<Correlation />} />
+            <Route path="/teacher" element={teacherGate('VIEW_OWN_CLASS_SESSIONS', 'Dashboard', <TeacherDashboard />)} />
+            <Route path="/teacher/monitoring" element={teacherGate('VIEW_OWN_CLASS_SESSIONS', 'Live Monitoring', <LiveMonitoring />)} />
+            <Route path="/teacher/live" element={teacherGate('VIEW_OWN_CLASS_SESSIONS', 'Live Monitoring', <LiveMonitoring />)} />
+            <Route path="/teacher/sessions" element={teacherGate('VIEW_OWN_CLASS_SESSIONS', 'Sessions', <Sessions />)} />
+            <Route path="/teacher/recordings" element={teacherGate('VIEW_OWN_CLASS_SESSIONS', 'Recordings', <Recordings />)} />
+            <Route path="/teacher/incidents" element={teacherGate('VIEW_OWN_CLASS_SESSIONS', 'Incidents', <Incidents />)} />
+            <Route path="/teacher/correlation" element={teacherGate('VIEW_OWN_CLASS_SESSIONS', 'Correlation', <Correlation />)} />
             <Route path="/teacher/classes" element={<Classes />} />
             <Route path="/teacher/class-sections" element={<ClassSections />} />
-            <Route path="/teacher/rosters" element={<StudentRosters />} />
-            <Route path="/teacher/submitted-exams" element={<SubmittedExams />} />
+            <Route path="/teacher/rosters" element={teacherGate('VIEW_STUDENT_ROSTERS', 'Student Rosters', <StudentRosters />)} />
+            <Route path="/teacher/submitted-exams" element={teacherGate('VIEW_OWN_CLASS_SESSIONS', 'Submitted Exams', <SubmittedExams />)} />
             <Route path="/teacher/messages" element={<Messages />} />
-            <Route path="/teacher/question-bank" element={<QuestionBank />} />
+            <Route path="/teacher/question-bank" element={teacherGate('CREATE_EXAM', 'Question Bank', <QuestionBank />)} />
             <Route path="/teacher/profile" element={<TeacherProfile />} />
             <Route
               path="/teacher/students"
-              element={<StudentLists role="teacher" />}
+              element={teacherGate('VIEW_STUDENT_ROSTERS', 'Student Lists', <StudentLists role="teacher" />)}
             />
           </Route>
 

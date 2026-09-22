@@ -28,6 +28,7 @@ import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { api } from '../../lib/api';
+import { useAuthStore } from '../../store/authStore';
 
 type IncidentEvent = {
   id: string;
@@ -115,6 +116,9 @@ const formatDateTime = (value: string) =>
   }).format(new Date(value));
 
 export default function Incidents() {
+  const canFlagStudent = useAuthStore(
+    (state) => state.user?.permissions?.FLAG_STUDENT !== false
+  );
   const navigate = useNavigate();
   const [archiveTab, setArchiveTab] = useState<'active' | 'archived'>('active');
   const [search, setSearch] = useState('');
@@ -474,6 +478,7 @@ export default function Incidents() {
           report={selected}
           pending={exportReport.isPending}
           reviewPending={reviewProctoring.isPending}
+          canFlagStudent={canFlagStudent}
           onClose={() => setSelected(null)}
           onExport={() => exportReport.mutate(selected.id)}
           onViewRecording={() =>
@@ -565,6 +570,7 @@ function IncidentModal({
   report,
   pending,
   reviewPending,
+  canFlagStudent,
   onClose,
   onExport,
   onViewRecording,
@@ -573,6 +579,7 @@ function IncidentModal({
   report: IncidentReport;
   pending: boolean;
   reviewPending: boolean;
+  canFlagStudent: boolean;
   onClose: () => void;
   onExport: () => void;
   onViewRecording: () => void;
@@ -762,10 +769,15 @@ function IncidentModal({
                 ? 'Pending'
                 : report.proctorReviewDecision}
             </p>
+            {!canFlagStudent && (
+              <p className="text-xs font-semibold text-amber-600">
+                Review restricted by your dean.
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                disabled={reviewPending}
+                disabled={reviewPending || !canFlagStudent}
                 onClick={() => onReview('NEGATIVE')}
                 className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition disabled:opacity-50 ${report.proctorReviewDecision === 'NEGATIVE' ? 'border-emerald-400 bg-emerald-200 text-emerald-900' : 'border-emerald-200 bg-emerald-50/60 text-emerald-700 hover:bg-emerald-100'}`}
               >
@@ -774,7 +786,7 @@ function IncidentModal({
               </button>
               <button
                 type="button"
-                disabled={reviewPending}
+                disabled={reviewPending || !canFlagStudent}
                 onClick={() => onReview('POSITIVE')}
                 className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition disabled:opacity-50 ${report.proctorReviewDecision === 'POSITIVE' ? 'border-rose-400 bg-rose-200 text-rose-900' : 'border-rose-200 bg-rose-50/60 text-rose-700 hover:bg-rose-100'}`}
               >

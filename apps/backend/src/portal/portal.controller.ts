@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -23,10 +24,14 @@ import {
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { PortalService } from './portal.service';
 import {
+  CreateDepartmentDto,
   CreateAcademicPeriodDto,
   InviteProfessorDto,
   RaiseHandDto,
+  SetPermissionOverrideDto,
+  SetDepartmentStatusDto,
   SetManagedAccountStatusDto,
+  UpdateDepartmentDto,
   UpdateFacultyDto,
 } from './dto/portal.dto';
 import {
@@ -148,7 +153,10 @@ export class PortalController {
     return this.p.readNotification(r.user.id, id);
   }
 
-  @Get('teacher/exams') @Roles(Role.TEACHER) exams(
+  @Get('teacher/exams')
+  @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS')
+  exams(
     @Req() r: any,
     @Query('archive') archive?: string
   ) {
@@ -157,24 +165,32 @@ export class PortalController {
 
   @Patch('teacher/exams/:id/archive')
   @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
   archiveTeacherExam(@Req() r: any, @Param('id') id: string) {
     return this.p.setTeacherExamArchived(r.user.id, id, true);
   }
 
   @Patch('teacher/exams/:id/restore')
   @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
   restoreTeacherExam(@Req() r: any, @Param('id') id: string) {
     return this.p.setTeacherExamArchived(r.user.id, id, false);
   }
 
-  @Get('teacher/sessions/:id/playback') @Roles(Role.TEACHER) playback(
+  @Get('teacher/sessions/:id/playback')
+  @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS')
+  playback(
     @Req() r: any,
     @Param('id') id: string
   ) {
     return this.p.playback(r.user.id, id);
   }
 
-  @Get('teacher/evidence-clips/:id') @Roles(Role.TEACHER) async evidenceClip(
+  @Get('teacher/evidence-clips/:id')
+  @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS')
+  async evidenceClip(
     @Req() r: any,
     @Param('id') id: string,
     @Res() response: Response
@@ -183,7 +199,10 @@ export class PortalController {
     response.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     return response.sendFile(path);
   }
-  @Get('teacher/sessions/:id/recording') @Roles(Role.TEACHER) async recording(
+  @Get('teacher/sessions/:id/recording')
+  @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS')
+  async recording(
     @Req() r: any,
     @Param('id') id: string,
     @Res() response: Response
@@ -193,18 +212,27 @@ export class PortalController {
     return response.sendFile(path);
   }
 
-  @Get('teacher/raise-hand-queue') @Roles(Role.TEACHER) queue(@Req() r: any) {
+  @Get('teacher/raise-hand-queue')
+  @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS')
+  queue(@Req() r: any) {
     return this.p.queue(r.user.id);
   }
 
-  @Post('teacher/raise-hand-queue/:id/resolve') @Roles(Role.TEACHER) resolve(
+  @Post('teacher/raise-hand-queue/:id/resolve')
+  @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT')
+  resolve(
     @Req() r: any,
     @Param('id') id: string
   ) {
     return this.p.resolve(r.user.id, id);
   }
 
-  @Get('teacher/dashboard') @Roles(Role.TEACHER) teacherDashboard(
+  @Get('teacher/dashboard')
+  @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS')
+  teacherDashboard(
     @Req() r: any,
     @Query() q: TeacherDashboardQueryDto
   ) {
@@ -241,11 +269,76 @@ export class PortalController {
     return this.p.audit(r.user.institutionId, q);
   }
 
+  @Get('dean/security/access')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_SECURITY')
+  securityAccess(@Req() r: any) {
+    return this.p.securityAccess(r.user.institutionId);
+  }
+
+  @Patch('dean/security/faculty/:id/permissions')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_SECURITY')
+  setPermissionOverride(
+    @Req() r: any,
+    @Param('id') id: string,
+    @Body() body: SetPermissionOverrideDto
+  ) {
+    return this.p.setPermissionOverride(r.user.id, id, body);
+  }
+
+  @Delete('dean/security/faculty/:id/permissions/:key')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_SECURITY')
+  resetPermissionOverride(
+    @Req() r: any,
+    @Param('id') id: string,
+    @Param('key') key: string
+  ) {
+    return this.p.resetPermissionOverride(r.user.id, id, key);
+  }
+
   @Get('dean/professors')
   @Roles(Role.DEAN)
   @RequirePermission('MANAGE_FACULTY')
   professors(@Req() r: any) {
     return this.p.professors(r.user.institutionId);
+  }
+
+  @Get('dean/departments')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_FACULTY')
+  departments(@Req() r: any) {
+    return this.p.departments(r.user.institutionId);
+  }
+
+  @Post('dean/departments')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_FACULTY')
+  createDepartment(@Req() r: any, @Body() body: CreateDepartmentDto) {
+    return this.p.createDepartment(r.user.id, body);
+  }
+
+  @Patch('dean/departments/:id')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_FACULTY')
+  updateDepartment(
+    @Req() r: any,
+    @Param('id') id: string,
+    @Body() body: UpdateDepartmentDto
+  ) {
+    return this.p.updateDepartment(r.user.id, id, body);
+  }
+
+  @Patch('dean/departments/:id/status')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_FACULTY')
+  setDepartmentStatus(
+    @Req() r: any,
+    @Param('id') id: string,
+    @Body() body: SetDepartmentStatusDto
+  ) {
+    return this.p.setDepartmentStatus(r.user.id, id, body.status);
   }
 
   @Post('dean/professors/invite')

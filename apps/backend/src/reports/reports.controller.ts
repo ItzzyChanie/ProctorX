@@ -16,14 +16,19 @@ import type { Response } from 'express';
 import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
+import {
+  PermissionsGuard,
+  RequirePermission,
+} from '../auth/guards/permissions.guard';
 import { ReportsService } from './reports.service';
 import { ReviewProctoringDto } from './dto/review-proctoring.dto';
 
 @Controller('reports')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 export class ReportsController {
   constructor(private reports: ReportsService) {}
-  @Get('incidents') @Roles(Role.TEACHER) incidents(
+  @Get('incidents') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') incidents(
     @Req() req: any,
     @Query('archive') archive?: string
   ) {
@@ -32,6 +37,7 @@ export class ReportsController {
 
   @Patch('incidents/:sessionId/review')
   @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT')
   reviewProctoring(
     @Req() req: any,
     @Param('sessionId') sessionId: string,
@@ -40,7 +46,8 @@ export class ReportsController {
     return this.reports.reviewProctoring(sessionId, req.user.id, body.decision);
   }
 
-  @Delete('incidents/:sessionId') @Roles(Role.TEACHER) removeIncident(
+  @Delete('incidents/:sessionId') @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT') removeIncident(
     @Req() req: any,
     @Param('sessionId') sessionId: string
   ) {
@@ -49,21 +56,25 @@ export class ReportsController {
 
   @Patch('incidents/:sessionId/restore')
   @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT')
   restoreIncident(@Req() req: any, @Param('sessionId') sessionId: string) {
     return this.reports.restoreIncident(sessionId, req.user.id);
   }
 
-  @Get(':sessionId/export') @Roles(Role.TEACHER) export(
+  @Get(':sessionId/export') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') export(
     @Req() req: any,
     @Param('sessionId') sessionId: string
   ) {
     return this.reports.export(sessionId, req.user.id);
   }
-  @Get('jobs/:jobId') @Roles(Role.TEACHER) job(@Param('jobId') jobId: string) {
+  @Get('jobs/:jobId') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') job(@Param('jobId') jobId: string) {
     return this.reports.jobStatus(jobId);
   }
 
-  @Get('jobs/:jobId/download') @Roles(Role.TEACHER) async download(
+  @Get('jobs/:jobId/download') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') async download(
     @Param('jobId') jobId: string,
     @Res({ passthrough: true }) response: Response
   ) {
@@ -76,7 +87,8 @@ export class ReportsController {
     return new StreamableFile(report.buffer);
   }
 
-  @Get('exams/:examId/correlation') @Roles(Role.TEACHER) correlation(
+  @Get('exams/:examId/correlation') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') correlation(
     @Req() req: any,
     @Param('examId') examId: string
   ) {

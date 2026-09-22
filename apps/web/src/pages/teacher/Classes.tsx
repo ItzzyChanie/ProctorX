@@ -5,6 +5,7 @@ import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { api } from '../../lib/api';
+import { useAuthStore } from '../../store/authStore';
 
 type Subject = {
   id: string;
@@ -104,6 +105,15 @@ const enrollmentDate = (value: string) =>
     .replace(/^(.*?,\s\d{4}),\s/, '$1 - ');
 
 export default function Classes() {
+  const canCreateExam = useAuthStore(
+    (state) => state.user?.permissions?.CREATE_EXAM !== false
+  );
+  const canViewRosters = useAuthStore(
+    (state) => state.user?.permissions?.VIEW_STUDENT_ROSTERS !== false
+  );
+  const canFlagStudent = useAuthStore(
+    (state) => state.user?.permissions?.FLAG_STUDENT !== false
+  );
   const qc = useQueryClient(),
     [subjectForm, setSubjectForm] = useState({
       subjectCode: '',
@@ -640,6 +650,11 @@ export default function Classes() {
             title="Create Subject"
             subtitle="A student join code is generated automatically."
           />
+          {!canCreateExam && (
+            <p className="mb-3 text-xs font-semibold text-amber-600">
+              Creation restricted by your dean.
+            </p>
+          )}
           <form
             className="space-y-3"
             onSubmit={(e) => {
@@ -652,6 +667,7 @@ export default function Classes() {
             }}
           >
             <input
+              disabled={!canCreateExam}
               className={input}
               maxLength={30}
               value={subjectForm.subjectCode}
@@ -664,6 +680,7 @@ export default function Classes() {
               placeholder="Subject code (e.g. CS101)"
             />
             <input
+              disabled={!canCreateExam}
               className={input}
               maxLength={150}
               value={subjectForm.name}
@@ -673,6 +690,7 @@ export default function Classes() {
               placeholder="Subject name"
             />
             <input
+              disabled={!canCreateExam}
               className={input}
               maxLength={150}
               value={subjectForm.schedule}
@@ -684,7 +702,7 @@ export default function Classes() {
             <Button
               className="w-full"
               icon={Plus}
-              disabled={createSubject.isPending}
+              disabled={!canCreateExam || createSubject.isPending}
             >
               Create subject
             </Button>
@@ -732,6 +750,12 @@ export default function Classes() {
                     <td className="p-4">
                       <Button
                         variant="ghost"
+                        disabled={!canViewRosters}
+                        title={
+                          canViewRosters
+                            ? undefined
+                            : 'Roster access restricted by your dean'
+                        }
                         onClick={() => setRosterSubject(s)}
                       >
                         {s._count.enrollments}{' '}
@@ -761,6 +785,7 @@ export default function Classes() {
                             <Button
                               variant="ghost"
                               icon={Pencil}
+                              disabled={!canCreateExam}
                               onClick={() => {
                                 const exam = currentExamFor(s)!;
                                 setRescheduling({
@@ -777,6 +802,7 @@ export default function Classes() {
                             </Button>
                             <Button
                               variant="danger"
+                              disabled={!canCreateExam}
                               onClick={() => setStopping(s)}
                             >
                               {assessmentStateFor(s) === 'PENDING'
@@ -786,9 +812,11 @@ export default function Classes() {
                           </>
                         ) : (
                           <Button
-                            disabled={!activePeriods.length}
+                            disabled={!canCreateExam || !activePeriods.length}
                             title={
-                              !activePeriods.length
+                              !canCreateExam
+                                ? 'Creation restricted by your dean'
+                                : !activePeriods.length
                                 ? 'The Dean must create an active semester first'
                                 : undefined
                             }
@@ -803,6 +831,7 @@ export default function Classes() {
                         <Button
                           variant="ghost"
                           icon={Pencil}
+                          disabled={!canCreateExam}
                           aria-label={`Edit ${s.name}`}
                           title="Edit subject"
                           onClick={() => setEditing({ ...s })}
@@ -810,6 +839,7 @@ export default function Classes() {
                         <Button
                           variant="danger"
                           icon={Trash2}
+                          disabled={!canCreateExam}
                           aria-label={`Delete ${s.name}`}
                           title="Delete subject"
                           onClick={() => setDeleting(s)}
@@ -852,6 +882,7 @@ export default function Classes() {
                 <Button
                   variant="ghost"
                   icon={X}
+                  disabled={!canFlagStudent}
                   onClick={() =>
                     review.mutate({ id: r.id, status: 'DECLINED' })
                   }
@@ -860,6 +891,7 @@ export default function Classes() {
                 </Button>
                 <Button
                   icon={Check}
+                  disabled={!canFlagStudent}
                   onClick={() =>
                     review.mutate({ id: r.id, status: 'APPROVED' })
                   }

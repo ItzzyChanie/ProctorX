@@ -20,11 +20,34 @@ import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsGateway } from '../sessions/sessions.gateway';
 import { generateDefaultPassword } from '../users/import/password.util';
+import { ROLE_DEFAULT_PERMISSIONS } from '../common/constants/role-permissions';
 import {
+  CreateDepartmentDto,
   CreateAcademicPeriodDto,
   InviteProfessorDto,
+  SetPermissionOverrideDto,
+  UpdateDepartmentDto,
   UpdateFacultyDto,
 } from './dto/portal.dto';
+
+const TEACHER_PERMISSION_CATALOG = [
+  {
+    key: 'CREATE_EXAM',
+    description: 'Create and manage subjects, assessments, and question banks.',
+  },
+  {
+    key: 'VIEW_OWN_CLASS_SESSIONS',
+    description: 'View monitoring sessions, recordings, and incidents for assigned classes.',
+  },
+  {
+    key: 'VIEW_STUDENT_ROSTERS',
+    description: 'View student rosters for assigned classes.',
+  },
+  {
+    key: 'FLAG_STUDENT',
+    description: 'Record and review integrity findings for assigned students.',
+  },
+] as const;
 
 type DeanAnalyticsFilters = {
   academicPeriodId?: string;
@@ -1017,12 +1040,281 @@ export class PortalService {
     return user.institutionId;
   }
 
+  private async assertDepartment(
+    institutionId: string,
+    departmentId?: string | null
+  ) {
+    if (!departmentId) return null;
+    const department = await this.prisma.department.findFirst({
+      where: { id: departmentId, institutionId, isActive: true },
+      select: { id: true },
+    });
+    if (!department)
+      throw new NotFoundException('Active department not found');
+    return department.id;
+  }
+
+  async departments(institutionId: string) {
+    return this.prisma.department.findMany({
+      where: { institutionId },
+      include: { _count: { select: { faculty: true } } },
+      orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+    });
+  }
+
+  async securityAccess(institutionId: string) {
+    const faculty = await this.prisma.user.findMany({
+      where: { institutionId, role: Role.TEACHER },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        status: true,
+        teacherProfile: {
+          select: {
+            employeeId: true,
+            department: { select: { name: true } },
+          },
+        },
+        permissionOverrides: {
+          select: {
+            granted: true,
+            permission: { select: { key: true } },
+          },
+        },
+      },
+      orderBy: { fullName: 'asc' },
+    });
+    const defaults = ROLE_DEFAULT_PERMISSIONS[Role.TEACHER];
+    return {
+      permissions: TEACHER_PERMISSION_CATALOG.map((permission) => ({
+        ...permission,
+        defaultGranted: defaults.includes(permission.key),
+      })),
+      faculty: faculty.map((member) => {
+        const overrides = Object.fromEntries(
+          member.permissionOverrides.map((override) => [
+            override.permission.key,
+            override.granted,
+          ])
+        );
+        return {
+          userId: member.id,
+          name: member.fullName,
+          email: member.email,
+          employeeId: member.teacherProfile?.employeeId ?? null,
+          department: member.teacherProfile?.department?.name ?? null,
+          status: member.status,
+          overrides,
+          effective: Object.fromEntries(
+            TEACHER_PERMISSION_CATALOG.map((permission) => [
+              permission.key,
+              overrides[permission.key] ?? defaults.includes(permission.key),
+            ])
+          ),
+        };
+      }),
+    };
+  }
+
+  async setPermissionOverride(
+    deanId: string,
+    targetUserId: string,
+    input: SetPermissionOverrideDto
+  ) {
+    const institutionId = await this.institutionFor(deanId);
+    const target = await this.prisma.user.findFirst({
+      where: { id: targetUserId, institutionId, role: Role.TEACHER },
+      select: { id: true },
+    });
+    if (!target) throw new NotFoundException('Faculty member not found');
+    const definition = TEACHER_PERMISSION_CATALOG.find(
+      (permission) => permission.key === input.permissionKey
+    );
+    if (!definition) throw new ForbiddenException('Permission cannot be managed');
+    const permission = await this.prisma.permission.upsert({
+      where: { key: definition.key },
+      create: {
+        key: definition.key,
+        description: definition.description,
+      },
+      update: { description: definition.description },
+    });
+    const override = await this.prisma.userPermission.upsert({
+      where: {
+        userId_permissionId: {
+          userId: target.id,
+          permissionId: permission.id,
+        },
+      },
+      create: {
+        userId: target.id,
+        permissionId: permission.id,
+        granted: input.granted,
+      },
+      update: { granted: input.granted },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: deanId,
+        action: 'FACULTY_PERMISSION_OVERRIDE_SET',
+        targetType: 'User',
+        targetId: target.id,
+      },
+    });
+    return override;
+  }
+
+  async resetPermissionOverride(
+    deanId: string,
+    targetUserId: string,
+    permissionKey: string
+  ) {
+    const institutionId = await this.institutionFor(deanId);
+    const target = await this.prisma.user.findFirst({
+      where: { id: targetUserId, institutionId, role: Role.TEACHER },
+      select: { id: true },
+    });
+    if (!target) throw new NotFoundException('Faculty member not found');
+    if (
+      !TEACHER_PERMISSION_CATALOG.some(
+        (permission) => permission.key === permissionKey
+      )
+    )
+      throw new ForbiddenException('Permission cannot be managed');
+    await this.prisma.userPermission.deleteMany({
+      where: {
+        userId: target.id,
+        permission: { key: permissionKey },
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: deanId,
+        action: 'FACULTY_PERMISSION_OVERRIDE_RESET',
+        targetType: 'User',
+        targetId: target.id,
+      },
+    });
+    return { reset: true };
+  }
+
+  async createDepartment(deanId: string, input: CreateDepartmentDto) {
+    const institutionId = await this.institutionFor(deanId);
+    try {
+      const department = await this.prisma.department.create({
+        data: {
+          institutionId,
+          code: input.code.trim().toUpperCase(),
+          name: input.name.trim(),
+          description: input.description?.trim() || null,
+        },
+      });
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: deanId,
+          action: 'DEPARTMENT_CREATED',
+          targetType: 'Department',
+          targetId: department.id,
+        },
+      });
+      return department;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      )
+        throw new ConflictException(
+          'A department with this code or name already exists'
+        );
+      throw error;
+    }
+  }
+
+  async updateDepartment(
+    deanId: string,
+    id: string,
+    input: UpdateDepartmentDto
+  ) {
+    const institutionId = await this.institutionFor(deanId);
+    const existing = await this.prisma.department.findFirst({
+      where: { id, institutionId },
+      select: { id: true },
+    });
+    if (!existing) throw new NotFoundException('Department not found');
+    try {
+      const department = await this.prisma.department.update({
+        where: { id },
+        data: {
+          ...(input.code !== undefined
+            ? { code: input.code.trim().toUpperCase() }
+            : {}),
+          ...(input.name !== undefined ? { name: input.name.trim() } : {}),
+          ...(input.description !== undefined
+            ? { description: input.description.trim() || null }
+            : {}),
+        },
+      });
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: deanId,
+          action: 'DEPARTMENT_UPDATED',
+          targetType: 'Department',
+          targetId: id,
+        },
+      });
+      return department;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      )
+        throw new ConflictException(
+          'A department with this code or name already exists'
+        );
+      throw error;
+    }
+  }
+
+  async setDepartmentStatus(
+    deanId: string,
+    id: string,
+    status: 'ACTIVE' | 'ARCHIVED'
+  ) {
+    const institutionId = await this.institutionFor(deanId);
+    const existing = await this.prisma.department.findFirst({
+      where: { id, institutionId },
+      select: { id: true },
+    });
+    if (!existing) throw new NotFoundException('Department not found');
+    const department = await this.prisma.department.update({
+      where: { id },
+      data: { isActive: status === 'ACTIVE' },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: deanId,
+        action:
+          status === 'ACTIVE'
+            ? 'DEPARTMENT_REACTIVATED'
+            : 'DEPARTMENT_ARCHIVED',
+        targetType: 'Department',
+        targetId: id,
+      },
+    });
+    return department;
+  }
+
   async professors(institutionId: string) {
     const rows = await this.prisma.user.findMany({
       where: { institutionId, role: { in: [Role.DEAN, Role.TEACHER] } },
       include: {
-        taughtSubjects: true,
-        teacherProfile: true,
+        taughtSubjects: {
+          include: {
+            _count: { select: { enrollments: true, exams: true } },
+          },
+        },
+        teacherProfile: { include: { department: true } },
         deanProfile: true,
       },
       orderBy: { fullName: 'asc' },
@@ -1032,19 +1324,33 @@ export class PortalService {
       employeeId: x.teacherProfile?.employeeId ?? x.deanProfile?.employeeId,
       name: x.fullName,
       email: x.email,
-      title: x.teacherProfile?.department ?? x.deanProfile?.title,
+      title: x.teacherProfile?.title ?? x.deanProfile?.title,
+      department: x.teacherProfile?.department ?? null,
       role: x.role,
       profilePicture: (x as typeof x & { profilePicture: string | null })
         .profilePicture,
       status: x.status,
       createdAt: x.createdAt,
-      subjects: x.taughtSubjects.map((s) => s.code),
+      subjects: x.taughtSubjects.map((subject) => ({
+        id: subject.id,
+        code: subject.subjectCode ?? subject.code,
+        name: subject.name,
+        schedule: subject.schedule,
+        createdAt: subject.createdAt,
+        studentCount: subject._count.enrollments,
+        assessmentCount: subject._count.exams,
+      })),
+      workload: x.taughtSubjects.length,
       lastActiveAt: x.updatedAt,
     }));
   }
 
   async invite(deanId: string, input: InviteProfessorDto) {
     const institutionId = await this.institutionFor(deanId);
+    const departmentId = await this.assertDepartment(
+      institutionId,
+      input.departmentId
+    );
     const loginId = input.employeeId.trim().toLowerCase();
     const email = input.email.trim().toLowerCase();
     const initialPassword = generateDefaultPassword(input, 123);
@@ -1079,7 +1385,8 @@ export class PortalService {
           teacherProfile: {
             create: {
               employeeId: input.employeeId.trim(),
-              department: input.title.trim(),
+              title: input.title.trim(),
+              departmentId,
             },
           },
         },
@@ -1114,6 +1421,10 @@ export class PortalService {
 
   async updateFaculty(deanId: string, id: string, input: UpdateFacultyDto) {
     const institutionId = await this.institutionFor(deanId);
+    const departmentId =
+      input.departmentId !== undefined
+        ? await this.assertDepartment(institutionId, input.departmentId)
+        : undefined;
     const exists = await this.prisma.user.findFirst({
       where: { id, institutionId, role: { in: [Role.DEAN, Role.TEACHER] } },
     });
@@ -1141,7 +1452,8 @@ export class PortalService {
           : {
               teacherProfile: {
                 update: {
-                  department: input.title.trim(),
+                  title: input.title.trim(),
+                  ...(departmentId !== undefined ? { departmentId } : {}),
                   ...(input.employeeId !== undefined
                     ? { employeeId: input.employeeId.trim() || null }
                     : {}),
@@ -1686,6 +1998,33 @@ export class PortalService {
           (v) => rate([v.participants.size, v.flaggedStudents.size]) >= 70
         ).length,
       },
+      sessionDrilldown: sessions
+        .map((session) => ({
+          sessionId: session.id,
+          studentName: session.student.fullName,
+          studentId: session.student.studentProfile?.studentId ?? null,
+          program: session.student.studentProfile?.program ?? null,
+          yearLevel: session.student.studentProfile?.yearLevel ?? null,
+          section:
+            session.student.studentProfile?.section?.name ?? 'Unassigned',
+          subjectCode:
+            session.exam.subject.subjectCode ?? session.exam.subject.code,
+          subjectName: session.exam.subject.name,
+          examTitle: session.exam.title,
+          startedAt: session.startedAt,
+          reviewDecision: session.proctorReviewDecision,
+          suspicion:
+            session.proctorReviewDecision === ProctorReviewDecision.NEGATIVE
+              ? 0
+              : (session.scoreHistory[0]?.score ?? null),
+          incidentCount: session.events.length,
+        }))
+        .sort(
+          (a, b) =>
+            (b.suspicion ?? -1) - (a.suspicion ?? -1) ||
+            +b.startedAt - +a.startedAt
+        )
+        .slice(0, 100),
       incidenceRateBySection: [...bySection.values()]
         .sort(
           (a, b) =>

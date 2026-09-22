@@ -17,6 +17,10 @@ import {
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import {
+  PermissionsGuard,
+  RequirePermission,
+} from '../auth/guards/permissions.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import {
   CreateExamDto,
@@ -31,13 +35,14 @@ import {
 import { SubjectsService } from './subjects.service';
 import type { QuestionCounts } from '../ai/ai.service';
 @Controller('subjects')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 export class SubjectsController {
   constructor(private subjects: SubjectsService) {}
   @Get('mine') @Roles(Role.TEACHER, Role.STUDENT) mine(@Req() req: any) {
     return this.subjects.mine(req.user.id, req.user.role);
   }
-  @Get('question-bank') @Roles(Role.TEACHER) questionBank(
+  @Get('question-bank') @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM') questionBank(
     @Req() req: any,
     @Query() query: Record<string, string | undefined>
   ) {
@@ -45,6 +50,7 @@ export class SubjectsController {
   }
   @Get('question-bank/exam-groups')
   @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
   questionBankExamGroups(
     @Req() req: any,
     @Query('archive') archive?: string
@@ -56,6 +62,7 @@ export class SubjectsController {
   }
   @Get('question-bank/exam-groups/:examId')
   @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
   questionBankExamItems(
     @Req() req: any,
     @Param('examId') examId: string,
@@ -69,6 +76,7 @@ export class SubjectsController {
   }
   @Delete('question-bank/exam-groups/:examId')
   @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
   archiveQuestionBankExam(
     @Req() req: any,
     @Param('examId') examId: string
@@ -77,26 +85,30 @@ export class SubjectsController {
   }
   @Patch('question-bank/exam-groups/:examId/restore')
   @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
   restoreQuestionBankExam(
     @Req() req: any,
     @Param('examId') examId: string
   ) {
     return this.subjects.restoreQuestionBankExam(examId, req.user.id);
   }
-  @Post('question-bank') @Roles(Role.TEACHER) createBankItem(
+  @Post('question-bank') @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM') createBankItem(
     @Req() req: any,
     @Body() body: QuestionBankItemDto
   ) {
     return this.subjects.createBankItem(req.user.id, body);
   }
-  @Patch('question-bank/:itemId') @Roles(Role.TEACHER) updateBankItem(
+  @Patch('question-bank/:itemId') @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM') updateBankItem(
     @Req() req: any,
     @Param('itemId') itemId: string,
     @Body() body: QuestionBankItemDto
   ) {
     return this.subjects.updateBankItem(itemId, req.user.id, body);
   }
-  @Delete('question-bank/:itemId') @Roles(Role.TEACHER) archiveBankItem(
+  @Delete('question-bank/:itemId') @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM') archiveBankItem(
     @Req() req: any,
     @Param('itemId') itemId: string
   ) {
@@ -104,6 +116,7 @@ export class SubjectsController {
   }
   @Post('question-bank/import-document')
   @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
   @UseInterceptors(
     FileInterceptor('file', { limits: { fileSize: 20_000_000, files: 1 } })
   )
@@ -130,51 +143,57 @@ export class SubjectsController {
   }
   @Post('question-bank/import-exam/:examId')
   @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
   importExamToQuestionBank(
     @Req() req: any,
     @Param('examId') examId: string
   ) {
     return this.subjects.importExamToQuestionBank(examId, req.user.id);
   }
-  @Post() @Roles(Role.TEACHER) create(
+  @Post() @Roles(Role.TEACHER) @RequirePermission('CREATE_EXAM') create(
     @Req() req: any,
     @Body() body: CreateSubjectDto
   ) {
     return this.subjects.create(req.user.id, body);
   }
-  @Patch(':id') @Roles(Role.TEACHER) update(
+  @Patch(':id') @Roles(Role.TEACHER) @RequirePermission('CREATE_EXAM') update(
     @Param('id') id: string,
     @Req() req: any,
     @Body() body: UpdateSubjectDto
   ) {
     return this.subjects.update(id, req.user.id, body);
   }
-  @Delete(':id') @Roles(Role.TEACHER) remove(
+  @Delete(':id') @Roles(Role.TEACHER) @RequirePermission('CREATE_EXAM') remove(
     @Param('id') id: string,
     @Req() req: any
   ) {
     return this.subjects.remove(id, req.user.id);
   }
-  @Get(':id/students') @Roles(Role.TEACHER) students(
+  @Get(':id/students') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_STUDENT_ROSTERS') students(
     @Param('id') id: string,
     @Req() req: any
   ) {
     return this.subjects.students(id, req.user.id);
   }
-  @Delete(':id/students/:studentId') @Roles(Role.TEACHER) removeStudent(
+  @Delete(':id/students/:studentId') @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT') removeStudent(
     @Param('id') id: string,
     @Param('studentId') studentId: string,
     @Req() req: any
   ) {
     return this.subjects.removeStudent(id, studentId, req.user.id);
   }
-  @Get('section-assignments/overview') @Roles(Role.TEACHER) sectionAssignments(
+  @Get('section-assignments/overview') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_STUDENT_ROSTERS') sectionAssignments(
     @Req() req: any
   ) { return this.subjects.sectionAssignments(req.user.id); }
-  @Post(':id/sections') @Roles(Role.TEACHER) assignSection(
+  @Post(':id/sections') @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM') assignSection(
     @Param('id') id: string, @Body() body: AssignSectionDto, @Req() req: any
   ) { return this.subjects.assignSection(id, body.sectionId, body.enrollCurrentStudents, req.user.id); }
-  @Delete(':id/sections/:sectionId') @Roles(Role.TEACHER) unassignSection(
+  @Delete(':id/sections/:sectionId') @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM') unassignSection(
     @Param('id') id: string, @Param('sectionId') sectionId: string, @Req() req: any
   ) { return this.subjects.unassignSection(id, sectionId, req.user.id); }
   @Post('join') @Roles(Role.STUDENT) join(
@@ -191,35 +210,41 @@ export class SubjectsController {
   hideRequest(@Param('requestId') requestId: string, @Req() req: any) {
     return this.subjects.hideStudentJoinRequest(req.user.id, requestId);
   }
-  @Get('join-requests/pending') @Roles(Role.TEACHER) pending(@Req() req: any) {
+  @Get('join-requests/pending') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_STUDENT_ROSTERS') pending(@Req() req: any) {
     return this.subjects.pendingJoinRequests(req.user.id);
   }
-  @Post('join-requests/:requestId/review') @Roles(Role.TEACHER) review(
+  @Post('join-requests/:requestId/review') @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT') review(
     @Param('requestId') requestId: string,
     @Req() req: any,
     @Body() body: ReviewJoinRequestDto
   ) {
     return this.subjects.reviewJoinRequest(requestId, req.user.id, body.status);
   }
-  @Get(':id/exams') @Roles(Role.TEACHER) exams(
+  @Get(':id/exams') @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM') exams(
     @Param('id') id: string,
     @Req() req: any
   ) {
     return this.subjects.exams(id, req.user.id);
   }
-  @Get(':id/exams/:examId/copy') @Roles(Role.TEACHER) examCopy(
+  @Get(':id/exams/:examId/copy') @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM') examCopy(
     @Param('examId') examId: string,
     @Req() req: any
   ) {
     return this.subjects.examCopy(examId, req.user.id);
   }
-  @Get(':id/exams/:examId/versions') @Roles(Role.TEACHER) examVersions(
+  @Get(':id/exams/:examId/versions') @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM') examVersions(
     @Param('examId') examId: string,
     @Req() req: any
   ) {
     return this.subjects.examVersions(examId, req.user.id);
   }
-  @Post(':id/exams') @Roles(Role.TEACHER) exam(
+  @Post(':id/exams') @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM') exam(
     @Param('id') id: string,
     @Req() req: any,
     @Body() body: CreateExamDto
@@ -228,6 +253,7 @@ export class SubjectsController {
   }
   @Patch(':id/exams/:examId/schedule')
   @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
   updateExamSchedule(
     @Param('id') id: string,
     @Param('examId') examId: string,
@@ -236,7 +262,8 @@ export class SubjectsController {
   ) {
     return this.subjects.updateExamSchedule(id, examId, req.user.id, body);
   }
-  @Post(':id/exams/:examId/stop') @Roles(Role.TEACHER) stopExam(
+  @Post(':id/exams/:examId/stop') @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM') stopExam(
     @Param('id') id: string,
     @Param('examId') examId: string,
     @Req() req: any
@@ -245,6 +272,7 @@ export class SubjectsController {
   }
   @Post(':id/questions/generate')
   @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
   @UseInterceptors(
     FilesInterceptor('files', 20, {
       limits: { fileSize: 20_000_000, files: 20 },

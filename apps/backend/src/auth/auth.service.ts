@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from './email.service';
 import { AuthGateway } from './auth.gateway';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { ROLE_DEFAULT_PERMISSIONS } from '../common/constants/role-permissions';
 
 const STUDENT_LEASE_MS = 2 * 60 * 1000;
 const TOKEN_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
@@ -20,8 +21,9 @@ const ACTIVATION_RESEND_COOLDOWN_MS = 30 * 1000;
 
 const profileInclude = {
   deanProfile: true,
-  teacherProfile: true,
+  teacherProfile: { include: { department: true } },
   studentProfile: { include: { section: true } },
+  permissionOverrides: { include: { permission: true } },
 } satisfies Prisma.UserInclude;
 
 type UserWithProfile = Prisma.UserGetPayload<{
@@ -163,12 +165,28 @@ export class AuthService {
       deanProfile,
       teacherProfile,
       studentProfile,
+      permissionOverrides,
       ...userProfile
     } = user;
+    const permissionKeys = new Set(
+      Object.values(ROLE_DEFAULT_PERMISSIONS).flat()
+    );
+    for (const override of permissionOverrides) {
+      permissionKeys.add(override.permission.key);
+    }
+    const granted = new Set(ROLE_DEFAULT_PERMISSIONS[user.role]);
+    for (const override of permissionOverrides) {
+      if (override.granted) granted.add(override.permission.key);
+      else granted.delete(override.permission.key);
+    }
     return {
       ...userProfile,
+      permissions: Object.fromEntries(
+        [...permissionKeys].map((key) => [key, granted.has(key)])
+      ),
       employeeId: teacherProfile?.employeeId ?? deanProfile?.employeeId ?? null,
-      office: deanProfile?.college ?? teacherProfile?.department ?? null,
+      office:
+        deanProfile?.college ?? teacherProfile?.department?.name ?? null,
       officialTitle: deanProfile?.title ?? null,
       institutionName: deanProfile?.institutionName ?? null,
       studentId: studentProfile?.studentId ?? null,
@@ -397,22 +415,7 @@ export class AuthService {
                 },
               },
             }
-          : current.role === Role.TEACHER
-            ? {
-                teacherProfile: {
-                  upsert: {
-                    create: {
-                      department: input.office?.trim() || null,
-                    },
-                    update: {
-                      ...(input.office !== undefined
-                        ? { department: input.office.trim() || null }
-                        : {}),
-                    },
-                  },
-                },
-              }
-            : {}),
+          : {}),
       },
       include: profileInclude,
     });

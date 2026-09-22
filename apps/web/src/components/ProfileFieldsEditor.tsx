@@ -82,6 +82,7 @@ export function ProfileFieldsEditor({
               key === 'email' ||
               (role === 'student' &&
                 (key === 'studentId' || key === 'program')) ||
+              (role === 'teacher' && key === 'office') ||
               (key === 'employeeId' && (role === 'teacher' || role === 'dean'))
             }
             value={form[key as keyof typeof form]}
@@ -91,6 +92,7 @@ export function ProfileFieldsEditor({
             className={`w-full rounded-[9px] border border-border px-3 py-2.5 text-[13.5px] text-text-1 outline-none focus:border-brand ${
               key === 'email' ||
               key === 'employeeId' ||
+              (role === 'teacher' && key === 'office') ||
               (role === 'student' && (key === 'studentId' || key === 'program'))
                 ? 'cursor-not-allowed bg-slate-100 opacity-75 dark:bg-slate-800'
                 : 'bg-canvas'

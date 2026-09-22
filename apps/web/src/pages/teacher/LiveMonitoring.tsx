@@ -16,6 +16,7 @@ import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Button } from '../../components/ui/Button';
 import { api } from '../../lib/api';
 import { socket } from '../../lib/socket';
+import { useAuthStore } from '../../store/authStore';
 
 type Student = {
   id: string;
@@ -49,6 +50,9 @@ const rtcConfig: RTCConfiguration = {
 };
 
 export default function LiveMonitoring() {
+  const canFlagStudent = useAuthStore(
+    (state) => state.user?.permissions?.FLAG_STUDENT !== false
+  );
   const [params, setParams] = useSearchParams();
   const examId = params.get('examId') ?? '';
   const [exams, setExams] = useState<Exam[]>([]);
@@ -608,7 +612,7 @@ export default function LiveMonitoring() {
                   />
                   <Button
                     icon={MessageSquare}
-                    disabled={!warningMessage.trim()}
+                    disabled={!canFlagStudent || !warningMessage.trim()}
                     onClick={() => void sendWarning()}
                   >
                     Send
@@ -643,7 +647,11 @@ export default function LiveMonitoring() {
                     }
                     className="w-24 rounded-lg border border-white/20 bg-black/30 px-3 py-2 text-sm text-white"
                   />
-                  <Button icon={Clock3} onClick={() => void addTime()}>
+                  <Button
+                    icon={Clock3}
+                    disabled={!canFlagStudent}
+                    onClick={() => void addTime()}
+                  >
                     Add minutes
                   </Button>
                 </div>
@@ -658,7 +666,11 @@ export default function LiveMonitoring() {
                 <label className="mb-1 block text-xs font-semibold">
                   Connection recovery
                 </label>
-                <Button icon={RotateCcw} onClick={() => void resumeStudent()}>
+                <Button
+                  icon={RotateCcw}
+                  disabled={!canFlagStudent}
+                  onClick={() => void resumeStudent()}
+                >
                   Authorize resume
                 </Button>
                 <p className="mt-1 text-xs text-white/70">
@@ -670,6 +682,11 @@ export default function LiveMonitoring() {
               {actionMessage && (
                 <p className="text-xs text-amber-200 lg:col-span-3">
                   {actionMessage}
+                </p>
+              )}
+              {!canFlagStudent && (
+                <p className="text-xs font-semibold text-amber-200 lg:col-span-3">
+                  Student controls restricted by your dean.
                 </p>
               )}
             </div>

@@ -39,8 +39,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       where: { id: payload.sub },
       include: {
         deanProfile: true,
-        teacherProfile: true,
-        studentProfile: true,
+        teacherProfile: { include: { department: true } },
+        studentProfile: { include: { section: true } },
+        permissionOverrides: { include: { permission: true } },
       },
     });
 
