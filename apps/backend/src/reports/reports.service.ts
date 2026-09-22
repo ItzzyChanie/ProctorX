@@ -402,8 +402,14 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
 
   async deanReports(deanId: string) {
     await this.syncPendingDeanReports();
+    const dean = await this.prisma.user.findUnique({
+      where: { id: deanId },
+      select: { institutionId: true },
+    });
+    if (!dean?.institutionId)
+      throw new NotFoundException('Institution not found');
     const rows = await this.prisma.generatedReport.findMany({
-      where: { requestedById: deanId },
+      where: { requestedBy: { institutionId: dean.institutionId } },
       orderBy: { createdAt: 'desc' },
     });
     return rows.map((x) => ({
@@ -424,11 +430,29 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async deanReportDownload(deanId: string, id: string) {
+    const dean = await this.prisma.user.findUnique({
+      where: { id: deanId },
+      select: { institutionId: true },
+    });
+    if (!dean?.institutionId)
+      throw new NotFoundException('Institution not found');
     const row = await this.prisma.generatedReport.findFirst({
-      where: { id, requestedById: deanId, status: ReportJobStatus.COMPLETE },
+      where: {
+        id,
+        requestedBy: { institutionId: dean.institutionId },
+        status: ReportJobStatus.COMPLETE,
+      },
     });
     if (!row?.downloadPath)
       throw new NotFoundException('Report is not available');
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: deanId,
+        action: 'DEAN_REPORT_DOWNLOADED',
+        targetType: 'GeneratedReport',
+        targetId: row.id,
+      },
+    });
     return row.downloadPath;
   }
 
@@ -456,7 +480,9 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
     const format =
       body.format === 'excel' ? ReportFormat.EXCEL : ReportFormat.PDF;
     const dateFrom = new Date(body.dateFrom),
-      dateTo = new Date(body.dateTo);
+      dateTo = /^\d{4}-\d{2}-\d{2}$/.test(body.dateTo)
+        ? new Date(`${body.dateTo}T23:59:59.999Z`)
+        : new Date(body.dateTo);
 
     if (Number.isNaN(+dateFrom) || Number.isNaN(+dateTo) || dateFrom > dateTo)
       throw new NotFoundException('A valid report date range is required');
@@ -477,6 +503,15 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
         format,
         filters,
         status: ReportJobStatus.PENDING,
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: deanId,
+        action: 'DEAN_REPORT_REQUESTED',
+        targetType: 'GeneratedReport',
+        targetId: record.id,
+        metadata: { format, dateFrom, dateTo, filters },
       },
     });
 

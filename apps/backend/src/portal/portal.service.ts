@@ -19,6 +19,7 @@ import * as XLSX from 'xlsx';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsGateway } from '../sessions/sessions.gateway';
+import { generateDefaultPassword } from '../users/import/password.util';
 import {
   CreateAcademicPeriodDto,
   InviteProfessorDto,
@@ -35,6 +36,15 @@ type DeanAnalyticsFilters = {
   section?: string;
   subjectCode?: string;
 };
+
+function inclusiveDateEnd(value: string) {
+  const date = new Date(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    date.setUTCDate(date.getUTCDate() + 1);
+    date.setUTCMilliseconds(date.getUTCMilliseconds() - 1);
+  }
+  return date;
+}
 
 @Injectable()
 export class PortalService {
@@ -135,7 +145,11 @@ export class PortalService {
       throw new ConflictException(
         'Stop all active assessments before closing the semester'
       );
-    if (!period.exams.some((exam) => exam.term === 'FINAL'))
+    if (
+      !period.exams.some(
+        (exam) => exam.term === 'FINAL' && exam.status !== 'DRAFT'
+      )
+    )
       throw new ConflictException(
         'A Final-term assessment is required before closing the semester'
       );
@@ -1032,34 +1046,60 @@ export class PortalService {
   async invite(deanId: string, input: InviteProfessorDto) {
     const institutionId = await this.institutionFor(deanId);
     const loginId = input.employeeId.trim().toLowerCase();
-    if (await this.prisma.user.findUnique({ where: { loginId } }))
-      throw new ConflictException('Account already exists');
     const email = input.email.trim().toLowerCase();
-    const initialPassword = `${input.firstName.trim()[0]}${input.lastName.trim()[0]}@123`;
-    const user = await this.prisma.user.create({
-      data: {
-        institutionId,
-        role: Role.TEACHER,
-        loginId,
-        email,
-        fullName: `${input.firstName.trim()} ${input.lastName.trim()}`,
-        profilePicture: input.profilePicture,
-        passwordHash: await bcrypt.hash(initialPassword.toLowerCase(), 12),
-        status: AccountStatus.PENDING,
-        mustChangePassword: true,
-        teacherProfile: {
-          create: {
-            employeeId: input.employeeId.trim(),
-            department: input.title.trim(),
+    const initialPassword = generateDefaultPassword(input, 123);
+    const existing = await this.prisma.user.findFirst({
+      where: { OR: [{ loginId }, { email }] },
+      select: { email: true },
+    });
+    if (existing) {
+      throw new ConflictException(
+        existing.email?.toLowerCase() === email
+          ? 'Email address is already assigned to an account'
+          : 'Employee ID is already assigned to an account'
+      );
+    }
+
+    let user;
+    try {
+      user = await this.prisma.user.create({
+        data: {
+          institutionId,
+          role: Role.TEACHER,
+          loginId,
+          email,
+          fullName: [input.firstName, input.middleName, input.lastName]
+            .filter(Boolean)
+            .map((value) => value!.trim())
+            .join(' '),
+          profilePicture: input.profilePicture,
+          passwordHash: await bcrypt.hash(initialPassword, 12),
+          status: AccountStatus.PENDING,
+          mustChangePassword: true,
+          teacherProfile: {
+            create: {
+              employeeId: input.employeeId.trim(),
+              department: input.title.trim(),
+            },
           },
         },
-      },
-    });
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'Employee ID or email is already assigned to an account'
+        );
+      }
+      throw error;
+    }
 
     await this.prisma.auditLog.create({
       data: {
         actorId: deanId,
-        action: 'TEACHER_INVITED',
+        action: 'TEACHER_ACCOUNT_CREATED',
         targetType: 'User',
         targetId: user.id,
       },
@@ -1086,15 +1126,6 @@ export class PortalService {
         email: input.email.trim().toLowerCase(),
         ...(input.profilePicture !== undefined
           ? { profilePicture: input.profilePicture || null }
-          : {}),
-        ...(input.newPassword
-          ? {
-              passwordHash: await bcrypt.hash(
-                input.newPassword.toLowerCase(),
-                12
-              ),
-              mustChangePassword: true,
-            }
           : {}),
         ...(exists.role === Role.DEAN
           ? {
@@ -1130,36 +1161,38 @@ export class PortalService {
     return user;
   }
 
-  async deleteFaculty(deanId: string, id: string) {
+  async setFacultyStatus(
+    deanId: string,
+    id: string,
+    status: 'ACTIVE' | 'DISABLED'
+  ) {
     const institutionId = await this.institutionFor(deanId);
     const exists = await this.prisma.user.findFirst({
       where: { id, institutionId, role: Role.TEACHER },
-      select: {
-        id: true,
-        fullName: true,
-        _count: { select: { taughtSubjects: true } },
-      },
+      select: { id: true, status: true },
     });
     if (!exists) throw new NotFoundException('Faculty member not found');
-    if (exists._count.taughtSubjects > 0) {
+    if (exists.status === AccountStatus.PENDING) {
       throw new ConflictException(
-        `${exists.fullName} still owns ${exists._count.taughtSubjects} subject${exists._count.taughtSubjects === 1 ? '' : 's'}. Transfer or remove those subjects before deleting this account.`
+        'Pending invitations must be activated before their account status can be changed.'
       );
     }
-    try {
-      await this.prisma.user.delete({ where: { id } });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2003'
-      ) {
-        throw new ConflictException(
-          'This faculty account still has related academic or activity records and cannot be deleted.'
-        );
-      }
-      throw error;
-    }
-    return { deleted: true };
+    const saved = await this.prisma.user.update({
+      where: { id },
+      data: { status, isActive: status === 'ACTIVE' },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: deanId,
+        action:
+          status === 'DISABLED'
+            ? 'FACULTY_ACCOUNT_DISABLED'
+            : 'FACULTY_ACCOUNT_REACTIVATED',
+        targetType: 'User',
+        targetId: id,
+      },
+    });
+    return { userId: saved.id, status: saved.status };
   }
 
   async importFaculty(deanId: string, file: Express.Multer.File) {
@@ -1181,6 +1214,7 @@ export class PortalService {
         await this.invite(deanId, {
           employeeId: String(row['Employee ID'] ?? ''),
           firstName: String(row['First Name'] ?? ''),
+          middleName: String(row['Middle Name'] ?? ''),
           lastName: String(row['Last Name'] ?? ''),
           email: String(row['Email Address'] ?? ''),
           title: String(row['Title/Position'] ?? ''),
@@ -1476,15 +1510,6 @@ export class PortalService {
     };
   }
 
-  async deleteAuditLog(institutionId: string, id: string) {
-    const log = await this.prisma.auditLog.findFirst({
-      where: { id, actor: { institutionId } },
-    });
-    if (!log) throw new NotFoundException('Audit log not found');
-    await this.prisma.auditLog.delete({ where: { id } });
-    return { deleted: true };
-  }
-
   private scope(institutionId: string, f: DeanAnalyticsFilters) {
     const profile: any = {
       ...(f.program ? { program: f.program } : {}),
@@ -1496,7 +1521,7 @@ export class PortalService {
         ? {
             startedAt: {
               ...(f.dateFrom ? { gte: new Date(f.dateFrom) } : {}),
-              ...(f.dateTo ? { lte: new Date(f.dateTo) } : {}),
+              ...(f.dateTo ? { lte: inclusiveDateEnd(f.dateTo) } : {}),
             },
           }
         : {}),
@@ -1518,9 +1543,19 @@ export class PortalService {
     institutionId: string,
     filters: DeanAnalyticsFilters = {}
   ) {
+    const academicPeriods = await this.academicPeriods(institutionId);
+    const requestedPeriod = filters.academicPeriodId;
+    const effectiveFilters: DeanAnalyticsFilters = {
+      ...filters,
+      academicPeriodId:
+        requestedPeriod === 'ALL'
+          ? undefined
+          : requestedPeriod ||
+            academicPeriods.find((period) => period.status === 'ACTIVE')?.id,
+    };
     const [sessions, configuredSections] = await Promise.all([
       this.prisma.examSession.findMany({
-        where: this.scope(institutionId, filters),
+        where: this.scope(institutionId, effectiveFilters),
         include: {
           student: {
             include: { studentProfile: { include: { section: true } } },
@@ -1533,9 +1568,9 @@ export class PortalService {
       this.prisma.studentSection.findMany({
         where: {
           institutionId,
-          ...(filters.program ? { program: filters.program } : {}),
-          ...(filters.yearLevel ? { yearLevel: filters.yearLevel } : {}),
-          ...(filters.section ? { name: filters.section } : {}),
+          ...(effectiveFilters.program ? { program: effectiveFilters.program } : {}),
+          ...(effectiveFilters.yearLevel ? { yearLevel: effectiveFilters.yearLevel } : {}),
+          ...(effectiveFilters.section ? { name: effectiveFilters.section } : {}),
         },
       }),
     ]);
@@ -1684,7 +1719,9 @@ export class PortalService {
         rate: rate(v),
       })),
       termComparison: this.termComparison(sessions, true),
-      academicPeriods: await this.academicPeriods(institutionId),
+      academicPeriods,
+      activeAcademicPeriodId:
+        academicPeriods.find((period) => period.status === 'ACTIVE')?.id ?? null,
     };
   }
 
@@ -1693,11 +1730,20 @@ export class PortalService {
     filters: DeanAnalyticsFilters = {}
   ) {
     const dashboard = await this.deanDashboard(institutionId, filters);
+    const effectiveFilters: DeanAnalyticsFilters = {
+      ...filters,
+      academicPeriodId:
+        filters.academicPeriodId === 'ALL'
+          ? undefined
+          : filters.academicPeriodId ||
+            dashboard.activeAcademicPeriodId ||
+            undefined,
+    };
     const submissions = await this.prisma.submission.findMany({
       where: {
         gradeStatus: GradeStatus.TEACHER_CONFIRMED,
         totalScore: { not: null },
-        session: this.scope(institutionId, filters),
+        session: this.scope(institutionId, effectiveFilters),
       },
       include: {
         session: {

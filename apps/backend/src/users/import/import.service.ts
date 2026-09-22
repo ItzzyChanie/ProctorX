@@ -96,7 +96,10 @@ export class ImportService {
       throw new BadRequestException(
         'The selected section does not match the program and year level'
       );
-    const initialPassword = generateDefaultPassword(input);
+    const initialPassword = generateDefaultPassword(
+      input,
+      new Date().getFullYear()
+    );
     const fullName = [input.firstName, input.middleName, input.lastName]
       .filter(Boolean)
       .map((value) => value!.trim())
@@ -109,10 +112,7 @@ export class ImportService {
         email,
         fullName,
         profilePicture: input.profilePicture,
-        passwordHash: await bcrypt.hash(
-          initialPassword.toLocaleLowerCase(),
-          12
-        ),
+        passwordHash: await bcrypt.hash(initialPassword, 12),
         status: AccountStatus.PENDING,
         mustChangePassword: true,
         studentProfile: {

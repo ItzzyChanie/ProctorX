@@ -4,11 +4,8 @@ import {
   ArrowLeft,
   Building2,
   GraduationCap,
-  Trash2,
   Users,
-  X,
 } from "lucide-react"
-import axios from "axios"
 import { DashboardLayout } from "../../components/layout/DashboardLayout"
 import { Card, CardHeader } from "../../components/ui/Card"
 import { Button } from "../../components/ui/Button"
@@ -47,10 +44,6 @@ function AuditTable({ role, title }: { role: ActorRole; title: string }) {
   const [filters, setFilters] = useState({ ...blank })
   const [applied, setApplied] = useState({ ...blank })
   const [page, setPage] = useState(1)
-  const [deleting, setDeleting] = useState<Log>()
-  const [pending, setPending] = useState(false)
-  const [toast, setToast] = useState("")
-  const [error, setError] = useState("")
   const params = {
     role,
     page,
@@ -66,28 +59,6 @@ function AuditTable({ role, title }: { role: ActorRole; title: string }) {
     setFilters({ ...blank })
     setApplied({ ...blank })
     setPage(1)
-  }
-  const remove = async () => {
-    if (!deleting) return
-    setPending(true)
-    setError("")
-    try {
-      await api.delete(`/dean/audit-logs/${deleting.id}`)
-      setDeleting(undefined)
-      setToast("Audit log permanently deleted.")
-      window.setTimeout(() => setToast(""), 3500)
-      if (logs.data?.items.length === 1 && page > 1) setPage(page - 1)
-      else await logs.refetch()
-    } catch (requestError) {
-      setError(
-        axios.isAxiosError(requestError)
-          ? (requestError.response?.data?.message ??
-              "Unable to delete the audit log.")
-          : "Unable to delete the audit log.",
-      )
-    } finally {
-      setPending(false)
-    }
   }
   return (
     <Card padded={false}>
@@ -148,11 +119,6 @@ function AuditTable({ role, title }: { role: ActorRole; title: string }) {
           </div>
         </form>
       </div>
-      {error && (
-        <div className="border-t border-border p-4 text-sm text-risk-high">
-          {error}
-        </div>
-      )}
       {logs.isLoading && (
         <div className="border-t border-border p-5 text-sm text-text-2">
           Loading audit logs…
@@ -175,7 +141,6 @@ function AuditTable({ role, title }: { role: ActorRole; title: string }) {
               <tr>
                 <th className="p-3">Actor</th>
                 <th className="p-3">Log details</th>
-                <th className="p-3 text-center">Delete</th>
               </tr>
             </thead>
             <tbody>
@@ -199,16 +164,6 @@ function AuditTable({ role, title }: { role: ActorRole; title: string }) {
                     <div className="mt-1 whitespace-nowrap text-xs text-text-2">
                       {formatAuditTime(log.occurredAt)}
                     </div>
-                  </td>
-                  <td className="p-3 text-center">
-                    <button
-                      aria-label={`Delete ${log.action} audit log`}
-                      title="Delete audit log"
-                      onClick={() => setDeleting(log)}
-                      className="rounded-lg p-2 text-red-600 hover:bg-red-50"
-                    >
-                      <Trash2 size={16} />
-                    </button>
                   </td>
                 </tr>
               ))}
@@ -237,53 +192,6 @@ function AuditTable({ role, title }: { role: ActorRole; title: string }) {
           </Button>
         </div>
       </div>
-      {toast && (
-        <div
-          role="status"
-          className="fixed bottom-5 right-5 z-[70] flex items-center gap-3 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-xl"
-        >
-          {toast}
-          <button
-            aria-label="Dismiss notification"
-            onClick={() => setToast("")}
-          >
-            <X size={16} />
-          </button>
-        </div>
-      )}
-      {deleting && (
-        <div className="fixed inset-0 z-[80] grid place-items-center bg-black/50 p-4">
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-2xl"
-          >
-            <h2 className="font-head text-xl font-bold text-text-1">
-              Permanently delete audit log?
-            </h2>
-            <p className="mt-3 text-sm text-text-2">
-              This will permanently delete the <b>{deleting.action}</b> record
-              for <b>{deleting.actorName}</b>. This action cannot be undone.
-            </p>
-            <div className="mt-6 flex justify-end gap-2">
-              <Button
-                variant="ghost"
-                disabled={pending}
-                onClick={() => setDeleting(undefined)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="danger"
-                disabled={pending}
-                onClick={() => void remove()}
-              >
-                {pending ? "Deleting…" : "Delete permanently"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </Card>
   )
 }

@@ -15,22 +15,25 @@ import type {} from 'multer';
 import { Role } from '@prisma/client';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard, RequirePermission } from '../auth/guards/permissions.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { ImportService } from './import/import.service';
 import { CreateStudentDto } from './dto/create-student.dto';
 
 @Controller('users')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 export class UsersController {
   constructor(private imports: ImportService) {}
   @Post('students')
   @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_STUDENTS')
   createStudent(@Body() body: CreateStudentDto, @Req() req: any) {
     return this.imports.createStudent(body, req.user.id);
   }
 
   @Get('import/students/template')
   @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_STUDENTS')
   studentTemplate(@Res() response: Response) {
     response.setHeader(
       'Content-Type',
@@ -45,6 +48,7 @@ export class UsersController {
 
   @Post('import/students')
   @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_STUDENTS')
   @UseInterceptors(FileInterceptor('file'))
   students(
     @UploadedFile(

@@ -211,10 +211,7 @@ export class UsersService {
           : {}),
         ...(input.newPassword
           ? {
-              passwordHash: await bcrypt.hash(
-                input.newPassword.toLowerCase(),
-                12
-              ),
+              passwordHash: await bcrypt.hash(input.newPassword, 12),
               mustChangePassword: true,
             }
           : {}),
@@ -235,24 +232,37 @@ export class UsersService {
     return user;
   }
 
-  async deleteStudent(id: string, actorId: string) {
+  async setStudentStatus(
+    id: string,
+    status: 'ACTIVE' | 'DISABLED',
+    actorId: string
+  ) {
     const institutionId = await this.institutionFor(actorId);
     const exists = await this.prisma.user.findFirst({
       where: { id, institutionId, role: Role.STUDENT },
+      select: { id: true, status: true },
     });
 
     if (!exists) throw new NotFoundException('Student not found');
-
-    await this.prisma.user.delete({ where: { id } });
-
+    if (exists.status === 'PENDING')
+      throw new ConflictException(
+        'Pending student accounts must be activated before their status can be changed'
+      );
+    const saved = await this.prisma.user.update({
+      where: { id },
+      data: { status, isActive: status === 'ACTIVE' },
+    });
     await this.prisma.auditLog.create({
       data: {
         actorId,
-        action: 'STUDENT_ACCOUNT_DELETED',
+        action:
+          status === 'DISABLED'
+            ? 'STUDENT_ACCOUNT_DISABLED'
+            : 'STUDENT_ACCOUNT_REACTIVATED',
         targetType: 'User',
         targetId: id,
       },
     });
-    return { success: true };
+    return { userId: saved.id, status: saved.status };
   }
 }

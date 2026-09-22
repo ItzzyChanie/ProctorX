@@ -8,7 +8,6 @@ import {
   Query,
   Req,
   Res,
-  Delete,
   UseGuards,
   UploadedFile,
   UseInterceptors,
@@ -17,12 +16,17 @@ import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import {
+  PermissionsGuard,
+  RequirePermission,
+} from '../auth/guards/permissions.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { PortalService } from './portal.service';
 import {
   CreateAcademicPeriodDto,
   InviteProfessorDto,
   RaiseHandDto,
+  SetManagedAccountStatusDto,
   UpdateFacultyDto,
 } from './dto/portal.dto';
 import {
@@ -32,7 +36,7 @@ import {
 } from './dto/query.dto';
 
 @Controller()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 export class PortalController {
   constructor(private p: PortalService) {}
   @Get('academic-periods')
@@ -40,7 +44,10 @@ export class PortalController {
   academicPeriods(@Req() r: any) {
     return this.p.academicPeriods(r.user.institutionId);
   }
-  @Post('dean/academic-periods') @Roles(Role.DEAN) createAcademicPeriod(
+  @Post('dean/academic-periods')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_ACADEMIC_PERIODS')
+  createAcademicPeriod(
     @Req() r: any,
     @Body() body: CreateAcademicPeriodDto
   ) {
@@ -48,11 +55,13 @@ export class PortalController {
   }
   @Post('dean/academic-periods/:id/close')
   @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_ACADEMIC_PERIODS')
   closeAcademicPeriod(@Req() r: any, @Param('id') id: string) {
     return this.p.closeAcademicPeriod(r.user.id, id);
   }
   @Post('dean/academic-periods/:id/reopen')
   @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_ACADEMIC_PERIODS')
   reopenAcademicPeriod(@Req() r: any, @Param('id') id: string) {
     return this.p.reopenAcademicPeriod(r.user.id, id);
   }
@@ -202,59 +211,75 @@ export class PortalController {
     return this.p.teacherDashboard(r.user.id, q);
   }
 
-  @Get('dean/dashboard') @Roles(Role.DEAN) deanDashboard(
+  @Get('dean/dashboard')
+  @Roles(Role.DEAN)
+  @RequirePermission('VIEW_DEAN_ANALYTICS')
+  deanDashboard(
     @Req() r: any,
     @Query() q: DeanAnalyticsQueryDto
   ) {
     return this.p.deanDashboard(r.user.institutionId, q);
   }
 
-  @Get('dean/analytics') @Roles(Role.DEAN) deanAnalytics(
+  @Get('dean/analytics')
+  @Roles(Role.DEAN)
+  @RequirePermission('VIEW_DEAN_ANALYTICS')
+  deanAnalytics(
     @Req() r: any,
     @Query() q: DeanAnalyticsQueryDto
   ) {
     return this.p.deanAnalytics(r.user.institutionId, q);
   }
 
-  @Get('dean/audit-logs') @Roles(Role.DEAN) audit(
+  @Get('dean/audit-logs')
+  @Roles(Role.DEAN)
+  @RequirePermission('VIEW_AUDIT_LOGS')
+  audit(
     @Req() r: any,
     @Query() q: AuditLogQueryDto
   ) {
     return this.p.audit(r.user.institutionId, q);
   }
 
-  @Delete('dean/audit-logs/:id') @Roles(Role.DEAN) deleteAuditLog(
-    @Req() r: any,
-    @Param('id') id: string
-  ) {
-    return this.p.deleteAuditLog(r.user.institutionId, id);
-  }
-
-  @Get('dean/professors') @Roles(Role.DEAN) professors(@Req() r: any) {
+  @Get('dean/professors')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_FACULTY')
+  professors(@Req() r: any) {
     return this.p.professors(r.user.institutionId);
   }
 
-  @Post('dean/professors/invite') @Roles(Role.DEAN) invite(
+  @Post('dean/professors/invite')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_FACULTY')
+  invite(
     @Req() r: any,
     @Body() b: InviteProfessorDto
   ) {
     return this.p.invite(r.user.id, b);
   }
-  @Patch('dean/professors/:id') @Roles(Role.DEAN) updateFaculty(
+  @Patch('dean/professors/:id')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_FACULTY')
+  updateFaculty(
     @Req() r: any,
     @Param('id') id: string,
     @Body() b: UpdateFacultyDto
   ) {
     return this.p.updateFaculty(r.user.id, id, b);
   }
-  @Delete('dean/professors/:id') @Roles(Role.DEAN) deleteFaculty(
+  @Patch('dean/professors/:id/status')
+  @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_FACULTY')
+  setFacultyStatus(
     @Req() r: any,
-    @Param('id') id: string
+    @Param('id') id: string,
+    @Body() body: SetManagedAccountStatusDto
   ) {
-    return this.p.deleteFaculty(r.user.id, id);
+    return this.p.setFacultyStatus(r.user.id, id, body.status);
   }
   @Post('dean/professors/import')
   @Roles(Role.DEAN)
+  @RequirePermission('MANAGE_FACULTY')
   @UseInterceptors(FileInterceptor('file'))
   importFaculty(@Req() r: any, @UploadedFile() file: Express.Multer.File) {
     return this.p.importFaculty(r.user.id, file);

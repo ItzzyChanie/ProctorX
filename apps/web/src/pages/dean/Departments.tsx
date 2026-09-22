@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Pencil, Plus, Trash2, Upload, X } from "lucide-react"
+import { Pencil, Plus, Power, PowerOff, Upload, X } from "lucide-react"
 import axios from "axios"
 import { DashboardLayout } from "../../components/layout/DashboardLayout"
 import { Card, CardHeader } from "../../components/ui/Card"
@@ -23,6 +23,7 @@ type Faculty = {
 const empty = {
   employeeId: "",
   firstName: "",
+  middleName: "",
   lastName: "",
   email: "",
   title: "",
@@ -57,6 +58,10 @@ export default function Departments() {
   const { user, updateUser } = useAuthStore()
   const [show, setShow] = useState(false),
     [form, setForm] = useState(empty),
+    [createdCredentials, setCreatedCredentials] = useState<{
+      employeeId: string
+      initialPassword: string
+    }>(),
     [editing, setEditing] = useState<Faculty>(),
     [deleting, setDeleting] = useState<Faculty>()
   const [edit, setEdit] = useState({
@@ -64,7 +69,6 @@ export default function Departments() {
     fullName: "",
     email: "",
     title: "",
-    newPassword: "",
     profilePicture: "",
   })
   const [busy, setBusy] = useState(false),
@@ -101,15 +105,16 @@ export default function Departments() {
     setBusy(true)
     setError("")
     try {
-      const response = await api.post<{ initialPassword: string }>(
-        "/dean/professors/invite",
-        form,
-      )
+      const { data } = await api.post<{
+        initialPassword: string
+      }>("/dean/professors/invite", form)
+      setCreatedCredentials({
+        employeeId: form.employeeId,
+        initialPassword: data.initialPassword,
+      })
       setShow(false)
       setForm(empty)
-      notify(
-        `Faculty added successfully. Initial password: ${response.data.initialPassword}`,
-      )
+      notify("Faculty account created. Share the temporary credentials securely.")
       await qc.invalidateQueries({ queryKey: ["professors"] })
     } catch (e) {
       setError(
@@ -139,20 +144,21 @@ export default function Departments() {
       setBusy(false)
     }
   }
-  const remove = async () => {
+  const updateStatus = async () => {
     if (!deleting) return
     setBusy(true)
     try {
-      await api.delete(`/dean/professors/${deleting.userId}`)
+      const status = deleting.status === "DISABLED" ? "ACTIVE" : "DISABLED"
+      await api.patch(`/dean/professors/${deleting.userId}/status`, { status })
       setDeleting(undefined)
-      notify("Faculty deleted successfully.")
+      notify(`Faculty account ${status === "ACTIVE" ? "reactivated" : "disabled"} successfully.`)
       await qc.invalidateQueries({ queryKey: ["professors"] })
     } catch (requestError) {
       setError(
         axios.isAxiosError(requestError)
           ? requestError.response?.data?.message ??
-              "Could not delete faculty. Remove or transfer assigned subjects first."
-          : "Could not delete faculty. Remove or transfer assigned subjects first.",
+              "Could not update the faculty account status."
+          : "Could not update the faculty account status.",
       )
     } finally {
       setBusy(false)
@@ -314,18 +320,18 @@ export default function Departments() {
                           fullName: x.name,
                           email: x.email,
                           title: x.title,
-                          newPassword: "",
                           profilePicture: x.profilePicture ?? "",
                         })
                       }}
                     >
                       <Pencil size={16} />
                     </button>
-                    {x.role !== "DEAN" && <button
+                    {x.role !== "DEAN" && x.status !== "PENDING" && <button
                       className="ml-3 text-red-600"
                       onClick={() => setDeleting(x)}
+                      aria-label={`${x.status === "DISABLED" ? "Reactivate" : "Disable"} ${x.name}`}
                     >
-                      <Trash2 size={16} />
+                      {x.status === "DISABLED" ? <Power size={16} /> : <PowerOff size={16} />}
                     </button>}
                   </td>
                 </tr>
@@ -361,6 +367,7 @@ export default function Departments() {
             {([
               ["employeeId", "Employee ID"],
               ["firstName", "Firstname"],
+              ["middleName", "Middle name (optional)"],
               ["lastName", "Lastname"],
               ["email", "Email Address"],
               ["title", "Title/Position"],
@@ -368,7 +375,7 @@ export default function Departments() {
               <label key={k} className="block text-sm">
                 {l}
                 <input
-                  required
+                  required={k !== "middleName"}
                   type={k === "email" ? "email" : "text"}
                   value={form[k]}
                   onChange={(e) => setForm({ ...form, [k]: e.target.value })}
@@ -388,10 +395,41 @@ export default function Departments() {
           </form>
         </Modal>
       )}
+      {createdCredentials && (
+        <Modal
+          title="Faculty temporary credentials"
+          onClose={() => setCreatedCredentials(undefined)}
+        >
+          <p className="text-sm text-text-3">
+            Give these credentials directly to the faculty member. They will
+            verify the emailed activation code and must choose a new password
+            before entering the portal.
+          </p>
+          <dl className="mt-5 space-y-3 rounded-xl bg-surface-2 p-4">
+            <div>
+              <dt className="text-xs text-text-3">Employee ID</dt>
+              <dd className="font-mono font-semibold">
+                {createdCredentials.employeeId}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-text-3">Temporary password</dt>
+              <dd className="font-mono font-semibold">
+                {createdCredentials.initialPassword}
+              </dd>
+            </div>
+          </dl>
+          <div className="mt-5 flex justify-end">
+            <Button onClick={() => setCreatedCredentials(undefined)}>
+              I have saved the credentials
+            </Button>
+          </div>
+        </Modal>
+      )}
       {editing && (
         <Modal title="Edit Faculty" onClose={() => setEditing(undefined)}>
           <form onSubmit={save} className="space-y-3">
-            {(["employeeId", "fullName", "email", "title", "newPassword"] as const).map(
+            {(["employeeId", "fullName", "email", "title"] as const).map(
               (k) => (
                 <label key={k} className="block text-sm">
                   {
@@ -400,18 +438,15 @@ export default function Departments() {
                       employeeId: "Employee ID",
                       email: "Email Address",
                       title: "Title/Position",
-                      newPassword: "Change Password (optional)",
                     }[k]
                   }
                   <input
                     type={
                       k === "email"
                         ? "email"
-                        : k === "newPassword"
-                          ? "password"
-                          : "text"
+                        : "text"
                     }
-                    required={k !== "newPassword"}
+                    required
                     value={edit[k]}
                     onChange={(e) => setEdit({ ...edit, [k]: e.target.value })}
                     className="mt-1 w-full rounded border p-2"
@@ -432,10 +467,15 @@ export default function Departments() {
         </Modal>
       )}
       {deleting && (
-        <Modal title="Delete Faculty" onClose={() => setDeleting(undefined)}>
+        <Modal
+          title={`${deleting.status === "DISABLED" ? "Reactivate" : "Disable"} Faculty`}
+          onClose={() => setDeleting(undefined)}
+        >
           <p className="text-sm">
-            Delete <b>{deleting.name}</b>? This permanently removes the faculty
-            account and cannot be undone.
+            {deleting.status === "DISABLED" ? "Reactivate" : "Disable"}{" "}
+            <b>{deleting.name}</b>? {deleting.status === "DISABLED"
+              ? "They will regain access to their existing subjects and records."
+              : "They will immediately lose access, while their academic records remain intact."}
           </p>
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setDeleting(undefined)}>
@@ -444,9 +484,9 @@ export default function Departments() {
             <Button
               variant="danger"
               disabled={busy}
-              onClick={() => void remove()}
+              onClick={() => void updateStatus()}
             >
-              Delete Faculty
+              {deleting.status === "DISABLED" ? "Reactivate Faculty" : "Disable Faculty"}
             </Button>
           </div>
         </Modal>

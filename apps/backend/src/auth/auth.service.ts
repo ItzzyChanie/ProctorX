@@ -15,6 +15,8 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 
 const STUDENT_LEASE_MS = 2 * 60 * 1000;
 const TOKEN_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+const ACTIVATION_CODE_LIFETIME_MS = 10 * 60 * 1000;
+const ACTIVATION_RESEND_COOLDOWN_MS = 30 * 1000;
 
 const profileInclude = {
   deanProfile: true,
@@ -101,6 +103,60 @@ export class AuthService {
     });
   }
 
+  private async issueActivationCode(user: {
+    id: string;
+    email: string | null;
+  }) {
+    if (!user.email)
+      throw new ConflictException('This account has no activation email');
+    const now = new Date();
+    const latest = await this.prisma.activationCode.findFirst({
+      where: { userId: user.id, consumedAt: null },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+    if (latest) {
+      const resendAvailableAt = new Date(
+        latest.createdAt.getTime() + ACTIVATION_RESEND_COOLDOWN_MS
+      );
+      if (resendAvailableAt > now)
+        return { sent: false, resendAvailableAt };
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    await this.prisma.activationCode.updateMany({
+      where: { userId: user.id, consumedAt: null },
+      data: { consumedAt: now },
+    });
+    const activation = await this.prisma.activationCode.create({
+      data: {
+        userId: user.id,
+        codeHash: await bcrypt.hash(code, 10),
+        expiresAt: new Date(now.getTime() + ACTIVATION_CODE_LIFETIME_MS),
+      },
+    });
+    try {
+      await this.email.sendActivationCode(user.email, code);
+    } catch (error) {
+      await this.prisma.activationCode.delete({ where: { id: activation.id } });
+      throw error;
+    }
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: 'ACTIVATION_OTP_REQUESTED',
+        targetType: 'User',
+        targetId: user.id,
+      },
+    });
+    return {
+      sent: true,
+      resendAvailableAt: new Date(
+        activation.createdAt.getTime() + ACTIVATION_RESEND_COOLDOWN_MS
+      ),
+    };
+  }
+
   private profile(user: UserWithProfile) {
     const {
       passwordHash,
@@ -143,28 +199,11 @@ export class AuthService {
       )
         throw new UnauthorizedException('Invalid credentials');
       if (user.status === AccountStatus.PENDING) {
-        const code = String(Math.floor(100000 + Math.random() * 900000));
-        await this.prisma.activationCode.updateMany({
-          where: { userId: user.id, consumedAt: null },
-          data: { consumedAt: new Date() },
-        });
-        await this.prisma.activationCode.create({
-          data: {
-            userId: user.id,
-            codeHash: await bcrypt.hash(code, 10),
-            expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-          },
-        });
-        await this.email.sendActivationCode(user.email!, code);
-        await this.prisma.auditLog.create({
-          data: {
-            actorId: user.id,
-            action: 'ACTIVATION_OTP_REQUESTED',
-            targetType: 'User',
-            targetId: user.id,
-          },
-        });
-        return { activationRequired: true as const };
+        const activation = await this.issueActivationCode(user);
+        return {
+          activationRequired: true as const,
+          resendAvailableAt: activation.resendAvailableAt,
+        };
       }
       return {
         accessToken: await this.issueToken(user),
@@ -189,6 +228,25 @@ export class AuthService {
     }
   }
 
+  async resendActivation(loginId: string) {
+    const identifier = loginId.trim().toLowerCase();
+    const user = await this.prisma.user.findFirst({
+      where: { OR: [{ loginId: identifier }, { email: identifier }] },
+      select: { id: true, email: true, status: true, isActive: true },
+    });
+    if (
+      !user ||
+      !user.isActive ||
+      user.status !== AccountStatus.PENDING
+    )
+      throw new UnauthorizedException('Activation is not available');
+    const activation = await this.issueActivationCode(user);
+    return {
+      resent: activation.sent,
+      resendAvailableAt: activation.resendAvailableAt,
+    };
+  }
+
   async createSessionForUser(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -202,8 +260,9 @@ export class AuthService {
     };
   }
   async verifyActivation(loginId: string, code: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { loginId: loginId.trim().toLowerCase() },
+    const identifier = loginId.trim().toLowerCase();
+    const user = await this.prisma.user.findFirst({
+      where: { OR: [{ loginId: identifier }, { email: identifier }] },
       include: profileInclude,
     });
     if (!user || user.status !== AccountStatus.PENDING)

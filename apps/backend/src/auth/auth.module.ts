@@ -35,6 +35,10 @@ import { InstitutionRegistrationService } from "./institution-registration.servi
     AuthGateway,
     InstitutionRegistrationService,
   ],
-  exports: [JwtAuthGuard, RolesGuard, PermissionsGuard],
+  exports: [
+    JwtAuthGuard,
+    RolesGuard,
+    PermissionsGuard,
+  ],
 })
 export class AuthModule {}

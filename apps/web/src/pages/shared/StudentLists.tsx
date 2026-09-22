@@ -3,6 +3,8 @@ import {
   ArrowLeft,
   GraduationCap,
   Pencil,
+  Power,
+  PowerOff,
   Plus,
   Trash2,
   Upload,
@@ -53,7 +55,13 @@ const createStudentSchema = z.object({
 const updateStudentSchema = z.object({
   fullName: z.string().trim().min(1).max(150),
   email: z.string().email().max(320),
-  newPassword: z.string().min(6).max(128).or(z.literal('')),
+  newPassword: z
+    .string()
+    .min(6, 'Use at least 6 characters.')
+    .max(128)
+    .regex(/\d/, 'Include a number.')
+    .regex(/[^A-Za-z0-9]/, 'Include a special character.')
+    .or(z.literal('')),
   profilePicture: z.string(),
 });
 const suffix = (year: number) =>
@@ -94,8 +102,12 @@ export default function StudentLists({ role }: { role: Role }) {
   const [importing, setImporting] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [createdCredentials, setCreatedCredentials] = useState<{
+    studentId: string;
+    initialPassword: string;
+  }>();
   const [editing, setEditing] = useState<Student | null>(null);
-  const [confirm, setConfirm] = useState<'save' | 'delete' | null>(null);
+  const [confirm, setConfirm] = useState<'save' | 'status' | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -250,7 +262,14 @@ export default function StudentLists({ role }: { role: Role }) {
     }
     setSaving(true);
     try {
-      await api.post('/users/students', parsed.data);
+      const { data } = await api.post<{
+        user: { loginId: string };
+        initialPassword: string;
+      }>('/users/students', parsed.data);
+      setCreatedCredentials({
+        studentId: data.user.loginId,
+        initialPassword: data.initialPassword,
+      });
     } catch (error) {
       const message = axios.isAxiosError(error)
         ? error.response?.data?.message
@@ -333,7 +352,11 @@ export default function StudentLists({ role }: { role: Role }) {
     setConfirming(true);
     setRequestError(null);
     try {
-      if (confirm === 'delete') await api.delete(`/students/${editing.id}`);
+      if (confirm === 'status') {
+        await api.patch(`/students/${editing.id}/status`, {
+          status: editing.status === 'DISABLED' ? 'ACTIVE' : 'DISABLED',
+        });
+      }
       else {
         const parsed = updateStudentSchema.safeParse(editForm);
         if (!parsed.success) {
@@ -343,7 +366,10 @@ export default function StudentLists({ role }: { role: Role }) {
           setConfirming(false);
           return;
         }
-        await api.patch(`/students/${editing.id}`, parsed.data);
+        await api.patch(`/students/${editing.id}`, {
+          ...parsed.data,
+          newPassword: parsed.data.newPassword || undefined,
+        });
       }
     } catch (error) {
       const message = axios.isAxiosError(error)
@@ -351,16 +377,14 @@ export default function StudentLists({ role }: { role: Role }) {
         : null;
       setRequestError(
         message ??
-          `Unable to ${
-            confirm === 'delete' ? 'delete' : 'update'
-          } the student account.`
+          `Unable to ${confirm === 'status' ? 'change the status of' : 'update'} the student account.`
       );
       setConfirming(false);
       return;
     }
     setToast(
-      confirm === 'delete'
-        ? 'Student account deleted successfully.'
+      confirm === 'status'
+        ? `Student account ${editing.status === 'DISABLED' ? 'reactivated' : 'disabled'} successfully.`
         : 'Student account updated successfully.'
     );
     window.setTimeout(() => setToast(null), 3500);
@@ -705,15 +729,22 @@ export default function StudentLists({ role }: { role: Role }) {
                           >
                             <Pencil size={16} />
                           </button>
-                          <button
-                            className="ml-3 text-red-500"
-                            onClick={() => {
-                              setEditing(student);
-                              setConfirm('delete');
-                            }}
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                          {student.status !== 'PENDING' && (
+                            <button
+                              className="ml-3 text-red-500"
+                              aria-label={`${student.status === 'DISABLED' ? 'Reactivate' : 'Disable'} ${student.fullName}`}
+                              onClick={() => {
+                                setEditing(student);
+                                setConfirm('status');
+                              }}
+                            >
+                              {student.status === 'DISABLED' ? (
+                                <Power size={16} />
+                              ) : (
+                                <PowerOff size={16} />
+                              )}
+                            </button>
+                          )}
                         </td>
                       )}
                     </tr>
@@ -984,6 +1015,42 @@ export default function StudentLists({ role }: { role: Role }) {
           </form>
         </div>
       )}
+      {createdCredentials && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4">
+          <div className="w-full max-w-md rounded-[16px] bg-surface p-6 shadow-2xl">
+            <h2 className="font-head text-xl font-bold text-text-1">
+              Student temporary credentials
+            </h2>
+            <p className="mt-2 text-sm text-text-3">
+              Give these credentials directly to the student. They will verify
+              the emailed activation code and must choose a new password before
+              entering the portal.
+            </p>
+            <dl className="mt-5 space-y-3 rounded-xl bg-surface-2 p-4">
+              <div>
+                <dt className="text-xs text-text-3">Student ID</dt>
+                <dd className="font-mono font-semibold text-text-1">
+                  {createdCredentials.studentId}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-text-3">Temporary password</dt>
+                <dd className="font-mono font-semibold text-text-1">
+                  {createdCredentials.initialPassword}
+                </dd>
+              </div>
+            </dl>
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setCreatedCredentials(undefined)}
+                className="rounded-[9px] bg-brand px-4 py-2 text-sm font-semibold text-white"
+              >
+                I have saved the credentials
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {editing && !confirm && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">
           <form
@@ -1078,18 +1145,18 @@ export default function StudentLists({ role }: { role: Role }) {
         <div className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4">
           <div className="w-full max-w-sm rounded-[16px] bg-surface p-6 shadow-2xl">
             <h2 className="font-head text-xl font-bold text-text-1">
-              Confirm {confirm === 'delete' ? 'deletion' : 'changes'}
+              Confirm {confirm === 'status' ? 'status change' : 'changes'}
             </h2>
             <p className="mt-2 text-sm text-text-3">
-              {confirm === 'delete'
-                ? `Delete ${editing.fullName}'s account? This cannot be undone.`
+              {confirm === 'status'
+                ? `${editing.status === 'DISABLED' ? 'Reactivate' : 'Disable'} ${editing.fullName}'s account? Their academic records will be preserved.`
                 : `Save the changes to ${editing.fullName}'s account?`}
             </p>
             <div className="mt-6 flex justify-end gap-2">
               <button
                 onClick={() => {
                   setConfirm(null);
-                  if (confirm === 'delete') setEditing(null);
+                  if (confirm === 'status') setEditing(null);
                 }}
                 className="px-4 py-2 text-sm"
               >
@@ -1099,15 +1166,17 @@ export default function StudentLists({ role }: { role: Role }) {
                 disabled={confirming}
                 onClick={() => void confirmAction()}
                 className={
-                  confirm === 'delete'
+                  confirm === 'status' && editing.status !== 'DISABLED'
                     ? 'rounded-[9px] bg-red-600 px-4 py-2 text-sm font-semibold text-white'
                     : 'rounded-[9px] bg-brand px-4 py-2 text-sm font-semibold text-white'
                 }
               >
                 {confirming
                   ? 'Working…'
-                  : confirm === 'delete'
-                    ? 'Delete account'
+                  : confirm === 'status'
+                    ? editing.status === 'DISABLED'
+                      ? 'Reactivate account'
+                      : 'Disable account'
                     : 'Confirm save'}
               </button>
             </div>

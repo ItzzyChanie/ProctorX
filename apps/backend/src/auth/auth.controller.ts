@@ -14,8 +14,12 @@ import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import {
+  AllowPasswordChangeRequired,
+  JwtAuthGuard,
+} from './guards/jwt-auth.guard';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ResendActivationDto } from './dto/resend-activation.dto';
 import { UpdateProfilePictureDto } from './dto/update-profile-picture.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { InstitutionRegistrationService } from './institution-registration.service';
@@ -120,6 +124,14 @@ export class AuthController {
     return { user: result.user, passwordChangeRequired: true };
   }
 
+  @Post('resend-activation')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  resendActivation(@Body() body: ResendActivationDto) {
+    return this.auth.resendActivation(body.loginId);
+  }
+
+  @AllowPasswordChangeRequired()
   @UseGuards(JwtAuthGuard) @Post('logout') async logout(
     @Req() req: any,
     @Res({ passthrough: true }) response: Response
@@ -133,6 +145,7 @@ export class AuthController {
     return this.auth.heartbeat(req.user.id, req.user.loginSessionId);
   }
 
+  @AllowPasswordChangeRequired()
   @UseGuards(JwtAuthGuard) @Post('change-password') changePassword(
     @Req() req: any,
     @Body() body: ChangePasswordDto
@@ -144,6 +157,7 @@ export class AuthController {
     );
   }
 
+  @AllowPasswordChangeRequired()
   @UseGuards(JwtAuthGuard) @Get('me') me(@Req() req: any) {
     return this.auth.me(req.user);
   }

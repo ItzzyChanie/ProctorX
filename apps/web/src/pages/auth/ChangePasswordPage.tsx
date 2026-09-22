@@ -1,4 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Check, Eye, EyeOff } from 'lucide-react';
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { useNavigate } from 'react-router-dom';
@@ -9,9 +11,7 @@ const schema = z
     currentPassword: z.string().min(1),
     newPassword: z
       .string()
-      .min(12, 'Use at least 12 characters.')
-      .regex(/[a-z]/, 'Include a lower-case letter.')
-      .regex(/[A-Z]/, 'Include an upper-case letter.')
+      .min(6, 'Use at least 6 characters.')
       .regex(/\d/, 'Include a number.')
       .regex(/[^A-Za-z0-9]/, 'Include a symbol.'),
     confirm: z.string(),
@@ -23,11 +23,26 @@ const schema = z
 export default function ChangePasswordPage() {
   const navigate = useNavigate();
   const { updateUser, user } = useAuthStore();
+  const [visiblePasswords, setVisiblePasswords] = useState({
+    currentPassword: false,
+    newPassword: false,
+    confirm: false,
+  });
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<z.infer<typeof schema>>({ resolver: zodResolver(schema) });
+  const newPassword = watch('newPassword', '');
+  const passwordRequirements = [
+    { label: 'At least 6 characters', met: newPassword.length >= 6 },
+    { label: 'At least one number', met: /\d/.test(newPassword) },
+    {
+      label: 'At least one special character',
+      met: /[^A-Za-z0-9]/.test(newPassword),
+    },
+  ];
   const submit = async ({
     currentPassword,
     newPassword,
@@ -60,9 +75,6 @@ export default function ChangePasswordPage() {
         onSubmit={handleSubmit(submit)}
         className="glass-card relative w-full max-w-md rounded-[24px] p-8 shadow-[0_24px_80px_rgba(0,0,0,.35)]"
       >
-        <div className="mb-6 flex h-10 w-10 items-center justify-center rounded-xl bg-brand-gradient font-head text-lg font-bold shadow-glow">
-          P
-        </div>
         <p className="font-mono text-[11px] tracking-[0.16em] text-blue-300">
           // REQUIRED SECURITY STEP
         </p>
@@ -74,22 +86,100 @@ export default function ChangePasswordPage() {
         </p>
         {(['currentPassword', 'newPassword', 'confirm'] as const).map(
           (field) => (
-            <label
+            <div
               key={field}
               className="mt-5 block text-sm capitalize text-slate-200"
             >
               {field.replace(/([A-Z])/g, ' $1')}
-              <input
-                type="password"
-                {...register(field)}
-                className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-white outline-none transition focus:border-blue-400/60 focus:ring-4 focus:ring-blue-400/10"
-              />
+              <div className="relative mt-2">
+                <input
+                  id={field}
+                  aria-label={
+                    field === 'currentPassword'
+                      ? 'Current password'
+                      : field === 'newPassword'
+                        ? 'New password'
+                        : 'Confirm password'
+                  }
+                  type={visiblePasswords[field] ? 'text' : 'password'}
+                  {...register(field)}
+                  className="w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 pr-12 text-white outline-none transition focus:border-blue-400/60 focus:ring-4 focus:ring-blue-400/10"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    setVisiblePasswords((current) => ({
+                      ...current,
+                      [field]: !current[field],
+                    }))
+                  }
+                  aria-label={
+                    visiblePasswords[field]
+                      ? 'Hide ' +
+                        (field === 'currentPassword'
+                          ? 'current password'
+                          : field === 'newPassword'
+                            ? 'new password'
+                            : 'confirm password')
+                      : 'Show ' +
+                        (field === 'currentPassword'
+                          ? 'current password'
+                          : field === 'newPassword'
+                            ? 'new password'
+                            : 'confirm password')
+                  }
+                  aria-pressed={visiblePasswords[field]}
+                  className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-slate-400 transition hover:text-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400"
+                >
+                  {visiblePasswords[field] ? (
+                    <EyeOff size={18} />
+                  ) : (
+                    <Eye size={18} />
+                  )}
+                </button>
+              </div>
               {errors[field] && (
                 <span className="mt-1 block text-xs text-red-300">
                   {errors[field].message}
                 </span>
               )}
-            </label>
+              {field === 'newPassword' && (
+                <div
+                  className="mt-3 grid gap-2"
+                  aria-label="Password requirements"
+                >
+                  {passwordRequirements.map((requirement) => (
+                    <div
+                      key={requirement.label}
+                      className={
+                        'flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors ' +
+                        (requirement.met
+                          ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                          : 'border-white/10 bg-white/[0.03] text-slate-500')
+                      }
+                    >
+                      <span
+                        className={
+                          'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ' +
+                          (requirement.met
+                            ? 'border-emerald-400 bg-emerald-400 text-slate-950'
+                            : 'border-slate-600')
+                        }
+                        aria-hidden="true"
+                      >
+                        <Check size={11} strokeWidth={3} />
+                      </span>
+                      {requirement.label}
+                      <span className="sr-only">
+                        {requirement.met
+                          ? ' requirement met'
+                          : ' requirement not met'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )
         )}
         <button

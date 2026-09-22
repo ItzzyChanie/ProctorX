@@ -1,4 +1,4 @@
-export type StudentName = {
+export type AccountName = {
   firstName: string;
   middleName?: string | null;
   lastName: string;
@@ -14,13 +14,13 @@ function initial(value: string, fieldName: string): string {
 
 /** Uses first + optional middle + last initials; missing middle names are omitted. */
 export function generateDefaultPassword(
-  { firstName, middleName, lastName }: StudentName,
-  year = new Date().getFullYear(),
+  { firstName, middleName, lastName }: AccountName,
+  suffix: string | number,
 ): string {
   const initials = [
     initial(firstName, "First name"),
     ...(middleName?.trim() ? [initial(middleName, "Middle name")] : []),
     initial(lastName, "Last name"),
   ].join("");
-  return `${initials[0]!.toLocaleUpperCase()}${initials.slice(1).toLocaleLowerCase()}@${year}`;
+  return `${initials[0]!.toLocaleUpperCase()}${initials.slice(1).toLocaleLowerCase()}@${suffix}`;
 }

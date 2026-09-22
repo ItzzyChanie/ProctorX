@@ -209,7 +209,7 @@ export default function AcademicSemesters() {
             />
             <p className="text-sm text-text-2">
               {confirm.action === 'close'
-                ? 'Historical data will remain read-only. All active assessments must be stopped and a Final-term assessment must exist.'
+                ? 'Historical data will remain read-only. All active assessments must be stopped and a published or archived Final-term assessment must exist.'
                 : 'The semester will accept new assessments again. No other semester may be active.'}
             </p>
             <div className="mt-5 flex justify-end gap-2">

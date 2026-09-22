@@ -152,7 +152,8 @@ export default function Analytics() {
               }
               className="rounded border border-border p-2"
             >
-              <option value="">All academic semesters</option>
+              <option value="">Active semester</option>
+              <option value="ALL">All academic semesters</option>
               {data?.academicPeriods.map((x) => (
                 <option key={x.id} value={x.id}>
                   {x.academicYear} ·{' '}

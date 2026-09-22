@@ -502,7 +502,7 @@ model Exam {
   questions          Question[]
   sessions           ExamSession[]
   studentOverrides   ExamStudentOverride[]
-  questionBankCopies QuestionBankItem[]       @relation("QuestionBankSourceExam")
+  questionBankCopies QuestionBankItem[]    @relation("QuestionBankSourceExam")
 
   @@unique([versionGroupId, version])
   @@index([subjectId])

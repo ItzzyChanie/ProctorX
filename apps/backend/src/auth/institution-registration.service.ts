@@ -160,6 +160,7 @@ export class InstitutionRegistrationService {
               employeeId,
               college: application.collegeDepartmentName,
               title: application.officialTitle,
+              institutionName: application.institutionName,
             },
           },
         },

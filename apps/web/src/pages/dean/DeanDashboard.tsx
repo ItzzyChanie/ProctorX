@@ -228,7 +228,8 @@ export default function DeanDashboard() {
                   }))
                 }
               >
-                <option value="">All semesters</option>
+                <option value="">Active semester</option>
+                <option value="ALL">All semesters</option>
                 {data?.academicPeriods.map((x) => (
                   <option key={x.id} value={x.id}>
                     {x.academicYear} ·{' '}

@@ -8,7 +8,10 @@ import { api } from "../lib/api";
 import { useAuthStore } from "../store/authStore";
 import { Role, type LoginResponse } from "../types";
 import { useQueryClient } from "@tanstack/react-query";
-type PendingActivationResponse = { activationRequired: true };
+type PendingActivationResponse = {
+  activationRequired: true;
+  resendAvailableAt: string;
+};
 const schema = z.object({
   loginId: z.string().trim().min(1, "Enter your ID or institutional email.").max(320),
   password: z.string().min(1, "Enter your password."),
@@ -30,8 +33,14 @@ export function SignInModal({
   const queryClient = useQueryClient();
   const dialog = useRef<HTMLDivElement>(null);
   const [error, setError] = useState("");
-  const [activation, setActivation] = useState<{ loginId: string } | null>(null);
+  const [activation, setActivation] = useState<{
+    loginId: string;
+    resendAvailableAt: string;
+  } | null>(null);
   const [otp, setOtp] = useState("");
+  const [notice, setNotice] = useState("");
+  const [resending, setResending] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const [showPassword, setShowPassword] = useState(false);
   const { setAuth } = useAuthStore();
   const {
@@ -46,16 +55,33 @@ export function SignInModal({
     dialog.current?.focus();
     return () => window.removeEventListener("keydown", close);
   }, [open, onClose]);
+  useEffect(() => {
+    if (!open || !activation) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [open, activation]);
 
   if (!open) return null;
+  const resendSeconds = activation
+    ? Math.max(
+        0,
+        Math.ceil((Date.parse(activation.resendAvailableAt) - now) / 1000),
+      )
+    : 0;
 
   const submit = async (values: z.infer<typeof schema>) => {
     setError("");
+    setNotice("");
 
     try {
       const { data } = await api.post<LoginResponse | PendingActivationResponse>("/auth/login", values);
       if ("activationRequired" in data) {
-        setActivation({ loginId: values.loginId });
+        setActivation({
+          loginId: values.loginId,
+          resendAvailableAt: data.resendAvailableAt,
+        });
+        setNotice("An activation code was sent to your registered email.");
         return;
       }
       queryClient.clear();
@@ -77,7 +103,7 @@ export function SignInModal({
   };
 
   const verifyActivation = async (event: React.FormEvent) => {
-    event.preventDefault(); setError("");
+    event.preventDefault(); setError(""); setNotice("");
     const parsed = otpSchema.safeParse({ loginId: activation?.loginId, code: otp });
 
     if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? "Enter a valid activation code."); return; }
@@ -87,6 +113,35 @@ export function SignInModal({
       queryClient.clear(); setAuth(data.user); onClose(); navigate("/change-password");
     }
     catch { setError("The activation code is invalid or expired."); }
+  };
+  const resendActivation = async () => {
+    if (!activation || resendSeconds > 0 || resending) return;
+    setError("");
+    setNotice("");
+    setResending(true);
+    try {
+      const { data } = await api.post<{
+        resent: boolean;
+        resendAvailableAt: string;
+      }>("/auth/resend-activation", { loginId: activation.loginId });
+      setActivation({
+        ...activation,
+        resendAvailableAt: data.resendAvailableAt,
+      });
+      setOtp("");
+      setNotice(
+        data.resent
+          ? "A new activation code was sent to your registered email."
+          : "Please wait before requesting another activation code.",
+      );
+    } catch (requestError: any) {
+      setError(
+        requestError?.response?.data?.message ??
+          "We could not resend the activation code. Please try again.",
+      );
+    } finally {
+      setResending(false);
+    }
   };
   return (
     <div
@@ -126,9 +181,22 @@ export function SignInModal({
         {activation ? <form className="mt-7 space-y-4" onSubmit={verifyActivation}>
           <p className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">Enter the 6-digit activation code sent to your registered email address.</p>
           <label className="block text-sm font-medium text-slate-700">Activation code<input required inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ""))} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-950 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" /></label>
+          {notice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{notice}</p>}
           {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
           <button className="w-full rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 py-3 font-semibold text-white hover:from-blue-700 hover:to-sky-600">Verify and continue</button>
-          <button type="button" className="w-full text-sm text-blue-600" onClick={() => { setActivation(null); setOtp(""); }}>Back to sign in</button>
+          <button
+            type="button"
+            disabled={resendSeconds > 0 || resending}
+            className="w-full text-sm text-blue-600 disabled:cursor-not-allowed disabled:text-slate-400"
+            onClick={() => void resendActivation()}
+          >
+            {resending
+              ? "Sending new code..."
+              : resendSeconds > 0
+                ? `Resend code in ${resendSeconds}s`
+                : "Resend activation code"}
+          </button>
+          <button type="button" className="w-full text-sm text-blue-600" onClick={() => { setActivation(null); setOtp(""); setNotice(""); setError(""); }}>Back to sign in</button>
         </form> : <form className="mt-7 space-y-4" onSubmit={handleSubmit(submit)}>
           <label className="block text-sm font-medium text-slate-700">
             Student ID, Employee ID, or institutional email

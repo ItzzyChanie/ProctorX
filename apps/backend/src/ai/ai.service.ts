@@ -180,7 +180,8 @@ export class AiService {
         }
       );
       return data;
-    } catch (error) {
+    } 
+    catch (error) {
       if (axios.isAxiosError(error) && error.response?.data?.detail) {
         throw new HttpException(
           String(error.response.data.detail),

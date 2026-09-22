@@ -1,9 +1,7 @@
-import { Lock, Shield, Users } from 'lucide-react';
+import { Cookie, ScrollText, ShieldCheck } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { KPI } from '../../components/ui/KPI';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '../../lib/api';
 
 const rbac = [
   { role: 'Student', perms: 'View own sessions, join rooms' },
@@ -13,20 +11,11 @@ const rbac = [
   },
   {
     role: 'Dean',
-    perms: 'Full analytics, account management, security settings',
+    perms: 'Named analytics, academic period, faculty, student, report, and audit capabilities',
   },
 ];
 
 export default function Security() {
-  const { data } = useQuery({
-    queryKey: ['dean-security-summary'],
-    queryFn: async () =>
-      (
-        await api.get<{
-          kpis: { monitoredSessionsThisTerm: number };
-        }>('/dean/dashboard')
-      ).data,
-  });
   return (
     <DashboardLayout role="dean" pageTitle="Security & Access">
       <div className="flex flex-col gap-5">
@@ -35,23 +24,24 @@ export default function Security() {
           style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}
         >
           <KPI
-            label="Encryption at rest"
-            value="AES-256"
+            label="Session authentication"
+            value="HTTP-only cookie"
             mono={false}
-            icon={Shield}
+            icon={Cookie}
             accent={0}
           />
           <KPI
-            label="Data in transit"
-            value="TLS 1.3"
+            label="Authorization"
+            value="Role + capability"
             mono={false}
-            icon={Lock}
+            icon={ShieldCheck}
             accent={2}
           />
           <KPI
-            label="Monitored sessions"
-            value={data?.kpis.monitoredSessionsThisTerm ?? 0}
-            icon={Users}
+            label="Audit history"
+            value="Append-only"
+            mono={false}
+            icon={ScrollText}
             accent={1}
           />
         </div>

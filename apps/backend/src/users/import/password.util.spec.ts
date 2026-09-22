@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { generateDefaultPassword } from "./password.util";
 
-test("creates the documented password for a full name", () => {
+test("creates the faculty password with the fixed 123 suffix", () => {
+  assert.equal(
+    generateDefaultPassword(
+      { firstName: "Jefferson", middleName: "Bernante", lastName: "Palceso" },
+      123,
+    ),
+    "Jbp@123",
+  );
+});
+
+test("creates the student password with the current-year suffix", () => {
   assert.equal(
     generateDefaultPassword(
       { firstName: "Jefferson", middleName: "Bernante", lastName: "Palceso" },
