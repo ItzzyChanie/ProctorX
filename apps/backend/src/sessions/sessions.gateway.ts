@@ -1,195 +1,412 @@
+import { JwtService } from '@nestjs/jwt';
 import {
   ConnectedSocket,
   MessageBody,
+  OnGatewayDisconnect,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
+import { Role, SessionStatus } from '@prisma/client';
 import { Server, Socket } from 'socket.io';
+import {
+  authenticateSocket,
+  hasPermission,
+  SocketUser,
+} from '../common/socket-auth';
+import { PrismaService } from '../prisma/prisma.service';
 
-@WebSocketGateway({
-  cors: {
-    origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
-    credentials: true,
-  },
-})
-export class SessionsGateway {
+/*
+ * Room layout (all state lives in rooms + socket.data so it survives the
+ * Redis adapter / multiple backend instances):
+ *   monitor:<examId>        teachers monitoring an exam (receive monitor:*)
+ *   exam-students:<examId>  student sockets taking an exam
+ *   student:<sessionId>     the student socket(s) of one attempt
+ *   watch:<sessionId>       teacher sockets viewing that student's screen
+ *   fallback:<sessionId>    viewers whose WebRTC failed and need image frames
+ */
+const rooms = {
+  monitor: (examId: string) => `monitor:${examId}`,
+  examStudents: (examId: string) => `exam-students:${examId}`,
+  student: (sessionId: string) => `student:${sessionId}`,
+  watch: (sessionId: string) => `watch:${sessionId}`,
+  fallback: (sessionId: string) => `fallback:${sessionId}`,
+};
+
+type StudentData = {
+  user?: SocketUser;
+  sessionId?: string;
+  examId?: string;
+  connectedAt?: number;
+  lastActivityAt?: number;
+  lastFrameAt?: number;
+  screenSharing?: boolean;
+};
+type TeacherData = {
+  user?: SocketUser;
+  monitorExamId?: string;
+  watching?: string[];
+};
+type Quality = 'off' | 'thumb' | 'focus';
+
+const MAX_FRAME_BYTES = 512 * 1024;
+const MIN_FRAME_INTERVAL_MS = 400;
+
+@WebSocketGateway()
+export class SessionsGateway implements OnGatewayDisconnect {
   @WebSocketServer() server!: Server;
-  private watchers = new Map<string, string>();
-  private students = new Map<
-    string,
-    {
-      sessionId: string;
-      examId?: string;
-      connectedAt: Date;
-      lastActivityAt: Date;
-    }
-  >();
   private readonly activityTimeoutMs = 20_000;
 
-  @SubscribeMessage('monitor:join') monitor(
-    @ConnectedSocket() c: Socket,
-    @MessageBody() b: { examId: string }
-  ) {
-    c.join(`exam:${b.examId}`);
+  constructor(
+    private jwt: JwtService,
+    private prisma: PrismaService
+  ) {}
+
+  private auth(c: Socket) {
+    return authenticateSocket(c, this.jwt, this.prisma);
   }
 
-  @SubscribeMessage('student:join') student(
+  private async teacher(c: Socket) {
+    const user = await this.auth(c);
+    if (
+      !user ||
+      user.role !== Role.TEACHER ||
+      !(await hasPermission(this.prisma, user, 'VIEW_OWN_CLASS_SESSIONS'))
+    )
+      return null;
+    return user;
+  }
+
+  /** The teacher must be monitoring the exam this attempt belongs to. */
+  private canControl(c: Socket, sessionId: unknown) {
+    return typeof sessionId === 'string' && c.rooms.has(rooms.watch(sessionId));
+  }
+
+  private touch(c: Socket) {
+    (c.data as StudentData).lastActivityAt = Date.now();
+  }
+
+  // ---------------------------------------------------------------- teacher
+
+  @SubscribeMessage('monitor:join') async monitor(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sessionId: string; examId?: string }
+    @MessageBody() b: { examId?: string }
   ) {
-    const existing = this.students.get(c.id);
-    this.students.set(c.id, {
-      ...b,
-      connectedAt:
-        existing?.sessionId === b.sessionId ? existing.connectedAt : new Date(),
-      lastActivityAt: new Date(),
+    const user = await this.teacher(c);
+    if (!user || typeof b?.examId !== 'string') return { ok: false };
+    const exam = await this.prisma.exam.findFirst({
+      where: { id: b.examId, subject: { teacherId: user.id } },
+      select: { id: true },
     });
-
-    c.join(`student:${b.sessionId}`);
-    if (b.examId) {
-      c.join(`exam:${b.examId}`);
-      this.emitMonitor(b.examId, 'monitor:session-start', {
-        sessionId: b.sessionId,
-      });
-    }
-    if (this.watchers.has(b.sessionId))
-      this.server.to(`student:${b.sessionId}`).emit('webrtc:request');
+    if (!exam) return { ok: false };
+    const data = c.data as TeacherData;
+    if (data.monitorExamId && data.monitorExamId !== exam.id)
+      await this.unwatchAll(c);
+    data.monitorExamId = exam.id;
+    await c.join(rooms.monitor(exam.id));
+    return { ok: true };
   }
 
-  // SDP/ICE stays between the selected student and one watching teacher.
-  @SubscribeMessage('webrtc:watch') watch(
+  @SubscribeMessage('webrtc:watch') async watch(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sessionId: string }
+    @MessageBody() b: { sessionId?: string }
   ) {
-    this.watchers.set(b.sessionId, c.id);
-    this.server.to(`student:${b.sessionId}`).emit('webrtc:request');
+    const user = await this.teacher(c);
+    const data = c.data as TeacherData;
+    if (!user || !data.monitorExamId || typeof b?.sessionId !== 'string')
+      return { ok: false };
+    const session = await this.prisma.examSession.findFirst({
+      where: {
+        id: b.sessionId,
+        examId: data.monitorExamId,
+        exam: { subject: { teacherId: user.id } },
+      },
+      select: { id: true },
+    });
+    if (!session) return { ok: false };
+    await c.join(rooms.watch(session.id));
+    data.watching = [...new Set([...(data.watching ?? []), session.id])];
+    // Each viewer gets its own peer connection on the student side, so any
+    // number of tabs / co-proctors can watch the same screen.
+    this.server
+      .to(rooms.student(session.id))
+      .emit('webrtc:request', { viewerId: c.id });
+    return { ok: true };
+  }
+
+  @SubscribeMessage('webrtc:unwatch') async unwatch(
+    @ConnectedSocket() c: Socket,
+    @MessageBody() b: { sessionId?: string }
+  ) {
+    if (!this.canControl(c, b?.sessionId)) return { ok: false };
+    await this.stopWatching(c.id, b.sessionId!, c);
+    return { ok: true };
+  }
+
+  @SubscribeMessage('webrtc:quality') quality(
+    @ConnectedSocket() c: Socket,
+    @MessageBody() b: { sessionId?: string; quality?: Quality }
+  ) {
+    if (
+      !this.canControl(c, b?.sessionId) ||
+      !['off', 'thumb', 'focus'].includes(b.quality as string)
+    )
+      return;
+    this.server
+      .to(rooms.student(b.sessionId!))
+      .emit('webrtc:quality', { viewerId: c.id, quality: b.quality });
+  }
+
+  @SubscribeMessage('screen:fallback') async fallback(
+    @ConnectedSocket() c: Socket,
+    @MessageBody() b: { sessionId?: string; enabled?: boolean }
+  ) {
+    if (!this.canControl(c, b?.sessionId)) return;
+    if (b.enabled) await c.join(rooms.fallback(b.sessionId!));
+    else await c.leave(rooms.fallback(b.sessionId!));
+    await this.syncFallback(b.sessionId!);
+  }
+
+  // ---------------------------------------------------------------- student
+
+  @SubscribeMessage('student:join') async student(
+    @ConnectedSocket() c: Socket,
+    @MessageBody() b: { sessionId?: string }
+  ) {
+    const user = await this.auth(c);
+    if (!user || user.role !== Role.STUDENT || typeof b?.sessionId !== 'string')
+      return { ok: false };
+    // Never trust the client for ownership or the exam id.
+    const session = await this.prisma.examSession.findFirst({
+      where: {
+        id: b.sessionId,
+        studentId: user.id,
+        status: { in: [SessionStatus.IN_PROGRESS, SessionStatus.DISCONNECTED] },
+      },
+      select: { id: true, examId: true },
+    });
+    if (!session) return { ok: false };
+    const wasConnected = await this.isStudentConnected(session.id);
+    const data = c.data as StudentData;
+    const now = Date.now();
+    if (data.sessionId !== session.id) data.connectedAt = now;
+    data.sessionId = session.id;
+    data.examId = session.examId;
+    data.lastActivityAt = now;
+    await c.join([
+      rooms.student(session.id),
+      rooms.examStudents(session.examId),
+    ]);
+    if (!wasConnected)
+      this.emitMonitor(session.examId, 'monitor:session-start', {
+        sessionId: session.id,
+      });
+    // Re-offer the screen to every teacher already watching this attempt.
+    const viewers = await this.server
+      .in(rooms.watch(session.id))
+      .fetchSockets();
+    viewers.forEach((viewer) =>
+      c.emit('webrtc:request', { viewerId: viewer.id })
+    );
+    await this.syncFallback(session.id);
+    return { ok: true };
+  }
+
+  @SubscribeMessage('student:heartbeat') heartbeat(
+    @ConnectedSocket() c: Socket
+  ) {
+    if ((c.data as StudentData).sessionId) this.touch(c);
+  }
+
+  @SubscribeMessage('screen:state') async screenState(
+    @ConnectedSocket() c: Socket,
+    @MessageBody() b: { sharing?: boolean }
+  ) {
+    const data = c.data as StudentData;
+    if (!data.sessionId || !data.examId) return;
+    data.screenSharing = Boolean(b?.sharing);
+    this.touch(c);
+    this.emitMonitor(data.examId, 'monitor:screen-state', {
+      sessionId: data.sessionId,
+      sharing: data.screenSharing,
+    });
   }
 
   @SubscribeMessage('webrtc:ready') ready(
-    @MessageBody() b: { sessionId: string }
-  ) {
-    const watcher = this.watchers.get(b.sessionId);
-    if (watcher)
-      this.server.to(watcher).emit('webrtc:ready', { sessionId: b.sessionId });
-  }
-
-  @SubscribeMessage('webrtc:stop') stop(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sessionId: string }
+    @MessageBody() b: { viewerId?: string }
   ) {
-    if (this.watchers.get(b.sessionId) === c.id)
-      this.watchers.delete(b.sessionId);
-    this.server.to(`student:${b.sessionId}`).emit('webrtc:stop');
+    const { sessionId } = c.data as StudentData;
+    if (!sessionId || typeof b?.viewerId !== 'string') return;
+    this.server.to(b.viewerId).emit('webrtc:ready', { sessionId });
   }
 
   @SubscribeMessage('webrtc:signal') signal(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sessionId: string; signal: unknown }
+    @MessageBody() b: { sessionId?: string; viewerId?: string; signal: unknown }
   ) {
-    if (c.rooms.has(`student:${b.sessionId}`)) {
-      const watcher = this.watchers.get(b.sessionId);
-      if (watcher)
+    const { sessionId } = c.data as StudentData;
+    if (sessionId) {
+      // Student -> one specific viewer. The sessionId comes from the
+      // authenticated socket, so a student can only speak for itself.
+      if (typeof b?.viewerId === 'string')
         this.server
-          .to(watcher)
-          .emit('webrtc:signal', { sessionId: b.sessionId, signal: b.signal });
+          .to(b.viewerId)
+          .emit('webrtc:signal', { sessionId, signal: b.signal });
       return;
     }
-    c.to(`student:${b.sessionId}`).emit('webrtc:signal', b.signal);
+    if (!this.canControl(c, b?.sessionId)) return;
+    this.server
+      .to(rooms.student(b.sessionId!))
+      .emit('webrtc:signal', { viewerId: c.id, signal: b.signal });
   }
 
   @SubscribeMessage('screen:frame') frame(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sessionId: string; frame: Buffer; mimeType?: string }
+    @MessageBody() b: { frame?: Buffer | ArrayBuffer; mimeType?: string }
   ) {
-    if (!c.rooms.has(`student:${b.sessionId}`)) return;
-    const student = this.students.get(c.id);
-    if (student?.sessionId === b.sessionId) student.lastActivityAt = new Date();
-    const watcher = this.watchers.get(b.sessionId);
-    if (watcher)
-      this.server.to(watcher).emit('screen:frame', {
-        sessionId: b.sessionId,
+    const data = c.data as StudentData;
+    if (!data.sessionId || !b?.frame) return;
+    this.touch(c);
+    const size =
+      b.frame instanceof ArrayBuffer ? b.frame.byteLength : b.frame.length;
+    const now = Date.now();
+    if (
+      size > MAX_FRAME_BYTES ||
+      now - (data.lastFrameAt ?? 0) < MIN_FRAME_INTERVAL_MS
+    )
+      return;
+    data.lastFrameAt = now;
+    this.server
+      .to(rooms.fallback(data.sessionId))
+      .volatile.emit('screen:frame', {
+        sessionId: data.sessionId,
         frame: b.frame,
-        mimeType: b.mimeType,
+        mimeType:
+          b.mimeType === 'image/jpeg' || b.mimeType === 'image/png'
+            ? b.mimeType
+            : 'image/webp',
       });
   }
 
-  handleDisconnect(c: Socket) {
-    for (const [sessionId, watcher] of this.watchers)
-      if (watcher === c.id) this.watchers.delete(sessionId);
-    const student = this.students.get(c.id);
-    this.students.delete(c.id);
+  // -------------------------------------------------------------- lifecycle
 
-    if (student?.examId && !this.isStudentConnected(student.sessionId))
-      this.emitMonitor(student.examId, 'monitor:session-end', {
-        sessionId: student.sessionId,
+  async handleDisconnect(c: Socket) {
+    const data = c.data as StudentData & TeacherData;
+    // socket.io empties c.rooms before 'disconnect', hence socket.data.
+    for (const sessionId of data.watching ?? [])
+      await this.stopWatching(c.id, sessionId);
+    if (
+      data.sessionId &&
+      data.examId &&
+      !(await this.isStudentConnected(data.sessionId))
+    )
+      this.emitMonitor(data.examId, 'monitor:session-end', {
+        sessionId: data.sessionId,
       });
   }
 
-  isStudentConnected(sessionId: string) {
+  private async unwatchAll(c: Socket) {
+    const data = c.data as TeacherData;
+    for (const sessionId of data.watching ?? [])
+      await this.stopWatching(c.id, sessionId, c);
+  }
+
+  private async stopWatching(viewerId: string, sessionId: string, c?: Socket) {
+    if (c) {
+      await c.leave(rooms.watch(sessionId));
+      await c.leave(rooms.fallback(sessionId));
+      const data = c.data as TeacherData;
+      data.watching = (data.watching ?? []).filter((id) => id !== sessionId);
+    }
+    this.server.to(rooms.student(sessionId)).emit('webrtc:stop', { viewerId });
+    await this.syncFallback(sessionId);
+  }
+
+  /** Students only encode image frames while some viewer actually needs them. */
+  private async syncFallback(sessionId: string) {
+    const viewers = await this.server
+      .in(rooms.fallback(sessionId))
+      .fetchSockets();
+    this.server
+      .to(rooms.student(sessionId))
+      .emit('screen:fallback', { enabled: viewers.length > 0 });
+  }
+
+  private async studentSockets(room: string) {
+    const sockets = await this.server.in(room).fetchSockets();
+    return sockets.map((socket) => socket.data as StudentData);
+  }
+
+  private isActive(data: StudentData, activeAfter: number) {
+    return (data.lastActivityAt ?? 0) >= activeAfter;
+  }
+
+  async isStudentConnected(sessionId: string) {
     const activeAfter = Date.now() - this.activityTimeoutMs;
-    return [...this.students.values()].some(
-      (student) =>
-        student.sessionId === sessionId &&
-        student.lastActivityAt.getTime() >= activeAfter
+    return (await this.studentSockets(rooms.student(sessionId))).some((data) =>
+      this.isActive(data, activeAfter)
     );
   }
 
-  activeSessionIds(examId: string) {
+  async activeSessionIds(examId: string) {
+    return new Set((await this.studentStates(examId)).keys());
+  }
+
+  /** Live connection + screen-share state for every active attempt. */
+  async studentStates(examId: string) {
     const activeAfter = Date.now() - this.activityTimeoutMs;
-    return new Set(
-      [...this.students.values()]
-        .filter(
-          (student) =>
-            student.examId === examId &&
-            student.lastActivityAt.getTime() >= activeAfter
-        )
-        .map((student) => student.sessionId)
-    );
+    const states = new Map<string, { screenSharing: boolean }>();
+    for (const data of await this.studentSockets(rooms.examStudents(examId))) {
+      if (!data.sessionId || !this.isActive(data, activeAfter)) continue;
+      const sharing =
+        Boolean(data.screenSharing) ||
+        Boolean(states.get(data.sessionId)?.screenSharing);
+      states.set(data.sessionId, { screenSharing: sharing });
+    }
+    return states;
   }
 
-  connectedAt(sessionId: string) {
-    const connections = [...this.students.values()].filter(
-      (student) => student.sessionId === sessionId
-    );
-    if (!connections.length) return undefined;
-    return new Date(
-      Math.min(...connections.map((student) => student.connectedAt.getTime()))
-    );
+  async connectedAt(sessionId: string) {
+    const times = (await this.studentSockets(rooms.student(sessionId)))
+      .map((data) => data.connectedAt)
+      .filter((time): time is number => typeof time === 'number');
+    return times.length ? new Date(Math.min(...times)) : undefined;
   }
 
-  clearExam(examId: string) {
+  async clearExam(examId: string) {
     const sessionIds = new Set(
-      [...this.students.values()]
-        .filter((student) => student.examId === examId)
-        .map((student) => student.sessionId)
+      (await this.studentSockets(rooms.examStudents(examId)))
+        .map((data) => data.sessionId)
+        .filter((id): id is string => Boolean(id))
     );
-
-    for (const [socketId, student] of this.students)
-      if (student.examId === examId) this.students.delete(socketId);
-
     for (const sessionId of sessionIds) {
-      this.watchers.delete(sessionId);
       this.server
-        .to(`student:${sessionId}`)
+        .to(rooms.student(sessionId))
         .emit('student:exam-ended', { message: 'This assessment has ended.' });
+      this.server
+        .in(rooms.student(sessionId))
+        .socketsLeave([rooms.student(sessionId), rooms.examStudents(examId)]);
+      this.server
+        .in(rooms.watch(sessionId))
+        .socketsLeave([rooms.watch(sessionId), rooms.fallback(sessionId)]);
       this.emitMonitor(examId, 'monitor:session-end', { sessionId });
     }
   }
 
   emitMonitor(examId: string, event: string, payload: unknown) {
-    this.server.to(`exam:${examId}`).emit(event, payload);
+    this.server.to(rooms.monitor(examId)).emit(event, payload);
   }
 
   warn(
     sessionId: string,
     warning: { id: string; message: string; sentAt: Date }
   ) {
-    this.server.to(`student:${sessionId}`).emit('student:warn', warning);
+    this.server.to(rooms.student(sessionId)).emit('student:warn', warning);
   }
 
   lock(sessionId: string, locked: boolean) {
-    this.server.to(`student:${sessionId}`).emit('student:lock', { locked });
+    this.server.to(rooms.student(sessionId)).emit('student:lock', { locked });
   }
 
   timeAdjusted(
@@ -200,7 +417,7 @@ export class SessionsGateway {
   ) {
     const payload = { sessionId, remainingSeconds, extraTimeSeconds };
     this.server
-      .to(`student:${sessionId}`)
+      .to(rooms.student(sessionId))
       .emit('student:time-adjusted', payload);
     this.emitMonitor(examId, 'monitor:time-adjusted', payload);
   }
@@ -214,7 +431,7 @@ export class SessionsGateway {
   }
 
   resume(sessionId: string) {
-    this.server.to(`student:${sessionId}`).emit('student:resume', {
+    this.server.to(rooms.student(sessionId)).emit('student:resume', {
       sessionId,
     });
   }

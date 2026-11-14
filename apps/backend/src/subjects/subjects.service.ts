@@ -107,7 +107,7 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       }),
       this.prisma.notification.createMany({ data: notifications }),
     ]);
-    ids.forEach((id) => this.gateway.clearExam(id));
+    ids.forEach((id) => void this.gateway.clearExam(id));
   }
   private googleFormUrl(value: string) {
     let url: URL;
@@ -206,7 +206,7 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       where: { subjectId },
       select: { id: true },
     });
-    exams.forEach((exam) => this.gateway.clearExam(exam.id));
+    exams.forEach((exam) => void this.gateway.clearExam(exam.id));
     await this.prisma.subject.delete({ where: { id: subjectId } });
     await this.prisma.auditLog.create({
       data: {
@@ -1324,7 +1324,7 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
         });
       return saved;
     });
-    this.gateway.clearExam(examId);
+    void this.gateway.clearExam(examId);
     await this.prisma.auditLog.create({
       data: {
         actorId: teacherId,

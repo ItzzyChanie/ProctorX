@@ -97,6 +97,16 @@ const eventDetails: Record<
   },
   USB_EVENT: { label: 'USB activity', Icon: Usb, color: 'bg-cyan-500' },
   IDLE: { label: 'Idle activity', Icon: Clock3, color: 'bg-slate-500' },
+  SCREEN_SHARE_STOPPED: {
+    label: 'Screen sharing stopped',
+    Icon: MonitorOff,
+    color: 'bg-red-700',
+  },
+  MULTIPLE_DISPLAYS: {
+    label: 'Multiple displays connected',
+    Icon: MonitorOff,
+    color: 'bg-violet-600',
+  },
 };
 const detailsFor = (type: string) =>
   eventDetails[type] ?? {

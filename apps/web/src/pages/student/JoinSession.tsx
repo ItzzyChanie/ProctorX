@@ -11,6 +11,7 @@ import {
   Mic,
   Minus,
   Monitor,
+  MonitorOff,
   Plus,
   ShieldCheck,
   Sparkles,
@@ -21,6 +22,7 @@ import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { api } from '../../lib/api';
 import { socket } from '../../lib/socket';
+import { DEFAULT_RTC_CONFIG, getRtcConfig } from '../../lib/rtc';
 import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -47,8 +49,75 @@ type StudentSubject = {
     sessions: { endedAt: string }[];
   }[];
 };
-const rtcConfig: RTCConfiguration = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+type StreamQuality = 'off' | 'thumb' | 'focus';
+// Grid tiles are ~300px wide, so thumbnails are capped at 540p / 5 fps; only
+// the student the teacher has enlarged is sent at full quality.
+const QUALITY_PRESETS: Record<
+  StreamQuality,
+  {
+    active: boolean;
+    maxBitrate: number;
+    maxFramerate: number;
+    maxHeight: number;
+  }
+> = {
+  off: { active: false, maxBitrate: 100_000, maxFramerate: 1, maxHeight: 360 },
+  thumb: { active: true, maxBitrate: 250_000, maxFramerate: 5, maxHeight: 540 },
+  focus: {
+    active: true,
+    maxBitrate: 2_500_000,
+    maxFramerate: 15,
+    maxHeight: 0,
+  },
+};
+const applyStreamQuality = async (
+  connection: RTCPeerConnection,
+  quality: StreamQuality
+) => {
+  const sender = connection
+    .getSenders()
+    .find((candidate) => candidate.track?.kind === 'video');
+  if (!sender) return;
+  const parameters = sender.getParameters();
+  // Encodings only exist once negotiation is done; applied again afterwards.
+  if (!parameters.encodings?.length) return;
+  const preset = QUALITY_PRESETS[quality];
+  const height = sender.track?.getSettings().height ?? 0;
+  parameters.encodings[0] = {
+    ...parameters.encodings[0],
+    active: preset.active,
+    maxBitrate: preset.maxBitrate,
+    maxFramerate: preset.maxFramerate,
+    scaleResolutionDownBy:
+      preset.maxHeight && height > preset.maxHeight
+        ? height / preset.maxHeight
+        : 1,
+  };
+  await sender.setParameters(parameters).catch(() => undefined);
+};
+const captureEntireScreen = async () => {
+  const screen = await navigator.mediaDevices.getDisplayMedia({
+    video: {
+      displaySurface: 'monitor',
+      frameRate: { ideal: 15, max: 20 },
+    },
+    audio: false,
+    monitorTypeSurfaces: 'include',
+    preferCurrentTab: false,
+    selfBrowserSurface: 'exclude',
+    surfaceSwitching: 'exclude',
+  } as DisplayMediaStreamOptions);
+  const track = screen.getVideoTracks()[0];
+  if (track?.getSettings().displaySurface !== 'monitor') {
+    screen.getTracks().forEach((item) => item.stop());
+    throw new Error('The entire screen must be shared.');
+  }
+  // Screens are mostly text: keep resolution sharp, drop frames instead.
+  track.contentHint = 'detail';
+  await track
+    .applyConstraints({ frameRate: { ideal: 15, max: 20 } })
+    .catch(() => undefined);
+  return screen;
 };
 type DesktopLockdown = {
   startLockdown(policy: {
@@ -144,6 +213,10 @@ export default function JoinSession() {
   const [consent, setConsent] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [fullscreenLost, setFullscreenLost] = useState(false);
+  const [screenShareLost, setScreenShareLost] = useState(false);
+  const [multipleDisplays, setMultipleDisplays] = useState(false);
+  const [captureAttempt, setCaptureAttempt] = useState(0);
+  const restartScreenShare = useRef<(() => Promise<void>) | null>(null);
   const mySubjects = useQuery({
     queryKey: ['student-subjects'],
     queryFn: async () =>
@@ -190,7 +263,6 @@ export default function JoinSession() {
   const endingRecordingRef = useRef(false);
   const recordingUploads = useRef<Promise<unknown>>(Promise.resolve());
   const screenStream = useRef<MediaStream | null>(null);
-  const peer = useRef<RTCPeerConnection | null>(null);
   const cameraStream = useRef<MediaStream | null>(null);
   const microphoneStream = useRef<MediaStream | null>(null);
   const timers = useRef<number[]>([]);
@@ -279,47 +351,135 @@ export default function JoinSession() {
       postInBackground(`/sessions/${id}/events`, { type });
     let captureEvidence = (type: 'TAB_SWITCH' | 'FULLSCREEN_EXIT') =>
       send(type).then(() => undefined);
-    const pendingCandidates: RTCIceCandidateInit[] = [];
-    const closePeer = () => {
-      peer.current?.close();
-      peer.current = null;
-      pendingCandidates.splice(0);
+    let rtcConfig = DEFAULT_RTC_CONFIG;
+    void getRtcConfig().then((config) => {
+      rtcConfig = config;
+    });
+    // One peer connection per viewer, so several teachers / tabs can watch.
+    type Viewer = {
+      connection: RTCPeerConnection;
+      quality: StreamQuality;
+      pending: RTCIceCandidateInit[];
     };
-    const watch = () => {
+    const viewers = new Map<string, Viewer>();
+    const requestedViewers = new Set<string>();
+    let fallbackEnabled = false;
+    const closeViewer = (viewerId: string) => {
+      viewers.get(viewerId)?.connection.close();
+      viewers.delete(viewerId);
+    };
+    const createPeer = (viewerId: string) => {
       const stream = screenStream.current;
       if (!stream) return;
-      closePeer();
+      closeViewer(viewerId);
       const connection = new RTCPeerConnection(rtcConfig);
-      peer.current = connection;
-      stream.getTracks().forEach((track) => connection.addTrack(track, stream));
+      const viewer: Viewer = { connection, quality: 'thumb', pending: [] };
+      viewers.set(viewerId, viewer);
+      stream
+        .getVideoTracks()
+        .forEach((track) => connection.addTrack(track, stream));
       connection.onicecandidate = ({ candidate }) =>
         candidate &&
         socket.emit('webrtc:signal', {
-          sessionId: id,
+          viewerId,
           signal: { candidate: candidate.toJSON() },
         });
-      socket.emit('webrtc:ready', { sessionId: id });
+      connection.onconnectionstatechange = () => {
+        if (
+          connection.connectionState === 'failed' &&
+          viewers.get(viewerId) === viewer
+        )
+          closeViewer(viewerId);
+      };
+      socket.emit('webrtc:ready', { viewerId });
     };
-    const signal = async (incoming: Signal) => {
-      const connection = peer.current;
-      if (!connection) return;
-      if (incoming.description) {
-        await connection.setRemoteDescription(incoming.description);
-        while (pendingCandidates.length)
-          await connection.addIceCandidate(pendingCandidates.shift()!);
-        if (incoming.description.type === 'offer') {
-          await connection.setLocalDescription(await connection.createAnswer());
-          socket.emit('webrtc:signal', {
-            sessionId: id,
-            signal: { description: connection.localDescription },
-          });
+    const watch = ({ viewerId }: { viewerId?: string }) => {
+      if (!viewerId) return;
+      requestedViewers.add(viewerId);
+      // No-op while the screen picker is still open; replayed after capture.
+      createPeer(viewerId);
+    };
+    const stopViewer = ({ viewerId }: { viewerId?: string }) => {
+      if (!viewerId) return;
+      requestedViewers.delete(viewerId);
+      closeViewer(viewerId);
+    };
+    const setQuality = ({
+      viewerId,
+      quality,
+    }: {
+      viewerId?: string;
+      quality?: StreamQuality;
+    }) => {
+      const viewer = viewerId ? viewers.get(viewerId) : undefined;
+      if (!viewer || !quality || !(quality in QUALITY_PRESETS)) return;
+      viewer.quality = quality;
+      void applyStreamQuality(viewer.connection, quality);
+    };
+    const setFallback = ({ enabled }: { enabled?: boolean }) => {
+      fallbackEnabled = Boolean(enabled);
+    };
+    const signal = async ({
+      viewerId,
+      signal: incoming,
+    }: {
+      viewerId?: string;
+      signal: Signal;
+    }) => {
+      const viewer = viewerId ? viewers.get(viewerId) : undefined;
+      if (!viewer || !viewerId) return;
+      const { connection } = viewer;
+      try {
+        if (incoming.description) {
+          await connection.setRemoteDescription(incoming.description);
+          while (viewer.pending.length)
+            await connection.addIceCandidate(viewer.pending.shift()!);
+          if (incoming.description.type === 'offer') {
+            await connection.setLocalDescription(
+              await connection.createAnswer()
+            );
+            socket.emit('webrtc:signal', {
+              viewerId,
+              signal: { description: connection.localDescription },
+            });
+            await applyStreamQuality(connection, viewer.quality);
+          }
+        } else if (incoming.candidate) {
+          if (connection.remoteDescription)
+            await connection.addIceCandidate(incoming.candidate);
+          else viewer.pending.push(incoming.candidate);
         }
-      } else if (incoming.candidate) {
-        if (connection.remoteDescription)
-          await connection.addIceCandidate(incoming.candidate);
-        else pendingCandidates.push(incoming.candidate);
+      } catch {
+        // The teacher notices the failed peer and requests a new one.
+        if (viewers.get(viewerId) === viewer) closeViewer(viewerId);
       }
     };
+    const announceSharing = () =>
+      socket.emit('screen:state', {
+        sharing:
+          screenStream.current?.getVideoTracks()[0]?.readyState === 'live',
+      });
+    let displaysReported = false;
+    // Window Management API (Chromium): isExtended is true when more than one
+    // display is attached, which the single-monitor screen share cannot see.
+    const displayScreen = window.screen as Screen &
+      Partial<EventTarget> & { isExtended?: boolean };
+    const checkDisplays = () => {
+      const extended = Boolean(displayScreen.isExtended);
+      setMultipleDisplays(extended);
+      if (extended && !displaysReported && !suppressIncidentRef.current) {
+        displaysReported = true;
+        void send('MULTIPLE_DISPLAYS');
+      }
+      if (!extended) displaysReported = false;
+    };
+    checkDisplays();
+    displayScreen.addEventListener?.('change', checkDisplays);
+    timers.current.push(
+      window.setInterval(() => {
+        if (socket.connected) socket.emit('student:heartbeat');
+      }, 5000)
+    );
     let lastTabSwitchAt = 0;
     let monitoringArmed = false;
     const reportTabSwitch = () => {
@@ -358,7 +518,9 @@ export default function JoinSession() {
       void queryClient.invalidateQueries({ queryKey: ['student-subjects'] });
     };
     const joinStudentRoom = () =>
-      socket.emit('student:join', { sessionId: id, examId });
+      socket.emit('student:join', { sessionId: id, examId }, () =>
+        announceSharing()
+      );
     socket.on('connect', joinStudentRoom);
     socket.on('student:warn', warn);
     socket.on('student:lock', lock);
@@ -367,7 +529,9 @@ export default function JoinSession() {
     socket.on('student:exam-ended', examEnded);
     socket.on('webrtc:request', watch);
     socket.on('webrtc:signal', signal);
-    socket.on('webrtc:stop', closePeer);
+    socket.on('webrtc:stop', stopViewer);
+    socket.on('webrtc:quality', setQuality);
+    socket.on('screen:fallback', setFallback);
     socket.connect();
     if (socket.connected) joinStudentRoom();
     void (async () => {
@@ -378,36 +542,17 @@ export default function JoinSession() {
         if (!active) return;
         if (!document.fullscreenElement)
           await document.documentElement.requestFullscreen();
-        const screen = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            displaySurface: 'monitor',
-            frameRate: { ideal: 15, max: 20 },
-          },
-          audio: false,
-          monitorTypeSurfaces: 'include',
-          preferCurrentTab: false,
-          selfBrowserSurface: 'exclude',
-          surfaceSwitching: 'exclude',
-        } as DisplayMediaStreamOptions);
-        const displaySurface = screen
-          .getVideoTracks()[0]
-          ?.getSettings().displaySurface;
-        if (displaySurface !== 'monitor') {
-          screen.getTracks().forEach((track) => track.stop());
-          throw new Error('The entire screen must be shared.');
-        }
+        let screen = await captureEntireScreen();
         if (!active) {
           screen.getTracks().forEach((track) => track.stop());
           return;
         }
         screenStream.current = screen;
-        await screen
-          .getVideoTracks()[0]
-          ?.applyConstraints({ frameRate: { ideal: 15, max: 20 } })
-          .catch(() => undefined);
+        setScreenShareLost(false);
+        announceSharing();
         // A teacher can request the stream while the screen-picker is open.
         // Start signaling now that capture is actually available.
-        watch();
+        requestedViewers.forEach(createPeer);
         const screenVideo = document.createElement('video');
         screenVideo.srcObject = screen;
         screenVideo.muted = true;
@@ -419,6 +564,7 @@ export default function JoinSession() {
         let frameEncoding = false;
         const sendScreenFrame = () => {
           if (
+            !fallbackEnabled ||
             frameEncoding ||
             !active ||
             !socket.connected ||
@@ -441,7 +587,6 @@ export default function JoinSession() {
               try {
                 if (!blob || !active || !socket.connected) return;
                 socket.volatile.emit('screen:frame', {
-                  sessionId: id,
                   frame: await blob.arrayBuffer(),
                   mimeType: blob.type,
                 });
@@ -454,9 +599,9 @@ export default function JoinSession() {
           );
         };
         sendScreenFrame();
-        // WebRTC is the primary live feed. This low-rate image is only a resilient
-        // fallback when peer-to-peer video is unavailable.
-        timers.current.push(window.setInterval(sendScreenFrame, 500));
+        // WebRTC is the primary live feed. These low-rate images are only sent
+        // while the server reports a viewer whose peer connection failed.
+        timers.current.push(window.setInterval(sendScreenFrame, 1000));
         const preferredMimeType = [
           'video/webm;codecs=vp8,opus',
           'video/webm;codecs=vp8',
@@ -571,7 +716,7 @@ export default function JoinSession() {
               occurredAtMs <= +segment.endedAt
           );
           if (incidentIndex >= 0) {
-            const incident = completedSegments[incidentIndex];
+            const incident = completedSegments[incidentIndex]!;
             const previous = completedSegments[incidentIndex - 1] ?? null;
             const pending: PendingEvidence = {
               eventId: response.data.eventId,
@@ -591,16 +736,42 @@ export default function JoinSession() {
           });
         };
         recordSegment();
-        screen.getVideoTracks()[0]?.addEventListener(
-          'ended',
-          () => {
-            if (active)
-              setNotice(
-                'Screen sharing stopped, so screen recording has also stopped.'
-              );
-          },
-          { once: true }
-        );
+        const onScreenEnded = () => {
+          if (!active) return;
+          announceSharing();
+          setScreenShareLost(true);
+          if (!suppressIncidentRef.current) void send('SCREEN_SHARE_STOPPED');
+        };
+        screen
+          .getVideoTracks()[0]
+          ?.addEventListener('ended', onScreenEnded, { once: true });
+        restartScreenShare.current = async () => {
+          const next = await captureEntireScreen();
+          if (!active) {
+            next.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          screen.getTracks().forEach((track) => track.stop());
+          screen = next;
+          screenStream.current = next;
+          const track = next.getVideoTracks()[0];
+          // Swap the track in place: no renegotiation, teachers keep watching.
+          await Promise.all(
+            [...viewers.values()].map(async (viewer) => {
+              const sender = viewer.connection
+                .getSenders()
+                .find((candidate) => candidate.track?.kind === 'video');
+              await sender?.replaceTrack(track ?? null).catch(() => undefined);
+              await applyStreamQuality(viewer.connection, viewer.quality);
+            })
+          );
+          screenVideo.srcObject = next;
+          await screenVideo.play().catch(() => undefined);
+          track?.addEventListener('ended', onScreenEnded, { once: true });
+          announceSharing();
+          setScreenShareLost(false);
+          if (recorder.current?.state !== 'recording') recordSegment();
+        };
         if (exam.exam.requireCamera) {
           cameraStream.current = await navigator.mediaDevices.getUserMedia({
             video: { frameRate: { ideal: 15, max: 20 } },
@@ -692,10 +863,17 @@ export default function JoinSession() {
           timers.current.push(window.setInterval(sample, 4000));
         }
       } catch {
-        if (active)
-          setNotice(
-            'Required screen, camera, or microphone permission was not granted.'
-          );
+        if (!active) return;
+        setNotice(
+          'Required screen, camera, or microphone permission was not granted.'
+        );
+        if (!screenStream.current) {
+          // Without a screen share the attempt cannot be proctored: block the
+          // exam and let the student retry (re-runs this effect).
+          setScreenShareLost(true);
+          restartScreenShare.current = async () =>
+            setCaptureAttempt((attempt) => attempt + 1);
+        }
       }
     })();
     return () => {
@@ -710,11 +888,15 @@ export default function JoinSession() {
       socket.off('student:exam-ended', examEnded);
       socket.off('webrtc:request', watch);
       socket.off('webrtc:signal', signal);
-      socket.off('webrtc:stop', closePeer);
+      socket.off('webrtc:stop', stopViewer);
+      socket.off('webrtc:quality', setQuality);
+      socket.off('screen:fallback', setFallback);
+      displayScreen.removeEventListener?.('change', checkDisplays);
+      restartScreenShare.current = null;
       timers.current.forEach(window.clearInterval);
       timers.current = [];
       audioContext.current?.close();
-      closePeer();
+      [...viewers.keys()].forEach(closeViewer);
       if (recorder.current?.state !== 'inactive') recorder.current?.stop();
       [
         screenStream.current,
@@ -723,9 +905,10 @@ export default function JoinSession() {
       ].forEach((stream) =>
         stream?.getTracks().forEach((track) => track.stop())
       );
+      screenStream.current = null;
       socket.disconnect();
     };
-  }, [exam, submitted]);
+  }, [exam, submitted, captureAttempt]);
 
   useEffect(() => {
     if (!exam || submitted || !desktopLockdown) return;
@@ -1191,6 +1374,38 @@ export default function JoinSession() {
             {nativeBlocked
               ? 'Close prohibited applications to continue.'
               : 'Exam locked by teacher.'}
+          </div>
+        )}
+        {exam && !submitted && (screenShareLost || multipleDisplays) && (
+          <div className="fixed inset-0 z-[65] grid place-items-center bg-black/85 p-6 text-center text-white">
+            <div className="max-w-md">
+              <MonitorOff className="mx-auto mb-3" size={38} />
+              <h2 className="text-xl font-bold">
+                {screenShareLost
+                  ? 'Screen sharing is required'
+                  : 'Disconnect extra displays'}
+              </h2>
+              <p className="my-3 text-sm text-white/80">
+                {screenShareLost
+                  ? 'Your screen is not being shared and your teacher has been notified. Share your entire screen to continue.'
+                  : 'More than one display is connected. Only one screen can be monitored, so disconnect or turn off the other displays to continue. This was reported to your teacher.'}
+              </p>
+              {screenShareLost && (
+                <Button
+                  onClick={async () => {
+                    try {
+                      await restartScreenShare.current?.();
+                    } catch {
+                      setNotice(
+                        'You must share your entire screen to continue.'
+                      );
+                    }
+                  }}
+                >
+                  Share entire screen
+                </Button>
+              )}
+            </div>
           </div>
         )}
         {fullscreenLost && !submitted && (

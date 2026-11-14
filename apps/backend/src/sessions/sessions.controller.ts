@@ -58,6 +58,9 @@ export class SessionsController {
   ) {
     return this.s.preview(b.roomCode, r.user.id);
   }
+  @Get('rtc-config') rtcConfig(@Req() r: any) {
+    return this.s.rtcConfig(r.user.id);
+  }
   @Get('monitorable-exams') @Roles(Role.TEACHER)
   @RequirePermission('VIEW_OWN_CLASS_SESSIONS') monitorableExams(
     @Req() r: any

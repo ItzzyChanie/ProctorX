@@ -36,6 +36,7 @@ import { InstitutionRegistrationService } from "./institution-registration.servi
     InstitutionRegistrationService,
   ],
   exports: [
+    JwtModule,
     JwtAuthGuard,
     RolesGuard,
     PermissionsGuard,

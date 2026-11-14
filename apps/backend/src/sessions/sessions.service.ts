@@ -21,6 +21,7 @@ import {
   writeFile,
 } from 'fs/promises';
 import { spawn } from 'child_process';
+import { createHmac } from 'crypto';
 import ffmpegPath from 'ffmpeg-static';
 import { join } from 'path';
 import { AiService } from '../ai/ai.service';
@@ -303,6 +304,44 @@ export class SessionsService {
     );
   }
 
+  /**
+   * ICE servers for screen monitoring. Without TURN, students on school or
+   * carrier-grade NAT networks cannot open a peer-to-peer stream. With
+   * TURN_SECRET (coturn "use-auth-secret"), credentials are short-lived.
+   */
+  rtcConfig(userId: string) {
+    const list = (value?: string) =>
+      value
+        ?.split(',')
+        .map((url) => url.trim())
+        .filter(Boolean) ?? [];
+    const stun = list(process.env.STUN_URLS);
+    const turn = list(process.env.TURN_URLS);
+    const iceServers: {
+      urls: string[];
+      username?: string;
+      credential?: string;
+    }[] = [{ urls: stun.length ? stun : ['stun:stun.l.google.com:19302'] }];
+    if (turn.length) {
+      const secret = process.env.TURN_SECRET;
+      if (secret) {
+        const ttlSeconds = Number(process.env.TURN_TTL_SECONDS ?? 6 * 3600);
+        const username = `${Math.floor(Date.now() / 1000) + ttlSeconds}:${userId}`;
+        const credential = createHmac('sha1', secret)
+          .update(username)
+          .digest('base64');
+        iceServers.push({ urls: turn, username, credential });
+      } else if (process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
+        iceServers.push({
+          urls: turn,
+          username: process.env.TURN_USERNAME,
+          credential: process.env.TURN_CREDENTIAL,
+        });
+      }
+    }
+    return { iceServers };
+  }
+
   async monitorableExams(teacherId: string) {
     const exams = await this.prisma.exam.findMany({
       where: { subject: { teacherId } },
@@ -319,11 +358,15 @@ export class SessionsService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    return exams.map((exam) => ({
-      ...exam,
-      sessionCount: exam._count.sessions,
-      _count: { sessions: this.gateway.activeSessionIds(exam.id).size },
-    }));
+    return Promise.all(
+      exams.map(async (exam) => ({
+        ...exam,
+        sessionCount: exam._count.sessions,
+        _count: {
+          sessions: (await this.gateway.activeSessionIds(exam.id)).size,
+        },
+      }))
+    );
   }
 
   async event(
@@ -348,7 +391,7 @@ export class SessionsService {
     await this.prisma.incident.create({
       data: { sessionId, eventId: event.id },
     });
-    const connectedAt = this.gateway.connectedAt(sessionId);
+    const connectedAt = await this.gateway.connectedAt(sessionId);
     const all = await this.prisma.proctoringEvent.findMany({
       where: {
         sessionId,
@@ -614,7 +657,7 @@ export class SessionsService {
       where: { id: examId, subject: { teacherId } },
     });
     if (!exam) throw new ForbiddenException();
-    const activeIds = this.gateway.activeSessionIds(examId);
+    const states = await this.gateway.studentStates(examId);
     const sessions = await this.prisma.examSession.findMany({
       where: {
         examId,
@@ -634,7 +677,7 @@ export class SessionsService {
           },
         },
         scoreHistory: { orderBy: { computedAt: 'desc' }, take: 1 },
-        events: true,
+        _count: { select: { events: true } },
         raiseHandRequests: {
           where: { resolvedAt: null },
           orderBy: { raisedAt: 'desc' },
@@ -647,14 +690,27 @@ export class SessionsService {
       },
       orderBy: { startedAt: 'asc' },
     });
+    // Aggregate in the database instead of shipping every event row for every
+    // student on each refresh.
+    const tabSwitches = await this.prisma.proctoringEvent.groupBy({
+      by: ['sessionId'],
+      where: {
+        sessionId: { in: sessions.map((session) => session.id) },
+        type: { in: [EventType.TAB_SWITCH, EventType.FULLSCREEN_EXIT] },
+      },
+      _count: { _all: true },
+    });
+    const tabSwitchCount = new Map(
+      tabSwitches.map((row) => [row.sessionId, row._count._all])
+    );
     const now = Date.now();
-    return sessions.map((session) => ({
+    return sessions.map(({ _count, ...session }) => ({
       ...session,
-      connected: activeIds.has(session.id),
-      connectionStatus: activeIds.has(session.id)
-        ? 'CONNECTED'
-        : 'DISCONNECTED',
-      eventCount: session.events.length,
+      connected: states.has(session.id),
+      connectionStatus: states.has(session.id) ? 'CONNECTED' : 'DISCONNECTED',
+      screenSharing: states.get(session.id)?.screenSharing ?? false,
+      eventCount: _count.events,
+      tabSwitchCount: tabSwitchCount.get(session.id) ?? 0,
       raisedHand: Boolean(session.raiseHandRequests.length),
       remainingSeconds: Math.max(
         0,

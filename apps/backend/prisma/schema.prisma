@@ -132,6 +132,8 @@ enum EventType {
   BLACKLISTED_APP
   USB_EVENT
   IDLE
+  SCREEN_SHARE_STOPPED
+  MULTIPLE_DISPLAYS
 }
 
 enum RecordingStatus {

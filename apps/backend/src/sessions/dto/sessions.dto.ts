@@ -24,13 +24,17 @@ export class EventDto {
     'BLACKLISTED_APP',
     'USB_EVENT',
     'IDLE',
+    'SCREEN_SHARE_STOPPED',
+    'MULTIPLE_DISPLAYS',
   ])
   type!:
     | 'TAB_SWITCH'
     | 'FULLSCREEN_EXIT'
     | 'BLACKLISTED_APP'
     | 'USB_EVENT'
-    | 'IDLE';
+    | 'IDLE'
+    | 'SCREEN_SHARE_STOPPED'
+    | 'MULTIPLE_DISPLAYS';
   @IsOptional() @IsNumber() @Min(0) @Max(1) intensity?: number;
   @IsOptional() @IsObject() metadata?: Record<string, unknown>;
 }

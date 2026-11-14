@@ -1596,13 +1596,21 @@ export class PortalService {
     });
 
     const now = new Date();
+    const activeByExam = new Map(
+      await Promise.all(
+        [...new Set(sessions.map((s) => s.examId))].map(
+          async (examId) =>
+            [examId, await this.gateway.activeSessionIds(examId)] as const
+        )
+      )
+    );
     const active = sessions.filter(
         (s) =>
           s.status === SessionStatus.IN_PROGRESS &&
           s.exam.status === 'PUBLISHED' &&
           (!s.exam.scheduledAt || s.exam.scheduledAt <= now) &&
           (!s.exam.endsAt || s.exam.endsAt > now) &&
-          this.gateway.activeSessionIds(s.examId).has(s.id)
+          activeByExam.get(s.examId)?.has(s.id)
       ),
       latest = (s: (typeof sessions)[number]) => s.scoreHistory.at(-1),
       scores = sessions

@@ -62,7 +62,7 @@ export class MonitoringAnalysisService {
         emitted.push(event);
       }
     if (!emitted.length) return result;
-    const connectedAt = this.gateway.connectedAt(sessionId);
+    const connectedAt = await this.gateway.connectedAt(sessionId);
     const all = await this.prisma.proctoringEvent.findMany({
       where: {
         sessionId,

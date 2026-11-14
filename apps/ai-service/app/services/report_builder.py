@@ -19,6 +19,8 @@ EVENT_COLORS = {
     "BLACKLISTED_APP": "#ef4444",
     "USB_EVENT": "#06b6d4",
     "IDLE": "#64748b",
+    "SCREEN_SHARE_STOPPED": "#b91c1c",
+    "MULTIPLE_DISPLAYS": "#7c3aed",
 }
 
 
