@@ -41,6 +41,8 @@ type StudentData = {
   lastActivityAt?: number;
   lastFrameAt?: number;
   screenSharing?: boolean;
+  /** 'camera' when a phone/tablet streams its front camera instead of the screen. */
+  feedSource?: 'screen' | 'camera';
 };
 type TeacherData = {
   user?: SocketUser;
@@ -220,15 +222,17 @@ export class SessionsGateway implements OnGatewayDisconnect {
 
   @SubscribeMessage('screen:state') async screenState(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sharing?: boolean }
+    @MessageBody() b: { sharing?: boolean; source?: string }
   ) {
     const data = c.data as StudentData;
     if (!data.sessionId || !data.examId) return;
     data.screenSharing = Boolean(b?.sharing);
+    data.feedSource = b?.source === 'camera' ? 'camera' : 'screen';
     this.touch(c);
     this.emitMonitor(data.examId, 'monitor:screen-state', {
       sessionId: data.sessionId,
       sharing: data.screenSharing,
+      source: data.feedSource,
     });
   }
 
@@ -356,13 +360,22 @@ export class SessionsGateway implements OnGatewayDisconnect {
   /** Live connection + screen-share state for every active attempt. */
   async studentStates(examId: string) {
     const activeAfter = Date.now() - this.activityTimeoutMs;
-    const states = new Map<string, { screenSharing: boolean }>();
+    const states = new Map<
+      string,
+      { screenSharing: boolean; feedSource: 'screen' | 'camera' }
+    >();
     for (const data of await this.studentSockets(rooms.examStudents(examId))) {
       if (!data.sessionId || !this.isActive(data, activeAfter)) continue;
+      const previous = states.get(data.sessionId);
       const sharing =
-        Boolean(data.screenSharing) ||
-        Boolean(states.get(data.sessionId)?.screenSharing);
-      states.set(data.sessionId, { screenSharing: sharing });
+        Boolean(data.screenSharing) || Boolean(previous?.screenSharing);
+      states.set(data.sessionId, {
+        screenSharing: sharing,
+        feedSource:
+          data.feedSource === 'camera' || previous?.feedSource === 'camera'
+            ? 'camera'
+            : 'screen',
+      });
     }
     return states;
   }

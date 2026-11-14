@@ -437,7 +437,8 @@ export class SessionsService {
       startedAt: string;
       endedAt: string;
     },
-    chunk: Buffer
+    chunk: Buffer,
+    mimeType = 'video/webm'
   ) {
     const event = await this.prisma.proctoringEvent.findFirst({
       where: {
@@ -456,7 +457,13 @@ export class SessionsService {
       );
     const dir = join(process.cwd(), 'storage', 'evidence');
     await mkdir(dir, { recursive: true });
-    const path = join(dir, `${event.id}-${input.phase.toLowerCase()}.webm`);
+    // Phones on iOS Safari record MP4; FFmpeg later merges every phase into
+    // one WebM evidence clip regardless of the source container.
+    const extension = /mp4/i.test(mimeType) ? 'mp4' : 'webm';
+    const path = join(
+      dir,
+      `${event.id}-${input.phase.toLowerCase()}.${extension}`
+    );
     await writeFile(path, chunk);
     const saved = await this.prisma.evidenceClip.upsert({
       where: { eventId_phase: { eventId: event.id, phase: input.phase } },
@@ -709,6 +716,7 @@ export class SessionsService {
       connected: states.has(session.id),
       connectionStatus: states.has(session.id) ? 'CONNECTED' : 'DISCONNECTED',
       screenSharing: states.get(session.id)?.screenSharing ?? false,
+      feedSource: states.get(session.id)?.feedSource ?? 'screen',
       eventCount: _count.events,
       tabSwitchCount: tabSwitchCount.get(session.id) ?? 0,
       raisedHand: Boolean(session.raiseHandRequests.length),

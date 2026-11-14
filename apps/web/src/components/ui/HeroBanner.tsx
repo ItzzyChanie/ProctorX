@@ -32,7 +32,7 @@ export function HeroBanner({ eyebrow, title, subtitle, stat, statLabel, cta }: H
               {eyebrow}
             </div>
           )}
-          <div className="font-head text-[26px] font-semibold tracking-tight text-white mb-1.5 leading-snug">{title}</div>
+          <div className="font-head text-[22px] sm:text-[26px] font-semibold tracking-tight text-white mb-1.5 leading-snug">{title}</div>
           {subtitle && <div className="font-body text-[13.5px] text-white/85 leading-relaxed">{subtitle}</div>}
           {cta && <div className="mt-4">{cta}</div>}
         </div>

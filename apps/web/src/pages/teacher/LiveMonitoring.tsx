@@ -10,6 +10,7 @@ import {
 } from 'react';
 import {
   AlertTriangle,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock3,
@@ -19,6 +20,8 @@ import {
   Monitor,
   MonitorOff,
   RotateCcw,
+  SlidersHorizontal,
+  Smartphone,
   Wifi,
   WifiOff,
   X,
@@ -41,6 +44,8 @@ type Student = {
   connected: boolean;
   connectionStatus: 'CONNECTED' | 'DISCONNECTED';
   screenSharing: boolean;
+  /** 'camera' = student is on a phone/tablet streaming the front camera. */
+  feedSource: 'screen' | 'camera';
   raisedHand: boolean;
   remainingSeconds: number;
   extraTimeSeconds: number;
@@ -209,6 +214,14 @@ const Tile = memo(function Tile({
             snapshot mode
           </span>
         )}
+        {student.feedSource === 'camera' && (
+          <span
+            className="rounded-full bg-sky-600 px-2 py-1 text-[10px] font-bold text-white"
+            title="This student is on a phone or tablet. Screen sharing is not available there, so the front camera is streamed instead."
+          >
+            <Smartphone className="inline" size={11} /> mobile · camera
+          </span>
+        )}
         {student.raisedHand && (
           <span className="rounded-full bg-blue-600 px-2 py-1 text-[10px] font-bold text-white">
             <Hand className="inline" size={11} /> raised hand
@@ -242,7 +255,9 @@ const Tile = memo(function Tile({
         <span className="absolute inset-0 z-[5] grid place-items-center bg-red-950/80 px-4 text-center text-sm font-semibold text-white">
           <span className="flex items-center">
             <MonitorOff size={18} className="mr-2" />
-            Screen sharing stopped
+            {student.feedSource === 'camera'
+              ? 'Camera feed stopped'
+              : 'Screen sharing stopped'}
           </span>
         </span>
       )}
@@ -277,6 +292,8 @@ export default function LiveMonitoring() {
   const [specialFilter, setSpecialFilter] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('risk');
   const [tileSize, setTileSize] = useState<keyof typeof TILE_MIN_WIDTH>('M');
+  // Phones: filters fold behind a single button so the feeds stay in view.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [pageSize, setPageSize] = useState(24);
   const [page, setPage] = useState(0);
   const [warningMessage, setWarningMessage] = useState('');
@@ -458,6 +475,7 @@ export default function LiveMonitoring() {
           connected: Boolean(session.connected),
           connectionStatus: session.connectionStatus,
           screenSharing: Boolean(session.screenSharing),
+          feedSource: session.feedSource === 'camera' ? 'camera' : 'screen',
           raisedHand: Boolean(session.raisedHand),
           remainingSeconds: session.remainingSeconds ?? 0,
           extraTimeSeconds: session.extraTimeSeconds ?? 0,
@@ -648,14 +666,20 @@ export default function LiveMonitoring() {
     const screenState = ({
       sessionId,
       sharing,
+      source,
     }: {
       sessionId: string;
       sharing: boolean;
+      source?: 'screen' | 'camera';
     }) =>
       setStudents((current) =>
         current.map((student) =>
           student.id === sessionId
-            ? { ...student, screenSharing: sharing }
+            ? {
+                ...student,
+                screenSharing: sharing,
+                feedSource: source === 'camera' ? 'camera' : 'screen',
+              }
             : student
         )
       );
@@ -880,7 +904,7 @@ export default function LiveMonitoring() {
             <select
               value={examId}
               onChange={(event) => chooseExam(event.target.value)}
-              className="min-w-64 rounded-lg border border-border bg-surface px-3 py-2 text-text-1"
+              className="w-full rounded-lg sm:w-auto sm:min-w-64 border border-border bg-surface px-3 py-2 text-text-1"
             >
               <option value="">Select an exam…</option>
               {exams.map((exam) => (
@@ -912,7 +936,36 @@ export default function LiveMonitoring() {
               </b>
               . Student screens appear automatically after they begin the exam.
             </div>
-            <div className="grid gap-2 rounded-xl border border-border bg-surface p-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((open) => !open)}
+              aria-expanded={filtersOpen}
+              className="flex items-center justify-between rounded-xl border border-border bg-surface px-4 py-3 text-sm font-semibold text-text-1 sm:hidden"
+            >
+              <span className="flex items-center gap-2">
+                <SlidersHorizontal size={16} /> Filters, sort & layout
+                {[riskFilter, connectionFilter, sectionFilter, specialFilter]
+                  .filter(Boolean).length > 0 && (
+                  <span className="rounded-full bg-brand px-2 py-0.5 text-[10px] text-white">
+                    {
+                      [
+                        riskFilter,
+                        connectionFilter,
+                        sectionFilter,
+                        specialFilter,
+                      ].filter(Boolean).length
+                    }
+                  </span>
+                )}
+              </span>
+              <ChevronDown
+                size={16}
+                className={`transition-transform ${filtersOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+            <div
+              className={`${filtersOpen ? 'grid' : 'hidden'} gap-2 rounded-xl border border-border bg-surface p-3 sm:grid sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8`}
+            >
               <select
                 value={riskFilter}
                 onChange={(event) => setRiskFilter(event.target.value)}
@@ -1065,10 +1118,10 @@ export default function LiveMonitoring() {
         )}
       </div>
       {selectedStudent && (
-        <div className="fixed inset-0 z-[100] grid place-items-center bg-black/90 p-6">
-          <div className="relative flex h-full w-full max-w-7xl flex-col">
-            <div className="mb-3 flex items-center justify-between text-white">
-              <span>
+        <div className="fixed inset-0 z-[100] grid place-items-center bg-black/90 p-2 sm:p-6">
+          <div className="relative flex h-full w-full max-w-7xl flex-col overflow-y-auto">
+            <div className="mb-3 flex items-start justify-between gap-2 text-white sm:items-center">
+              <span className="min-w-0 text-sm sm:text-base">
                 {selectedStudent.name} — score {selectedStudent.score} (
                 {selectedStudent.tier.toLowerCase()} risk) ·{' '}
                 {selectedStudent.tabSwitches} tab switches
@@ -1082,7 +1135,7 @@ export default function LiveMonitoring() {
                 Close
               </Button>
             </div>
-            <div className="mb-3 grid gap-3 rounded-xl bg-white/10 p-3 text-white lg:grid-cols-3">
+            <div className="order-last mb-3 grid gap-3 rounded-xl bg-white/10 p-3 text-white lg:order-none lg:grid-cols-3">
               <div>
                 <label className="mb-1 block text-xs font-semibold">
                   Private warning
@@ -1175,7 +1228,7 @@ export default function LiveMonitoring() {
                 </p>
               )}
             </div>
-            <div className="relative grid flex-1 place-items-center overflow-hidden rounded-lg bg-black">
+            <div className="relative mb-3 grid min-h-[38dvh] flex-1 place-items-center overflow-hidden rounded-lg bg-black lg:mb-0 lg:min-h-0">
               <ScreenView
                 id={selectedStudent.id}
                 name={selectedStudent.name}
@@ -1195,7 +1248,9 @@ export default function LiveMonitoring() {
                 <span className="absolute inset-0 grid place-items-center bg-red-950/80 text-white">
                   <span className="flex items-center font-semibold">
                     <MonitorOff size={20} className="mr-2" />
-                    This student has stopped sharing their screen.
+                    {selectedStudent.feedSource === 'camera'
+                      ? "This student's camera feed has stopped."
+                      : 'This student has stopped sharing their screen.'}
                   </span>
                 </span>
               )}

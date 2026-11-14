@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { User } from '@proctorx/shared-types';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
@@ -28,6 +28,8 @@ export function DashboardLayout({
   children,
 }: DashboardLayoutProps) {
   const { user, updateUser } = useAuthStore();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
   useEffect(() => {
     const refresh = () =>
       void api
@@ -62,10 +64,12 @@ export function DashboardLayout({
 
   return (
     <div className="app-shell">
-      <Sidebar role={role} />
+      <Sidebar role={role} mobileOpen={menuOpen} onMobileClose={closeMenu} />
       <div className="app-main">
         <Topbar
           role={role}
+          menuOpen={menuOpen}
+          onMenuToggle={() => setMenuOpen((open) => !open)}
           pageTitle={pageTitle}
           userName={resolvedUserName}
           userTag={resolvedUserTag}

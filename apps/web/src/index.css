@@ -105,6 +105,41 @@ select:disabled,
   z-index: 20;
 }
 
+/* Phones & tablets (<1024px): the sidebar slides in as an off-canvas drawer
+   opened from the hamburger button in the top bar. */
+.app-sidebar[data-drawer='true'] {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 60;
+  width: min(300px, 86vw);
+  transform: translateX(-100%);
+  transition: transform 220ms ease;
+  box-shadow: none;
+}
+.app-sidebar[data-drawer='true'][data-open='true'] {
+  transform: translateX(0);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
+}
+.app-sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgb(8 10 20 / 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+.app-sidebar-backdrop[data-open='true'] {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar[data-drawer='true'],
+  .app-sidebar-backdrop {
+    transition: none;
+  }
+}
+
 .app-main {
   display: flex;
   flex: 1;
@@ -140,6 +175,14 @@ select:disabled,
 }
 
 .app-content [style*='grid-template-columns'] {
+  min-width: 0;
+}
+
+/* Grid items default to `min-width: auto`, so one wide child (e.g. a table
+   with min-w-[820px]) would stretch the whole grid column past the screen and
+   the page itself would overflow sideways. Letting items shrink keeps every
+   page inside the viewport and lets the table's own wrapper scroll instead. */
+.app-content .grid > * {
   min-width: 0;
 }
 
@@ -183,6 +226,79 @@ select:disabled,
   }
 }
 
+/* Phones: modals never grow taller than the screen (they scroll inside), and
+   form fields use 16px text so iOS Safari does not zoom in on focus. */
+@media (max-width: 767px) {
+  .fixed.inset-0.grid > *,
+  .fixed.inset-0.flex.items-center > * {
+    max-height: calc(100dvh - 2rem);
+    overflow-y: auto;
+  }
+  .app-content table th,
+  .app-content table td {
+    white-space: nowrap;
+  }
+
+  /* Wide tables: swipe sideways inside the card. A visible scrollbar plus
+     edge shadows (shown only while more columns are hidden) hint that the
+     table continues. */
+  .app-content .overflow-x-auto:has(> table),
+  .app-content .overflow-auto:has(> table) {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+    background:
+      linear-gradient(to right, var(--surface) 30%, transparent) left / 32px
+        100% no-repeat local,
+      linear-gradient(to left, var(--surface) 30%, transparent) right / 32px
+        100% no-repeat local,
+      radial-gradient(
+          farthest-side at 0 50%,
+          color-mix(in srgb, var(--text-1) 18%, transparent),
+          transparent
+        )
+        left / 12px 100% no-repeat scroll,
+      radial-gradient(
+          farthest-side at 100% 50%,
+          color-mix(in srgb, var(--text-1) 18%, transparent),
+          transparent
+        )
+        right / 12px 100% no-repeat scroll;
+  }
+  .app-content .overflow-x-auto:has(> table)::-webkit-scrollbar,
+  .app-content .overflow-auto:has(> table)::-webkit-scrollbar {
+    height: 6px;
+  }
+  .app-content .overflow-x-auto:has(> table)::-webkit-scrollbar-thumb,
+  .app-content .overflow-auto:has(> table)::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 999px;
+  }
+
+  /* Charts: smaller axis text on phones (plot heights shrink in
+     components/charts/ResponsiveChart.tsx). */
+  .app-content .recharts-responsive-container {
+    padding: 4px;
+  }
+  .app-content .recharts-cartesian-axis-tick text,
+  .app-content .recharts-legend-item-text {
+    font-size: 10px;
+  }
+}
+
+/* iOS Safari zooms into any field with text under 16px; keep phones' form
+   fields at 16px there only (Android keeps the compact size). */
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 767px) {
+    .app-shell input:not([type='checkbox']):not([type='radio']):not([type='range']),
+    .app-shell select,
+    .app-shell textarea {
+      font-size: 16px;
+    }
+  }
+}
+
 @media (max-width: 980px) {
   .app-content [style*='repeat(4, 1fr)'],
   .app-content [style*='repeat(3, 1fr)'] {
@@ -200,7 +316,11 @@ select:disabled,
   .app-topbar > div:last-child {
     gap: 6px;
   }
-  .app-content [style*='repeat(4, 1fr)'],
+  /* 4-card KPI rows stay 2 × 2 on phones. */
+  .app-content [style*='repeat(4, 1fr)'] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+  }
   .app-content [style*='repeat(3, 1fr)'],
   .app-content [style*='1fr 1fr'] {
     grid-template-columns: minmax(0, 1fr) !important;

@@ -631,6 +631,90 @@ export default function Classes() {
       String(mapped.length) + ' reusable question(s) added to this exam.'
     );
   };
+  const subjectStatus = (s: Subject) => (
+    <span
+      className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+        assessmentStateFor(s) === 'PENDING'
+          ? 'bg-amber-100 text-amber-800'
+          : assessmentStateFor(s) === 'ACTIVE'
+            ? 'bg-emerald-100 text-emerald-800'
+            : 'bg-slate-100 text-slate-600'
+      }`}
+    >
+      {currentExamFor(s)
+        ? `${assessmentStateFor(s) === 'PENDING' ? 'Pending' : 'Active'} · ${currentExamFor(s)!.term.replace('_', ' ')} · v${currentExamFor(s)!.version}`
+        : 'Not Active'}
+    </span>
+  );
+  /** Assessment + edit/delete buttons, shared by the table and phone cards. */
+  const subjectActions = (s: Subject) => (
+    <>
+      {currentExamFor(s) ? (
+        <>
+          <Button
+            variant="ghost"
+            icon={Pencil}
+            disabled={!canCreateExam}
+            onClick={() => {
+              const exam = currentExamFor(s)!;
+              setRescheduling({
+                subject: s,
+                exam,
+                scheduledAt: localDateTimeValue(
+                  exam.scheduledAt
+                ),
+                endsAt: localDateTimeValue(exam.endsAt),
+              });
+            }}
+          >
+            Reschedule
+          </Button>
+          <Button
+            variant="danger"
+            disabled={!canCreateExam}
+            onClick={() => setStopping(s)}
+          >
+            {assessmentStateFor(s) === 'PENDING'
+              ? 'Cancel'
+              : 'Stop'}
+          </Button>
+        </>
+      ) : (
+        <Button
+          disabled={!canCreateExam || !activePeriods.length}
+          title={
+            !canCreateExam
+              ? 'Creation restricted by your dean'
+              : !activePeriods.length
+              ? 'The Dean must create an active semester first'
+              : undefined
+          }
+          onClick={() => {
+            setAcademicPeriodId(activePeriods[0]?.id ?? '');
+            setActive({ subject: s, kind: 'EXAM' });
+          }}
+        >
+          Create Exam/Quiz
+        </Button>
+      )}
+      <Button
+        variant="ghost"
+        icon={Pencil}
+        disabled={!canCreateExam}
+        aria-label={`Edit ${s.name}`}
+        title="Edit subject"
+        onClick={() => setEditing({ ...s })}
+      />
+      <Button
+        variant="danger"
+        icon={Trash2}
+        disabled={!canCreateExam}
+        aria-label={`Delete ${s.name}`}
+        title="Delete subject"
+        onClick={() => setDeleting(s)}
+      />
+    </>
+  );
   return (
     <DashboardLayout role="teacher" pageTitle="Subjects & Exam Builder">
       {notice && (
@@ -709,13 +793,58 @@ export default function Classes() {
           </form>
         </Card>
         <Card padded={false}>
-          <div className="p-6">
+          <div className="p-4 sm:p-6">
             <CardHeader
               title="My Subjects"
               subtitle="Create an assessment directly from any subject."
             />
           </div>
-          <div className="overflow-x-auto">
+          {/* Phones: one card per subject so every action stays visible. */}
+          <ul className="divide-y divide-border border-t border-border md:hidden">
+            {subjects.data?.map((s) => (
+              <li key={s.id} className="space-y-3 p-4">
+                <div>
+                  <div className="font-semibold text-text-1">
+                    {s.subjectCode} - {s.name}
+                  </div>
+                  <div className="mt-0.5 text-xs text-text-2">{s.schedule}</div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="inline-flex items-center gap-1.5 rounded bg-brand-soft px-2 py-1 font-mono font-bold text-brand">
+                    {s.code}
+                    <button
+                      type="button"
+                      aria-label={`Copy join code ${s.code}`}
+                      onClick={() => {
+                        void navigator.clipboard.writeText(s.code);
+                        setNotice('Join code copied.');
+                      }}
+                    >
+                      <Copy size={13} />
+                    </button>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={!canViewRosters}
+                    onClick={() => setRosterSubject(s)}
+                    className="rounded-full border border-border px-2.5 py-1 font-semibold text-text-2 disabled:opacity-50"
+                  >
+                    {s._count.enrollments}{' '}
+                    {s._count.enrollments === 1 ? 'student' : 'students'}
+                  </button>
+                  <span className="rounded-full border border-border px-2.5 py-1 font-semibold text-text-2">
+                    {s._count.exams}{' '}
+                    {s._count.exams === 1 ? 'assessment' : 'assessments'}
+                  </span>
+                  {subjectStatus(s)}
+                </div>
+                <div className="flex items-center gap-2 [&>button:first-child]:flex-1 [&>button:first-child]:justify-center">
+                  {subjectActions(s)}
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div className="hidden overflow-x-auto md:block">
             <table className="w-full min-w-[820px] text-left text-sm">
               <thead className="border-y border-border bg-surface-2 text-xs uppercase text-text-3">
                 <tr>
@@ -763,87 +892,10 @@ export default function Classes() {
                       </Button>
                     </td>
                     <td className="p-4">{s._count.exams}</td>
-                    <td className="p-4">
-                      <span
-                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                          assessmentStateFor(s) === 'PENDING'
-                            ? 'bg-amber-100 text-amber-800'
-                            : assessmentStateFor(s) === 'ACTIVE'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-slate-100 text-slate-600'
-                        }`}
-                      >
-                        {currentExamFor(s)
-                          ? `${assessmentStateFor(s) === 'PENDING' ? 'Pending' : 'Active'} · ${currentExamFor(s)!.term.replace('_', ' ')} · v${currentExamFor(s)!.version}`
-                          : 'Not Active'}
-                      </span>
-                    </td>
+                    <td className="p-4">{subjectStatus(s)}</td>
                     <td className="p-4">
                       <div className="flex gap-2">
-                        {currentExamFor(s) ? (
-                          <>
-                            <Button
-                              variant="ghost"
-                              icon={Pencil}
-                              disabled={!canCreateExam}
-                              onClick={() => {
-                                const exam = currentExamFor(s)!;
-                                setRescheduling({
-                                  subject: s,
-                                  exam,
-                                  scheduledAt: localDateTimeValue(
-                                    exam.scheduledAt
-                                  ),
-                                  endsAt: localDateTimeValue(exam.endsAt),
-                                });
-                              }}
-                            >
-                              Reschedule
-                            </Button>
-                            <Button
-                              variant="danger"
-                              disabled={!canCreateExam}
-                              onClick={() => setStopping(s)}
-                            >
-                              {assessmentStateFor(s) === 'PENDING'
-                                ? 'Cancel'
-                                : 'Stop'}
-                            </Button>
-                          </>
-                        ) : (
-                          <Button
-                            disabled={!canCreateExam || !activePeriods.length}
-                            title={
-                              !canCreateExam
-                                ? 'Creation restricted by your dean'
-                                : !activePeriods.length
-                                ? 'The Dean must create an active semester first'
-                                : undefined
-                            }
-                            onClick={() => {
-                              setAcademicPeriodId(activePeriods[0]?.id ?? '');
-                              setActive({ subject: s, kind: 'EXAM' });
-                            }}
-                          >
-                            Create Exam/Quiz
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          icon={Pencil}
-                          disabled={!canCreateExam}
-                          aria-label={`Edit ${s.name}`}
-                          title="Edit subject"
-                          onClick={() => setEditing({ ...s })}
-                        />
-                        <Button
-                          variant="danger"
-                          icon={Trash2}
-                          disabled={!canCreateExam}
-                          aria-label={`Delete ${s.name}`}
-                          title="Delete subject"
-                          onClick={() => setDeleting(s)}
-                        />
+                        {subjectActions(s)}
                       </div>
                     </td>
                   </tr>

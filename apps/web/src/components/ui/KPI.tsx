@@ -24,18 +24,18 @@ export function KPI({ label, value, delta, mono = true, icon: Icon, accent = 0 }
   return (
     <Card hover className="relative overflow-hidden">
       <div className="absolute -right-6 -bottom-8 h-24 w-24 rounded-full bg-brand/5" />
-      <div className="flex items-center justify-between mb-4">
-        <span className="font-body text-[12.5px] font-semibold text-text-2">{label}</span>
+      <div className="flex items-start justify-between gap-2 mb-2 sm:mb-4">
+        <span className="font-body text-[11.5px] sm:text-[12.5px] font-semibold leading-tight text-text-2">{label}</span>
         {Icon && (
           <div
-            className="w-8 h-8 rounded-[10px] flex items-center justify-center flex-shrink-0"
+            className="w-7 h-7 sm:w-8 sm:h-8 rounded-[10px] flex items-center justify-center flex-shrink-0"
             style={{ background: ICON_BG[accent % ICON_BG.length] }}
           >
             <Icon size={15} color="#fff" />
           </div>
         )}
       </div>
-      <div className={`relative font-${mono ? "mono" : "head"} text-[30px] font-bold text-text-1 tracking-tight`}>
+      <div className={`relative font-${mono ? "mono" : "head"} text-[22px] sm:text-[30px] font-bold text-text-1 tracking-tight break-words`}>
         {value}
       </div>
       {delta !== undefined && (

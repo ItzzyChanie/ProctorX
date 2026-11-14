@@ -191,13 +191,19 @@ export class SessionsController {
     @Body() body: EvidenceClipDto,
     @UploadedFile(
       new ParseFilePipeBuilder()
-        .addFileTypeValidator({ fileType: /^video\/webm(?:;.*)?$/i })
+        .addFileTypeValidator({ fileType: /^video\/(webm|mp4)(?:;.*)?$/i })
         .addMaxSizeValidator({ maxSize: 10_000_000 })
         .build()
     )
     file: Express.Multer.File
   ) {
-    return this.s.evidenceClip(id, r.user.id, body as any, file.buffer);
+    return this.s.evidenceClip(
+      id,
+      r.user.id,
+      body as any,
+      file.buffer,
+      file.mimetype
+    );
   }
   @Post(':id/recording-chunks')
   @Roles(Role.STUDENT)

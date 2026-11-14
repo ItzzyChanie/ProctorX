@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useIsPhone } from '../../lib/useMediaQuery';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bar,
@@ -6,13 +7,13 @@ import {
   CartesianGrid,
   Cell,
   Line,
-  ResponsiveContainer,
   Scatter,
   ScatterChart,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
+import { ResponsiveChart } from '../../components/charts/ResponsiveChart';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { axisProps, tooltipProps } from '../../components/charts/chartTheme';
@@ -86,7 +87,8 @@ export default function Analytics() {
     return () => { notificationSocket.off('integrity:review-updated', refresh); };
   }, [queryClient]);
   const { dark } = useTheme(),
-    p = useChartPalette(dark);
+    p = useChartPalette(dark),
+    isPhone = useIsPhone();
   const [filters, setFilters] = useState({
     academicPeriodId: '',
     term: '',
@@ -164,8 +166,9 @@ export default function Analytics() {
           subtitle="Percentage of participating students with one or more recorded incidents. Each student is counted once."
         />
         {programData.length ? (
-          <ResponsiveContainer
+          <ResponsiveChart
             width="100%"
+            className="chart-tall"
             height={Math.max(240, programData.length * 42)}
           >
             <BarChart data={programData} layout="vertical">
@@ -179,7 +182,7 @@ export default function Analytics() {
               <YAxis
                 type="category"
                 dataKey="section"
-                width={155}
+                width={isPhone ? 90 : 155}
                 interval={0}
                 {...axisProps(p)}
               />
@@ -208,7 +211,7 @@ export default function Analytics() {
                 ))}
               </Bar>
             </BarChart>
-          </ResponsiveContainer>
+          </ResponsiveChart>
         ) : (
           <p className="text-sm text-text-2">
             No {program} section data matches the filters.
@@ -230,7 +233,7 @@ export default function Analytics() {
             title="Analytics filters"
             subtitle="All charts and correlation use this same server-side scope."
           />
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3">
             <select
               value={filters.academicPeriodId}
               onChange={(e) =>
@@ -289,7 +292,7 @@ export default function Analytics() {
             subtitle="Historical semester data remains available across all four terms."
           />
           {data?.termComparison.length ? (
-            <ResponsiveContainer width="100%" height={250}>
+            <ResponsiveChart width="100%" height={250}>
               <BarChart
                 data={data.termComparison.map((x) => ({
                   ...x,
@@ -311,7 +314,7 @@ export default function Analytics() {
                   fill={p.cyan}
                 />
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveChart>
           ) : (
             <p className="text-sm text-text-2">No term data yet.</p>
           )}
@@ -334,7 +337,7 @@ export default function Analytics() {
             }
           />
           {data?.correlation.points.length ? (
-            <ResponsiveContainer width="100%" height={280}>
+            <ResponsiveChart width="100%" height={280}>
               <ScatterChart>
                 <CartesianGrid stroke={p.border} />
                 <XAxis
@@ -361,7 +364,7 @@ export default function Analytics() {
                   />
                 )}
               </ScatterChart>
-            </ResponsiveContainer>
+            </ResponsiveChart>
           ) : (
             <p className="text-sm text-text-2">
               No confirmed graded sessions match the filters.
@@ -402,7 +405,7 @@ export default function Analytics() {
             <p className="text-xs text-text-3">
               Tip: select a section bar above to drill into that section.
             </p>
-            <div className="mt-4 grid gap-3 md:grid-cols-4">
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4">
               <input
                 value={sessionSearch}
                 onChange={(event) => {
@@ -410,7 +413,7 @@ export default function Analytics() {
                   setSessionPage(1);
                 }}
                 placeholder="Search sessions"
-                className="rounded-lg border border-border bg-canvas px-3 py-2 text-sm"
+                className="col-span-2 rounded-lg border border-border bg-canvas px-3 py-2 text-sm md:col-span-1"
               />
               <select
                 value={sessionReview}

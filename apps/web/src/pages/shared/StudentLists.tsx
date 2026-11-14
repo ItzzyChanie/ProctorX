@@ -528,12 +528,12 @@ export default function StudentLists({ role }: { role: Role }) {
           <p className="mb-6 font-body text-sm text-text-3">
             Select a year level to see enrolled student accounts.
           </p>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
             {years.map((year) => (
               <button
                 key={year}
                 onClick={() => setYearLevel(String(year))}
-                className="rounded-[14px] border border-border bg-surface p-6 text-left shadow-card transition hover:border-brand"
+                className="rounded-[14px] border border-border bg-surface p-4 text-left sm:p-6 shadow-card transition hover:border-brand"
               >
                 <span className="font-head text-2xl font-bold text-brand">
                   {year}
@@ -570,7 +570,7 @@ export default function StudentLists({ role }: { role: Role }) {
           <p className="mb-6 font-body text-sm text-text-3">
             Select a section to view and manage its students.
           </p>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
             {sections.map((item) => (
               <div
                 key={item.id}

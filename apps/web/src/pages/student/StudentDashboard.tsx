@@ -1,16 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { CalendarClock, CalendarRange } from 'lucide-react';
+import {
+  ScopeField,
+  ScopeHeader,
+  scopeControlClass,
+} from '../../components/ui/ScopeField';
 import {
   Area,
   AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
+import { ResponsiveChart } from '../../components/charts/ResponsiveChart';
 import { Archive, Clock, LogIn, RotateCcw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
@@ -115,7 +121,24 @@ export default function StudentDashboard() {
             </Button>
           }
         />
-        <Card><CardHeader title="Academic period scope" subtitle="Scores, session time, upcoming assessments, and recent activity use this selection."/><div className="grid gap-2 sm:grid-cols-2"><select value={periodId} onChange={e=>setPeriodId(e.target.value)} className="rounded border border-border bg-surface p-2"><option value="">All semesters</option>{data?.academicPeriods?.map(x=><option key={x.id} value={x.id}>{x.academicYear} · {x.semester==='FIRST'?'First':'Second'} Semester{x.status==='CLOSED'?' (Closed)':''}</option>)}</select><select value={term} onChange={e=>setTerm(e.target.value)} className="rounded border border-border bg-surface p-2"><option value="">All terms</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option></select></div></Card>
+        <Card>
+          <ScopeHeader
+            title="Academic period scope"
+            subtitle="Scores, session time, upcoming assessments, and recent activity use this selection."
+            onClear={() => {
+              setPeriodId('');
+              setTerm('');
+            }}
+          />
+          <div className="grid grid-cols-2 gap-2 sm:gap-3">
+            <ScopeField label="Semester" icon={CalendarRange}>
+              <select aria-label="Semester" value={periodId} onChange={e=>setPeriodId(e.target.value)} className={scopeControlClass}><option value="">All semesters</option>{data?.academicPeriods?.map(x=><option key={x.id} value={x.id}>{x.academicYear} · {x.semester==='FIRST'?'First':'Second'} Semester{x.status==='CLOSED'?' (Closed)':''}</option>)}</select>
+            </ScopeField>
+            <ScopeField label="Term" icon={CalendarClock}>
+              <select aria-label="Term" value={term} onChange={e=>setTerm(e.target.value)} className={scopeControlClass}><option value="">All terms</option><option value="PRELIMINARY">Preliminary</option><option value="MIDTERM">Midterm</option><option value="SEMI_FINAL">Semi-final</option><option value="FINAL">Final</option></select>
+            </ScopeField>
+          </div>
+        </Card>
         <div className="grid gap-5" style={{ gridTemplateColumns: '2fr 1fr' }}>
           <div className="flex flex-col gap-5">
             <Card>
@@ -124,7 +147,7 @@ export default function StudentDashboard() {
                 subtitle="Teacher-confirmed results"
               />
               {scores.length ? (
-                <ResponsiveContainer width="100%" height={220}>
+                <ResponsiveChart width="100%" height={220}>
                   <AreaChart data={scores}>
                     <defs>
                       <linearGradient
@@ -157,7 +180,7 @@ export default function StudentDashboard() {
                       fill="url(#scoreFill)"
                     />
                   </AreaChart>
-                </ResponsiveContainer>
+                </ResponsiveChart>
               ) : (
                 <p className="text-sm text-text-2">No released scores yet.</p>
               )}
@@ -165,7 +188,7 @@ export default function StudentDashboard() {
             <Card>
               <CardHeader title="Time spent per session" />
               {time.length ? (
-                <ResponsiveContainer width="100%" height={200}>
+                <ResponsiveChart width="100%" height={200}>
                   <BarChart data={time}>
                     <CartesianGrid stroke={p.border} vertical={false} />
                     <XAxis dataKey="session" {...axisProps(p)} />
@@ -173,7 +196,7 @@ export default function StudentDashboard() {
                     <Tooltip {...tooltipProps(p)} />
                     <Bar dataKey="mins" fill={p.cyan} />
                   </BarChart>
-                </ResponsiveContainer>
+                </ResponsiveChart>
               ) : (
                 <p className="text-sm text-text-2">
                   No completed sessions yet.

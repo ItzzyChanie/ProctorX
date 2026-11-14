@@ -1,4 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
+import { CalendarClock, CalendarRange } from 'lucide-react';
+import {
+  ScopeField,
+  ScopeHeader,
+  scopeControlClass,
+} from '../../components/ui/ScopeField';
+import { useIsPhone } from '../../lib/useMediaQuery';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bar,
@@ -9,11 +16,11 @@ import {
   LineChart,
   Pie,
   PieChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
+import { ResponsiveChart } from '../../components/charts/ResponsiveChart';
 import {
   AlertTriangle,
   FileText,
@@ -93,7 +100,8 @@ export default function DeanDashboard() {
   }, [queryClient]);
   const { dark } = useTheme(),
     p = useChartPalette(dark),
-    nav = useNavigate();
+    nav = useNavigate(),
+    isPhone = useIsPhone();
   const [filters, setFilters] = useState({ academicPeriodId: '', term: '' });
   const query = useMemo(
     () =>
@@ -135,14 +143,15 @@ export default function DeanDashboard() {
         />
         {rows.length ? (
           <div className="max-h-[520px] overflow-y-auto pr-2">
-            <ResponsiveContainer
+            <ResponsiveChart
               width="100%"
+              className="chart-tall"
               height={Math.max(260, rows.length * 44)}
             >
               <BarChart
                 data={rows}
                 layout="vertical"
-                margin={{ left: 12, right: 18 }}
+                margin={{ left: isPhone ? 0 : 12, right: isPhone ? 8 : 18 }}
               >
                 <CartesianGrid stroke={p.border} horizontal={false} />
                 <XAxis
@@ -154,7 +163,7 @@ export default function DeanDashboard() {
                 <YAxis
                   type="category"
                   dataKey="label"
-                  width={130}
+                  width={isPhone ? 84 : 130}
                   interval={0}
                   {...axisProps(p)}
                 />
@@ -167,7 +176,7 @@ export default function DeanDashboard() {
                 />
                 <Bar dataKey="rate" fill={p.violet} />
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveChart>
           </div>
         ) : (
           <p className="text-sm text-text-2">
@@ -211,15 +220,16 @@ export default function DeanDashboard() {
           }
         />
         <Card>
-          <CardHeader
+          <ScopeHeader
             title="Academic period scope"
             subtitle="Every chart and overview total follows the selected semester and term."
+            onClear={() => setFilters({ academicPeriodId: '', term: '' })}
           />
-          <div className="grid gap-3 md:grid-cols-3">
-            <label className="text-xs font-semibold">
-              Semester
+          <div className="grid grid-cols-2 gap-2 sm:gap-3">
+            <ScopeField label="Semester" icon={CalendarRange}>
               <select
-                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2.5"
+                aria-label="Semester"
+                className={scopeControlClass}
                 value={filters.academicPeriodId}
                 onChange={(e) =>
                   setFilters((x) => ({
@@ -238,11 +248,11 @@ export default function DeanDashboard() {
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="text-xs font-semibold">
-              Term
+            </ScopeField>
+            <ScopeField label="Term" icon={CalendarClock}>
               <select
-                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2.5"
+                aria-label="Term"
+                className={scopeControlClass}
                 value={filters.term}
                 onChange={(e) =>
                   setFilters((x) => ({ ...x, term: e.target.value }))
@@ -255,15 +265,7 @@ export default function DeanDashboard() {
                 <option value="FINAL">Final</option>
                 <option value="UNSPECIFIED">Legacy / Unspecified</option>
               </select>
-            </label>
-            <div className="flex items-end">
-              <Button
-                variant="ghost"
-                onClick={() => setFilters({ academicPeriodId: '', term: '' })}
-              >
-                Clear filters
-              </Button>
-            </div>
+            </ScopeField>
           </div>
         </Card>
         <div
@@ -305,7 +307,7 @@ export default function DeanDashboard() {
             {incidentData.length ? (
               <div>
                 <div className="h-[260px]">
-                  <ResponsiveContainer width="100%" height={260}>
+                  <ResponsiveChart width="100%" height={260}>
                     <PieChart>
                       <Pie
                         data={incidentData}
@@ -321,7 +323,7 @@ export default function DeanDashboard() {
                       </Pie>
                       <Tooltip {...tooltipProps(p)} />
                     </PieChart>
-                  </ResponsiveContainer>
+                  </ResponsiveChart>
                 </div>
                 <div
                   className="mt-4 grid gap-x-5 gap-y-2 border-t border-border pt-4 sm:grid-cols-2"
@@ -354,7 +356,7 @@ export default function DeanDashboard() {
           <Card>
             <CardHeader title="Incidence-rate trend" subtitle="This semester" />
             {data?.incidenceRateTrend.length ? (
-              <ResponsiveContainer width="100%" height={200}>
+              <ResponsiveChart width="100%" height={200}>
                 <LineChart data={data.incidenceRateTrend}>
                   <CartesianGrid stroke={p.border} vertical={false} />
                   <XAxis dataKey="week" {...axisProps(p)} />
@@ -368,7 +370,7 @@ export default function DeanDashboard() {
                     dot={{ r: 3 }}
                   />
                 </LineChart>
-              </ResponsiveContainer>
+              </ResponsiveChart>
             ) : (
               <p className="text-sm text-text-2">No trend data yet.</p>
             )}
@@ -377,7 +379,7 @@ export default function DeanDashboard() {
         <Card>
           <CardHeader title="Incident rate by subject" />
           {data?.incidenceRateBySubject.length ? (
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveChart width="100%" height={200}>
               <BarChart data={data.incidenceRateBySubject}>
                 <CartesianGrid stroke={p.border} vertical={false} />
                 <XAxis dataKey="subject" {...axisProps(p)} />
@@ -385,7 +387,7 @@ export default function DeanDashboard() {
                 <Tooltip {...tooltipProps(p)} />
                 <Bar dataKey="rate" fill={p.cyan} />
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveChart>
           ) : (
             <p className="text-sm text-text-2">No subject data.</p>
           )}
@@ -396,7 +398,7 @@ export default function DeanDashboard() {
             subtitle="Compare incident rate and average suspicion without losing prior-term history."
           />
           {data?.termComparison.length ? (
-            <ResponsiveContainer width="100%" height={240}>
+            <ResponsiveChart width="100%" height={240}>
               <BarChart
                 data={data.termComparison.map((x) => ({
                   ...x,
@@ -418,7 +420,7 @@ export default function DeanDashboard() {
                   fill={p.cyan}
                 />
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveChart>
           ) : (
             <p className="text-sm text-text-2">No term data yet.</p>
           )}

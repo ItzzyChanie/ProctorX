@@ -1,26 +1,70 @@
-import { useState } from 'react';
-import { ChevronDown, LogOut, Menu } from 'lucide-react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { ChevronDown, LogOut, Menu, X } from 'lucide-react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import darkModeLogo from '../../assets/ProctorX-Logo.png';
 import lightModeLogo from '../../assets/proctorX-dark.png';
 import { NAV } from '../../config/nav';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import type { Role } from '../../types/dashboard';
+import { DRAWER_QUERY, useMediaQuery } from '../../lib/useMediaQuery';
 
-export function Sidebar({ role }: { role: Role }) {
-  const [collapsed, setCollapsed] = useState(false);
+type SidebarProps = {
+  role: Role;
+  /** Drawer mode (phones/tablets): whether the off-canvas menu is open. */
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
+};
+
+export function Sidebar({ role, mobileOpen = false, onMobileClose }: SidebarProps) {
+  const isDrawer = useMediaQuery(DRAWER_QUERY);
+  const [desktopCollapsed, setCollapsed] = useState(false);
+  // The drawer always shows full labels; collapsing is a desktop-only rail.
+  const collapsed = !isDrawer && desktopCollapsed;
+  const location = useLocation();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     subjects: true,
   });
   const { signOut } = useAuthStore();
   const navigate = useNavigate();
 
+  // Close the drawer after navigating to another page.
+  useEffect(() => {
+    onMobileClose?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
+  // Escape closes the drawer and the page behind it cannot scroll while open.
+  useEffect(() => {
+    if (!isDrawer || !mobileOpen) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onMobileClose?.();
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [isDrawer, mobileOpen, onMobileClose]);
+
   return (
+    <>
+    {isDrawer && (
+      <div
+        className="app-sidebar-backdrop"
+        data-open={mobileOpen}
+        onClick={onMobileClose}
+        aria-hidden="true"
+      />
+    )}
     <div
+      id="app-sidebar"
       className="app-sidebar flex flex-col flex-shrink-0 border-r border-border bg-surface transition-[width] duration-200"
-      style={{ width: collapsed ? 76 : 284 }}
+      style={{ width: isDrawer ? undefined : collapsed ? 76 : 284 }}
       data-collapsed={collapsed}
+      data-drawer={isDrawer}
+      data-open={isDrawer ? mobileOpen : undefined}
+      role={isDrawer ? 'dialog' : undefined}
+      aria-modal={isDrawer && mobileOpen ? true : undefined}
+      aria-label={isDrawer ? 'Main menu' : undefined}
+      inert={isDrawer && !mobileOpen ? true : undefined}
     >
       <div
         className={`flex h-[84px] items-center gap-2.5 ${collapsed ? 'justify-center px-3' : 'px-4'}`}
@@ -41,13 +85,19 @@ export function Sidebar({ role }: { role: Role }) {
         )}
         <button
           type="button"
-          onClick={() => setCollapsed((value) => !value)}
+          onClick={() =>
+            isDrawer ? onMobileClose?.() : setCollapsed((value) => !value)
+          }
           className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-text-2 hover:bg-brand-soft hover:text-brand ${collapsed ? '' : 'ml-auto'}`}
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          aria-expanded={!collapsed}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={
+            isDrawer ? 'Close menu' : collapsed ? 'Expand sidebar' : 'Collapse sidebar'
+          }
+          aria-expanded={isDrawer ? undefined : !collapsed}
+          title={
+            isDrawer ? 'Close menu' : collapsed ? 'Expand sidebar' : 'Collapse sidebar'
+          }
         >
-          <Menu size={21} />
+          {isDrawer ? <X size={21} /> : <Menu size={21} />}
         </button>
       </div>
 
@@ -143,5 +193,6 @@ export function Sidebar({ role }: { role: Role }) {
         </button>
       </div>
     </div>
+    </>
   );
 }

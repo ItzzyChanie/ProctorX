@@ -9,18 +9,37 @@ import {
   Cell,
   Pie,
   PieChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
-import { FileWarning, Shield, Users, Video } from 'lucide-react';
+import { ResponsiveChart } from '../../components/charts/ResponsiveChart';
+import {
+  BookOpen,
+  CalendarCheck,
+  CalendarClock,
+  CalendarDays,
+  CalendarRange,
+  FileWarning,
+  GraduationCap,
+  Layers3,
+  Shield,
+  Users,
+  Video,
+  type LucideIcon,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { HeroBanner } from '../../components/ui/HeroBanner';
 import { Button } from '../../components/ui/Button';
 import { KPI } from '../../components/ui/KPI';
+import {
+  ScopeField,
+  ScopeHeader,
+  scopeControlClass,
+} from '../../components/ui/ScopeField';
+import { useIsPhone } from '../../lib/useMediaQuery';
 import { SuspicionMeter } from '../../components/ui/SuspicionMeter';
 import {
   axisProps,
@@ -70,7 +89,8 @@ export default function TeacherDashboard() {
   const { dark } = useTheme(),
     p = useChartPalette(dark),
     nav = useNavigate(),
-    client = useQueryClient();
+    client = useQueryClient(),
+    isPhone = useIsPhone();
   const [filters, setFilters] = useState({
     academicPeriodId: '',
     term: '',
@@ -144,12 +164,25 @@ export default function TeacherDashboard() {
           }
         />
         <Card>
-          <CardHeader
+          <ScopeHeader
             title="Dashboard scope"
             subtitle="All overview totals and charts use these same filters."
+            onClear={() =>
+              setFilters({
+                academicPeriodId: '',
+                term: '',
+                subjectId: '',
+                program: '',
+                yearLevel: '',
+                sectionId: '',
+                dateFrom: '',
+                dateTo: '',
+              })
+            }
           />
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
             <Filter
+              icon={CalendarRange}
               label="Academic semester"
               value={filters.academicPeriodId}
               onChange={(v) =>
@@ -166,6 +199,7 @@ export default function TeacherDashboard() {
               ))}
             </Filter>
             <Filter
+              icon={CalendarClock}
               label="Term"
               value={filters.term}
               onChange={(v) => setFilters((x) => ({ ...x, term: v }))}
@@ -178,6 +212,7 @@ export default function TeacherDashboard() {
               <option value="UNSPECIFIED">Legacy / Unspecified</option>
             </Filter>
             <Filter
+              icon={BookOpen}
               label="Subject"
               value={filters.subjectId}
               onChange={(v) => setFilters((x) => ({ ...x, subjectId: v }))}
@@ -190,6 +225,7 @@ export default function TeacherDashboard() {
               ))}
             </Filter>
             <Filter
+              icon={GraduationCap}
               label="Program"
               value={filters.program}
               onChange={(v) =>
@@ -210,6 +246,7 @@ export default function TeacherDashboard() {
               ))}
             </Filter>
             <Filter
+              icon={Layers3}
               label="Year level"
               value={filters.yearLevel}
               onChange={(v) =>
@@ -222,6 +259,7 @@ export default function TeacherDashboard() {
               ))}
             </Filter>
             <Filter
+              icon={Users}
               label="Section"
               value={filters.sectionId}
               onChange={(v) => setFilters((x) => ({ ...x, sectionId: v }))}
@@ -239,48 +277,29 @@ export default function TeacherDashboard() {
                   </option>
                 ))}
             </Filter>
-            <label className="text-xs font-semibold text-text-2">
-              From
+            <ScopeField label="From date" icon={CalendarDays}>
               <input
                 type="date"
+                aria-label="From date"
                 value={filters.dateFrom}
                 onChange={(e) =>
                   setFilters((x) => ({ ...x, dateFrom: e.target.value }))
                 }
-                className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2"
+                className={scopeControlClass}
               />
-            </label>
-            <label className="text-xs font-semibold text-text-2">
-              To
+            </ScopeField>
+            <ScopeField label="To date" icon={CalendarCheck}>
               <input
                 type="date"
+                aria-label="To date"
                 value={filters.dateTo}
                 min={filters.dateFrom}
                 onChange={(e) =>
                   setFilters((x) => ({ ...x, dateTo: e.target.value }))
                 }
-                className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2"
+                className={scopeControlClass}
               />
-            </label>
-          </div>
-          <div className="mt-3 flex justify-end">
-            <Button
-              variant="ghost"
-              onClick={() =>
-                setFilters({
-                  academicPeriodId: '',
-                  term: '',
-                  subjectId: '',
-                  program: '',
-                  yearLevel: '',
-                  sectionId: '',
-                  dateFrom: '',
-                  dateTo: '',
-                })
-              }
-            >
-              Clear filters
-            </Button>
+            </ScopeField>
           </div>
         </Card>
         <div
@@ -318,7 +337,7 @@ export default function TeacherDashboard() {
             subtitle="Historical term data remains available when a new term begins."
           />
           {data?.termComparison.length ? (
-            <ResponsiveContainer width="100%" height={240}>
+            <ResponsiveChart width="100%" height={240}>
               <BarChart
                 data={data.termComparison.map((x) => ({
                   ...x,
@@ -340,7 +359,7 @@ export default function TeacherDashboard() {
                   fill={p.cyan}
                 />
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveChart>
           ) : (
             <p className="text-sm text-text-2">No term data yet.</p>
           )}
@@ -355,14 +374,15 @@ export default function TeacherDashboard() {
               subtitle="A session is counted once when it contains one or more incidents."
             />
             {data?.incidentRateBySection.length ? (
-              <ResponsiveContainer
+              <ResponsiveChart
                 width="100%"
+                className="chart-tall"
                 height={Math.max(240, data.incidentRateBySection.length * 38)}
               >
                 <BarChart
                   data={data.incidentRateBySection}
                   layout="vertical"
-                  margin={{ left: 55 }}
+                  margin={{ left: isPhone ? 0 : 55 }}
                 >
                   <CartesianGrid stroke={p.border} horizontal={false} />
                   <XAxis
@@ -374,13 +394,13 @@ export default function TeacherDashboard() {
                   <YAxis
                     type="category"
                     dataKey="section"
-                    width={145}
+                    width={isPhone ? 84 : 145}
                     {...axisProps(p)}
                   />
                   <Tooltip {...tooltipProps(p)} />
                   <Bar dataKey="rate" fill={p.brand} />
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveChart>
             ) : (
               <p className="text-sm text-text-2">
                 No sessions match this scope.
@@ -390,7 +410,7 @@ export default function TeacherDashboard() {
           <Card>
             <CardHeader title="Average suspicion by subject" />
             {data?.avgSuspicionBySubject.length ? (
-              <ResponsiveContainer width="100%" height={240}>
+              <ResponsiveChart width="100%" height={240}>
                 <BarChart data={data.avgSuspicionBySubject}>
                   <CartesianGrid stroke={p.border} vertical={false} />
                   <XAxis dataKey="subject" {...axisProps(p)} />
@@ -398,7 +418,7 @@ export default function TeacherDashboard() {
                   <Tooltip {...tooltipProps(p)} />
                   <Bar dataKey="avg" fill={p.brand} />
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveChart>
             ) : (
               <p className="text-sm text-text-2">
                 No scored sessions match this scope.
@@ -413,7 +433,7 @@ export default function TeacherDashboard() {
           <Card>
             <CardHeader title="Average suspicion by section" />
             {data?.avgSuspicionBySection.length ? (
-              <ResponsiveContainer width="100%" height={230}>
+              <ResponsiveChart width="100%" height={230}>
                 <BarChart data={data.avgSuspicionBySection}>
                   <CartesianGrid stroke={p.border} vertical={false} />
                   <XAxis dataKey="section" {...axisProps(p)} />
@@ -425,7 +445,7 @@ export default function TeacherDashboard() {
                     ))}
                   </Bar>
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveChart>
             ) : (
               <p className="text-sm text-text-2">No sessions yet.</p>
             )}
@@ -433,7 +453,7 @@ export default function TeacherDashboard() {
           <Card>
             <CardHeader title="Incident types" subtitle="Last 7 days" />
             {data?.incidentTypeBreakdown.length ? (
-              <ResponsiveContainer width="100%" height={230}>
+              <ResponsiveChart width="100%" height={230}>
                 <PieChart>
                   <Pie
                     data={data.incidentTypeBreakdown.map((x) => ({
@@ -449,7 +469,7 @@ export default function TeacherDashboard() {
                   </Pie>
                   <Tooltip {...tooltipProps(p)} />
                 </PieChart>
-              </ResponsiveContainer>
+              </ResponsiveChart>
             ) : (
               <p className="text-sm text-text-2">No incidents yet.</p>
             )}
@@ -462,7 +482,7 @@ export default function TeacherDashboard() {
           <Card>
             <CardHeader title="Live suspicion trend" />
             {data?.liveSuspicionTrend.length ? (
-              <ResponsiveContainer width="100%" height={200}>
+              <ResponsiveChart width="100%" height={200}>
                 <AreaChart
                   data={data.liveSuspicionTrend.map((x) => ({
                     t: new Date(x.sampledAt).toLocaleTimeString(),
@@ -481,7 +501,7 @@ export default function TeacherDashboard() {
                     fillOpacity={0.2}
                   />
                 </AreaChart>
-              </ResponsiveContainer>
+              </ResponsiveChart>
             ) : (
               <p className="text-sm text-text-2">No active score samples.</p>
             )}
@@ -507,25 +527,27 @@ export default function TeacherDashboard() {
 
 function Filter({
   label,
+  icon,
   value,
   onChange,
   children,
 }: {
   label: string;
+  icon: LucideIcon;
   value: string;
   onChange: (value: string) => void;
   children: React.ReactNode;
 }) {
   return (
-    <label className="text-xs font-semibold text-text-2">
-      {label}
+    <ScopeField label={label} icon={icon}>
       <select
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm"
+        className={scopeControlClass}
       >
         {children}
       </select>
-    </label>
+    </ScopeField>
   );
 }

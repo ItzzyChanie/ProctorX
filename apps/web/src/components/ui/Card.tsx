@@ -19,7 +19,7 @@ export function Card({
       className={cn(
         "bg-surface rounded-[18px] border border-border shadow-rest transition-all duration-200",
         hover && "hover:shadow-raised hover:-translate-y-0.5",
-        padded && "p-6 sm:p-7",
+        padded && "p-4 sm:p-6 lg:p-7",
         className,
       )}
       {...props}

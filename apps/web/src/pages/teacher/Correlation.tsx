@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react';
 import {
   CartesianGrid,
   ReferenceLine,
-  ResponsiveContainer,
   Scatter,
   ScatterChart,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
+import { ResponsiveChart } from '../../components/charts/ResponsiveChart';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card } from '../../components/ui/Card';
 import { api } from '../../lib/api';
@@ -98,7 +98,7 @@ export default function Correlation() {
             <select
               value={examId}
               onChange={(event) => setExamId(event.target.value)}
-              className="ml-2 min-w-72 rounded border border-border bg-surface p-2 text-text-1"
+              className="mt-1 w-full rounded border sm:ml-2 sm:mt-0 sm:w-auto sm:min-w-72 border-border bg-surface p-2 text-text-1"
             >
               <option value="">Select a completed, fully graded exam…</option>
               {visibleExams.map((exam) => (
@@ -129,7 +129,7 @@ export default function Correlation() {
                 {result.pairs.length} fully graded student sessions
               </p>
             </div>
-            <ResponsiveContainer width="100%" height={300}>
+            <ResponsiveChart width="100%" height={300}>
               <ScatterChart>
                 <CartesianGrid stroke={p.border} />
                 <XAxis
@@ -156,7 +156,7 @@ export default function Correlation() {
                   />
                 )}
               </ScatterChart>
-            </ResponsiveContainer>
+            </ResponsiveChart>
             {result.insufficientData ? (
               <p className="mt-4 text-sm text-text-2">
                 A correlation requires at least two graded sessions with

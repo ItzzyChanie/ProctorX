@@ -133,7 +133,7 @@ export default function AssessmentCalendar() {
             title="Assessment calendar"
             subtitle="Scheduled exams and quizzes with live countdowns"
           />
-          <div className="mt-4 grid gap-2 md:grid-cols-4">
+          <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
             <input
               type="month"
               value={month}
@@ -190,8 +190,9 @@ export default function AssessmentCalendar() {
               <div className="grid grid-cols-7 gap-1 text-center text-xs font-bold text-text-3">
                 {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(
                   (day) => (
-                    <div key={day} className="p-2">
-                      {day}
+                    <div key={day} className="p-1 sm:p-2">
+                      <span className="sm:hidden">{day[0]}</span>
+                      <span className="hidden sm:inline">{day}</span>
                     </div>
                   )
                 )}
@@ -200,7 +201,7 @@ export default function AssessmentCalendar() {
                 {days.map((day, index) => (
                   <div
                     key={index}
-                    className={`min-h-24 rounded-lg border p-2 ${day !== null && month === monthKey(new Date(now)) && day === new Date(now).getDate() ? 'border-blue-500 bg-blue-50/70 ring-1 ring-blue-400 dark:bg-blue-950/30' : 'border-border'}`}
+                    className={`min-h-14 rounded-lg border p-1 sm:min-h-24 sm:p-2 ${day !== null && month === monthKey(new Date(now)) && day === new Date(now).getDate() ? 'border-blue-500 bg-blue-50/70 ring-1 ring-blue-400 dark:bg-blue-950/30' : 'border-border'}`}
                   >
                     {day && (
                       <>
@@ -215,11 +216,14 @@ export default function AssessmentCalendar() {
                               new Date(item.scheduledAt).getDate() === day
                           )
                           .map((item) => (
-                            <div
-                              key={item.id}
-                              className="mt-1 rounded bg-brand-soft px-2 py-1 text-[10px] font-semibold text-brand"
-                            >
-                              {item.title}
+                            <div key={item.id}>
+                              <span
+                                className="mx-auto mt-1 block h-1.5 w-1.5 rounded-full bg-brand sm:hidden"
+                                title={item.title}
+                              />
+                              <div className="mt-1 hidden truncate rounded bg-brand-soft px-2 py-1 text-[10px] font-semibold text-brand sm:block">
+                                {item.title}
+                              </div>
                             </div>
                           ))}
                       </>

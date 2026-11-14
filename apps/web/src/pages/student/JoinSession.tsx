@@ -23,6 +23,11 @@ import { Button } from '../../components/ui/Button';
 import { api } from '../../lib/api';
 import { socket } from '../../lib/socket';
 import { DEFAULT_RTC_CONFIG, getRtcConfig } from '../../lib/rtc';
+import {
+  enterFullscreenIfSupported,
+  isCameraOnlyDevice,
+  pickRecorderMimeType,
+} from '../../lib/device';
 import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -118,6 +123,21 @@ const captureEntireScreen = async () => {
     .applyConstraints({ frameRate: { ideal: 15, max: 20 } })
     .catch(() => undefined);
   return screen;
+};
+/** Camera-only mode (phones/tablets): the front camera stands in for the screen. */
+const captureCameraFeed = async () => {
+  const camera = await navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: 'user',
+      width: { ideal: 640 },
+      height: { ideal: 480 },
+      frameRate: { ideal: 15, max: 20 },
+    },
+    audio: false,
+  });
+  const track = camera.getVideoTracks()[0];
+  if (track) track.contentHint = 'motion';
+  return camera;
 };
 type DesktopLockdown = {
   startLockdown(policy: {
@@ -216,6 +236,8 @@ export default function JoinSession() {
   const [screenShareLost, setScreenShareLost] = useState(false);
   const [multipleDisplays, setMultipleDisplays] = useState(false);
   const [captureAttempt, setCaptureAttempt] = useState(0);
+  // Phones/tablets cannot share the screen: proctor through the camera instead.
+  const [cameraOnly] = useState(isCameraOnlyDevice);
   const restartScreenShare = useRef<(() => Promise<void>) | null>(null);
   const mySubjects = useQuery({
     queryKey: ['student-subjects'],
@@ -295,7 +317,8 @@ export default function JoinSession() {
         'Confirm that you understand the monitoring requirements.'
       );
     try {
-      await document.documentElement.requestFullscreen();
+      if (cameraOnly) await enterFullscreenIfSupported();
+      else await document.documentElement.requestFullscreen();
       const joined = (
         await api.post('/sessions/join', {
           roomCode: code.trim().toUpperCase(),
@@ -332,7 +355,9 @@ export default function JoinSession() {
     } catch {
       if (document.fullscreenElement) await document.exitFullscreen();
       setNotice(
-        'The assessment room could not be entered. Allow fullscreen and try again.'
+        cameraOnly
+          ? 'The assessment room could not be entered. Check your connection and try again.'
+          : 'The assessment room could not be entered. Allow fullscreen and try again.'
       );
     }
   };
@@ -458,6 +483,7 @@ export default function JoinSession() {
       socket.emit('screen:state', {
         sharing:
           screenStream.current?.getVideoTracks()[0]?.readyState === 'live',
+        source: cameraOnly ? 'camera' : 'screen',
       });
     let displaysReported = false;
     // Window Management API (Chromium): isExtended is true when more than one
@@ -540,9 +566,11 @@ export default function JoinSession() {
         // effect pass. Yield once so that pass cannot open a second picker.
         await Promise.resolve();
         if (!active) return;
-        if (!document.fullscreenElement)
+        if (cameraOnly) await enterFullscreenIfSupported();
+        else if (!document.fullscreenElement)
           await document.documentElement.requestFullscreen();
-        let screen = await captureEntireScreen();
+        const captureFeed = cameraOnly ? captureCameraFeed : captureEntireScreen;
+        let screen = await captureFeed();
         if (!active) {
           screen.getTracks().forEach((track) => track.stop());
           return;
@@ -594,19 +622,16 @@ export default function JoinSession() {
                 frameEncoding = false;
               }
             },
-            'image/webp',
-            0.45
+            // Safari cannot encode WebP; camera frames compress well as JPEG.
+            cameraOnly ? 'image/jpeg' : 'image/webp',
+            cameraOnly ? 0.6 : 0.45
           );
         };
         sendScreenFrame();
         // WebRTC is the primary live feed. These low-rate images are only sent
         // while the server reports a viewer whose peer connection failed.
         timers.current.push(window.setInterval(sendScreenFrame, 1000));
-        const preferredMimeType = [
-          'video/webm;codecs=vp8,opus',
-          'video/webm;codecs=vp8',
-          'video/webm',
-        ].find((type) => MediaRecorder.isTypeSupported(type));
+        const preferredMimeType = pickRecorderMimeType();
         type Segment = { blob: Blob; startedAt: Date; endedAt: Date };
         type PendingEvidence = {
           eventId: string;
@@ -627,7 +652,12 @@ export default function JoinSession() {
           form.append('phase', phase);
           form.append('startedAt', segment.startedAt.toISOString());
           form.append('endedAt', segment.endedAt.toISOString());
-          form.append('clip', segment.blob, `${phase.toLowerCase()}.webm`);
+          const extension = segment.blob.type.includes('mp4') ? 'mp4' : 'webm';
+          form.append(
+            'clip',
+            segment.blob,
+            `${phase.toLowerCase()}.${extension}`
+          );
           recordingUploads.current = recordingUploads.current
             .then(() => api.post(`/sessions/${id}/evidence-clips`, form))
             .catch(() => {
@@ -660,7 +690,9 @@ export default function JoinSession() {
           };
           segmentRecorder.onstop = () => {
             const segment: Segment = {
-              blob: new Blob(chunks, { type: 'video/webm' }),
+              blob: new Blob(chunks, {
+                type: (segmentRecorder.mimeType || 'video/webm').split(';')[0]!,
+              }),
               startedAt,
               endedAt: new Date(),
             };
@@ -746,7 +778,7 @@ export default function JoinSession() {
           .getVideoTracks()[0]
           ?.addEventListener('ended', onScreenEnded, { once: true });
         restartScreenShare.current = async () => {
-          const next = await captureEntireScreen();
+          const next = await captureFeed();
           if (!active) {
             next.getTracks().forEach((track) => track.stop());
             return;
@@ -773,16 +805,22 @@ export default function JoinSession() {
           if (recorder.current?.state !== 'recording') recordSegment();
         };
         if (exam.exam.requireCamera) {
-          cameraStream.current = await navigator.mediaDevices.getUserMedia({
-            video: { frameRate: { ideal: 15, max: 20 } },
-            audio: false,
-          });
-          const video = document.createElement('video');
-          video.srcObject = cameraStream.current;
-          video.muted = true;
-          await video.play().catch((error: DOMException) => {
-            if (error.name !== 'AbortError') throw error;
-          });
+          // In camera-only mode the proctoring feed already is the camera;
+          // phones often refuse to open the same camera twice.
+          let video = screenVideo;
+          if (!cameraOnly) {
+            cameraStream.current = await navigator.mediaDevices.getUserMedia({
+              video: { frameRate: { ideal: 15, max: 20 } },
+              audio: false,
+            });
+            video = document.createElement('video');
+            video.srcObject = cameraStream.current;
+            video.muted = true;
+            video.playsInline = true;
+            await video.play().catch((error: DOMException) => {
+              if (error.name !== 'AbortError') throw error;
+            });
+          }
           const sample = () => {
             const canvas = document.createElement('canvas');
             canvas.width = 640;
@@ -865,7 +903,9 @@ export default function JoinSession() {
       } catch {
         if (!active) return;
         setNotice(
-          'Required screen, camera, or microphone permission was not granted.'
+          cameraOnly
+            ? 'Camera access is required to take this assessment on a phone or tablet. Allow camera (and microphone if asked) in your browser settings.'
+            : 'Required screen, camera, or microphone permission was not granted.'
         );
         if (!screenStream.current) {
           // Without a screen share the attempt cannot be proctored: block the
@@ -908,7 +948,7 @@ export default function JoinSession() {
       screenStream.current = null;
       socket.disconnect();
     };
-  }, [exam, submitted, captureAttempt]);
+  }, [exam, submitted, captureAttempt, cameraOnly]);
 
   useEffect(() => {
     if (!exam || submitted || !desktopLockdown) return;
@@ -1259,11 +1299,23 @@ export default function JoinSession() {
                     </p>
                   </div>
                   <div className="space-y-3 text-sm">
+                    {cameraOnly && (
+                      <p className="flex gap-2 rounded-xl border border-sky-200 bg-sky-50 p-3 text-sky-900">
+                        <Camera className="shrink-0 text-sky-600" size={18} />
+                        <span>
+                          <b>Phone/tablet mode.</b> Screen sharing is not
+                          available on mobile browsers, so your front camera
+                          is used for live monitoring and evidence instead. Keep
+                          your face visible and stay in this browser tab —
+                          switching apps or tabs is recorded.
+                        </span>
+                      </p>
+                    )}
                     <p className="flex gap-2 rounded-xl border border-violet-200 bg-violet-50 p-3 text-violet-900">
                       <Clock3 className="shrink-0 text-violet-600" size={18} />
                       <span>
                         A {preview.durationMinutes}-minute timer appears inside
-                        the room and begins only after you enter fullscreen.
+                        the room and begins once you enter the room.
                         Fullscreen exits and tab switches do not pause it. Your
                         saved time resumes after an accidental shutdown, but the
                         scheduled closing time remains the final deadline.
@@ -1271,9 +1323,9 @@ export default function JoinSession() {
                     </p>
                     <p className="flex gap-2">
                       <Monitor className="shrink-0 text-brand" size={18} />
-                      This assessment is monitored and will enter fullscreen
-                      automatically. Leaving fullscreen blocks the exam and is
-                      recorded.
+                      {cameraOnly
+                        ? 'This assessment is monitored. Fullscreen is used where your browser supports it, and leaving it is recorded.'
+                        : 'This assessment is monitored and will enter fullscreen automatically. Leaving fullscreen blocks the exam and is recorded.'}
                     </p>
                     <p className="flex gap-2">
                       <Camera className="shrink-0 text-brand" size={18} />
@@ -1382,12 +1434,16 @@ export default function JoinSession() {
               <MonitorOff className="mx-auto mb-3" size={38} />
               <h2 className="text-xl font-bold">
                 {screenShareLost
-                  ? 'Screen sharing is required'
+                  ? cameraOnly
+                    ? 'Camera is required'
+                    : 'Screen sharing is required'
                   : 'Disconnect extra displays'}
               </h2>
               <p className="my-3 text-sm text-white/80">
                 {screenShareLost
-                  ? 'Your screen is not being shared and your teacher has been notified. Share your entire screen to continue.'
+                  ? cameraOnly
+                    ? 'On phones and tablets your camera is used for monitoring. It is not active and your teacher has been notified. Turn your camera on to continue.'
+                    : 'Your screen is not being shared and your teacher has been notified. Share your entire screen to continue.'
                   : 'More than one display is connected. Only one screen can be monitored, so disconnect or turn off the other displays to continue. This was reported to your teacher.'}
               </p>
               {screenShareLost && (
@@ -1397,12 +1453,14 @@ export default function JoinSession() {
                       await restartScreenShare.current?.();
                     } catch {
                       setNotice(
-                        'You must share your entire screen to continue.'
+                        cameraOnly
+                          ? 'Allow camera access in your browser settings to continue.'
+                          : 'You must share your entire screen to continue.'
                       );
                     }
                   }}
                 >
-                  Share entire screen
+                  {cameraOnly ? 'Turn camera on' : 'Share entire screen'}
                 </Button>
               )}
             </div>
@@ -1494,28 +1552,29 @@ export default function JoinSession() {
           </div>
         ) : (
           <>
-            <div className="sticky top-0 z-20 mx-auto mb-5 max-w-5xl rounded-2xl border border-white/80 bg-white/90 p-4 shadow-lg backdrop-blur sm:p-5">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
+            <div className="sticky top-0 z-20 mx-auto mb-4 max-w-5xl rounded-2xl border border-white/80 bg-white/90 p-3 shadow-lg backdrop-blur sm:mb-5 sm:p-5">
+              <div className="flex items-start justify-between gap-3 sm:items-center sm:gap-4">
+                <div className="min-w-0">
                   <div className="mb-1 text-xs font-bold uppercase tracking-[0.18em] text-violet-600">
-                    ProctorX secure exam room
+                    ProctorX secure exam room{cameraOnly ? ' · mobile' : ''}
                   </div>
-                  <h1 className="text-xl font-black text-slate-900">
+                  <h1 className="line-clamp-2 text-base font-black text-slate-900 sm:text-xl">
                     {exam.exam.title}
                   </h1>
                   {exam.exam.instructions && (
-                    <p className="mt-1 max-w-2xl text-sm text-slate-600">
+                    <p className="mt-1 line-clamp-2 max-w-2xl text-xs text-slate-600 sm:line-clamp-none sm:text-sm">
                       {exam.exam.instructions}
                     </p>
                   )}
                 </div>
                 <div
-                  className={`min-w-44 rounded-2xl px-5 py-3 text-center text-white shadow-lg ${remainingSeconds <= 60 ? 'animate-pulse bg-gradient-to-r from-rose-600 to-red-500' : remainingSeconds <= 300 ? 'bg-gradient-to-r from-amber-500 to-orange-500' : 'bg-gradient-to-r from-violet-600 to-indigo-600'}`}
+                  className={`shrink-0 rounded-2xl px-3 py-2 text-center sm:min-w-44 sm:px-5 sm:py-3 text-white shadow-lg ${remainingSeconds <= 60 ? 'animate-pulse bg-gradient-to-r from-rose-600 to-red-500' : remainingSeconds <= 300 ? 'bg-gradient-to-r from-amber-500 to-orange-500' : 'bg-gradient-to-r from-violet-600 to-indigo-600'}`}
                 >
                   <div className="flex items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-widest text-white/80">
-                    <Clock3 size={14} /> Time remaining
+                    <Clock3 size={14} />
+                    <span className="hidden sm:inline">Time remaining</span>
                   </div>
-                  <div className="mt-1 font-mono text-2xl font-black tabular-nums">
+                  <div className="mt-0.5 font-mono text-lg font-black tabular-nums sm:mt-1 sm:text-2xl">
                     {formatCountdown(remainingSeconds)}
                   </div>
                 </div>
@@ -1551,7 +1610,7 @@ export default function JoinSession() {
                   <iframe
                     title={exam.exam.title}
                     src={exam.exam.externalFormUrl}
-                    className="h-[calc(100vh-190px)] min-h-[600px] w-full"
+                    className="h-[calc(100dvh-190px)] min-h-[480px] w-full"
                     sandbox="allow-forms allow-scripts allow-same-origin allow-popups"
                     referrerPolicy="strict-origin-when-cross-origin"
                   />

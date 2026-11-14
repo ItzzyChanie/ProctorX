@@ -4,11 +4,11 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
+import { ResponsiveChart } from '../../components/charts/ResponsiveChart';
 import { Clock3, Target, TrendingUp } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
@@ -100,7 +100,7 @@ export default function ProgressAnalytics() {
             title="Performance filters"
             subtitle="Analyze confirmed results by subject, semester, and term"
           />
-          <div className="mt-4 grid gap-2 md:grid-cols-3">
+          <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-3">
             <select
               value={subjectId}
               onChange={(e) => setSubjectId(e.target.value)}
@@ -170,7 +170,7 @@ export default function ProgressAnalytics() {
                 subtitle="Confirmed scores in submission order"
               />
               {attempts.length ? (
-                <ResponsiveContainer width="100%" height={280}>
+                <ResponsiveChart width="100%" height={280}>
                   <AreaChart data={attempts}>
                     <CartesianGrid vertical={false} stroke={palette.border} />
                     <XAxis dataKey="examTitle" {...axisProps(palette)} />
@@ -184,7 +184,7 @@ export default function ProgressAnalytics() {
                       fillOpacity={0.2}
                     />
                   </AreaChart>
-                </ResponsiveContainer>
+                </ResponsiveChart>
               ) : (
                 <p className="text-sm text-text-2">
                   No confirmed results match these filters.

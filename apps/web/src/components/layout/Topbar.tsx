@@ -1,11 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, Check, Moon, Sun } from 'lucide-react';
+import {
+  Bell,
+  Check,
+  LogOut,
+  Menu,
+  Moon,
+  MoreVertical,
+  Sun,
+  User,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { useTheme } from '../../lib/useTheme';
 import type { Role } from '../../types/dashboard';
 import { notificationSocket } from '../../lib/socket';
+import { useAuthStore } from '../../store/authStore';
 
 type TopbarProps = {
   role: Role;
@@ -13,6 +23,9 @@ type TopbarProps = {
   userName: string;
   userTag: string;
   profilePicture?: string | null;
+  /** Drawer state for phones/tablets (hamburger button). */
+  menuOpen?: boolean;
+  onMenuToggle?: () => void;
 };
 type Notification = {
   id: string;
@@ -43,7 +56,12 @@ export function Topbar({
   userName,
   userTag,
   profilePicture,
+  menuOpen = false,
+  onMenuToggle,
 }: TopbarProps) {
+  const { signOut } = useAuthStore();
+  const [moreOpen, setMoreOpen] = useState(false);
+  const morePanel = useRef<HTMLDivElement>(null);
   const { dark, toggleDark } = useTheme();
   const client = useQueryClient();
   const navigate = useNavigate();
@@ -103,6 +121,30 @@ export function Topbar({
     };
   }, [notificationsOpen]);
 
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!morePanel.current?.contains(event.target as Node))
+        setMoreOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMoreOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [moreOpen]);
+
+  const logout = async () => {
+    setMoreOpen(false);
+    await api.post('/auth/logout').catch(() => undefined);
+    signOut();
+    navigate('/');
+  };
+
   const initials = userName
     .split(' ')
     .map((word) => word[0])
@@ -111,21 +153,33 @@ export function Topbar({
 
   return (
     <div
-      className="app-topbar z-10 flex h-[84px] shrink-0 items-center justify-between border-b border-border px-5 backdrop-blur-glass sm:px-8"
+      className="app-topbar z-30 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border px-3 backdrop-blur-glass sm:h-[84px] sm:px-8"
       style={{ background: 'var(--surface)' }}
     >
-      <div>
-        <div className="font-body text-[10px] font-bold uppercase tracking-[0.14em] text-brand">
-          {role}
-        </div>
-        <div className="font-head text-[20px] font-bold tracking-tight text-text-1">
-          {pageTitle}
+      <div className="flex min-w-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={onMenuToggle}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] text-text-2 hover:bg-brand-soft hover:text-brand lg:hidden"
+          aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+          aria-expanded={menuOpen}
+          aria-controls="app-sidebar"
+        >
+          <Menu size={22} />
+        </button>
+        <div className="min-w-0">
+          <div className="font-body text-[10px] font-bold uppercase tracking-[0.14em] text-brand">
+            {role}
+          </div>
+          <div className="truncate font-head text-[17px] font-bold tracking-tight text-text-1 sm:text-[20px]">
+            {pageTitle}
+          </div>
         </div>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-2 sm:gap-3">
         <button
           onClick={toggleDark}
-          className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-[10px] border border-border bg-surface text-text-2 transition-colors hover:bg-brand-soft hover:text-brand"
+          className="hidden h-9 w-9 cursor-pointer sm:flex items-center justify-center rounded-[10px] border border-border bg-surface text-text-2 transition-colors hover:bg-brand-soft hover:text-brand"
           aria-label={dark ? 'Use light mode' : 'Use dark mode'}
         >
           {dark ? <Sun size={16} /> : <Moon size={16} />}
@@ -150,7 +204,7 @@ export function Topbar({
             <div
               role="dialog"
               aria-label="Notifications"
-              className="absolute right-0 top-12 z-50 w-[min(380px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-border bg-surface shadow-raised"
+              className="fixed inset-x-3 top-[68px] z-50 overflow-hidden sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-[min(380px,calc(100vw-2rem))] rounded-2xl border border-border bg-surface shadow-raised"
             >
               <div className="flex items-center justify-between border-b border-border px-4 py-3">
                 <div>
@@ -167,7 +221,7 @@ export function Topbar({
                   </span>
                 )}
               </div>
-              <div className="max-h-[min(480px,70vh)] overflow-y-auto">
+              <div className="max-h-[min(480px,70dvh)] overflow-y-auto">
                 {isLoading && (
                   <div className="px-4 py-8 text-center text-sm text-text-3">
                     Loading notifications…
@@ -225,7 +279,85 @@ export function Topbar({
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2.5 border-l border-border pl-2.5">
+        <div className="relative sm:hidden" ref={morePanel}>
+          <button
+            type="button"
+            onClick={() => setMoreOpen((open) => !open)}
+            className="flex h-9 w-9 items-center justify-center rounded-[10px] border border-border bg-surface text-text-2 hover:bg-brand-soft hover:text-brand"
+            aria-label="More options"
+            aria-expanded={moreOpen}
+            aria-haspopup="menu"
+          >
+            <MoreVertical size={17} />
+          </button>
+          {moreOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 top-11 z-50 w-[min(260px,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-border bg-surface shadow-raised"
+            >
+              <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+                <div
+                  className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full font-head text-[13px] font-bold text-white"
+                  style={{ background: 'var(--brand-gradient)' }}
+                >
+                  {profilePicture ? (
+                    <img
+                      src={profilePicture}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    initials
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-semibold text-text-1">
+                    {userName}
+                  </div>
+                  <div className="truncate text-[11px] text-text-3">
+                    {userTag}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMoreOpen(false);
+                  navigate(`/${role}/profile`);
+                }}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left text-[13.5px] text-text-1 hover:bg-brand-soft"
+              >
+                <User size={16} className="text-text-3" /> Profile & settings
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  toggleDark();
+                  setMoreOpen(false);
+                }}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left text-[13.5px] text-text-1 hover:bg-brand-soft"
+              >
+                {dark ? (
+                  <Sun size={16} className="text-text-3" />
+                ) : (
+                  <Moon size={16} className="text-text-3" />
+                )}
+                {dark ? 'Light mode' : 'Dark mode'}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={logout}
+                className="flex w-full items-center gap-3 border-t border-border px-4 py-3 text-left text-[13.5px] text-risk-high hover:bg-brand-soft"
+              >
+                <LogOut size={16} /> Logout
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="hidden items-center gap-2.5 border-l border-border pl-2.5 sm:flex">
           <div
             className="flex h-[34px] w-[34px] items-center justify-center overflow-hidden rounded-full font-head text-[13px] font-bold text-white shadow-glow"
             style={{ background: 'var(--brand-gradient)' }}
