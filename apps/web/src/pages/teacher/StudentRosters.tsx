@@ -278,7 +278,7 @@ export default function StudentRosters() {
                   <tr key={s.id} className="border-b border-border">
                     <td className="px-3 py-3">
                       {s.profilePicture ? (
-                        <img
+                        <img alt=""
                           src={assetSrc(s.profilePicture)}
                           className="h-8 w-8 rounded-full object-cover"
                         />

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import LandingPage from './Frontend/landing-page/LandingPage';
+import { ErrorBoundary, RouteErrorBoundary } from './components/ErrorBoundary';
 import {
   ChangePasswordRoute,
   ProtectedRoute,
@@ -125,6 +126,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <SessionBootstrap>
+        <RouteErrorBoundary>
         <Routes>
           <Route path="/" element={<HomeRoute />} />
           <Route path="/get-started" element={<GetStartedPage />} />
@@ -134,7 +136,14 @@ export default function App() {
 
           <Route element={<ProtectedRoute roles={[Role.STUDENT]} />}>
             <Route path="/student" element={<StudentDashboard />} />
-            <Route path="/student/join" element={<JoinSession />} />
+            <Route
+              path="/student/join"
+              element={
+                <ErrorBoundary variant="exam">
+                  <JoinSession />
+                </ErrorBoundary>
+              }
+            />
             <Route path="/student/sessions" element={<MySessions />} />
             <Route path="/student/sessions/:sessionId/result" element={<ExamResult />} />
             <Route path="/student/calendar" element={<AssessmentCalendar />} />
@@ -179,6 +188,7 @@ export default function App() {
             />
           </Route>
         </Routes>
+        </RouteErrorBoundary>
       </SessionBootstrap>
     </BrowserRouter>
   );

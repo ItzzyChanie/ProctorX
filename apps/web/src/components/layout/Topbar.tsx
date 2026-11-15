@@ -363,7 +363,7 @@ export function Topbar({
             style={{ background: 'var(--brand-gradient)' }}
           >
             {profilePicture ? (
-              <img
+              <img alt="Your profile picture"
                 src={assetSrc(profilePicture)}
                 className="h-full w-full object-cover"
               />

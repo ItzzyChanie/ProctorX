@@ -749,7 +749,7 @@ export default function StudentLists({ role }: { role: Role }) {
                       </td>
                       <td className="px-5 py-4">
                         {student.profilePicture ? (
-                          <img
+                          <img alt=""
                             src={assetSrc(student.profilePicture)}
                             className="h-9 w-9 rounded-full object-cover"
                           />
@@ -1172,7 +1172,7 @@ export default function StudentLists({ role }: { role: Role }) {
                   Profile Picture (optional)
                 </span>
                 {form.profilePicture && (
-                  <img
+                  <img alt="Profile picture preview"
                     src={assetSrc(form.profilePicture)}
                     className="mb-2 h-16 w-16 rounded-full object-cover"
                   />
@@ -1290,7 +1290,7 @@ export default function StudentLists({ role }: { role: Role }) {
             <label className="mt-3 block text-sm text-text-2">
               Profile Picture (optional)
               {editForm.profilePicture && (
-                <img
+                <img alt="Profile picture preview"
                   src={assetSrc(editForm.profilePicture)}
                   className="my-2 h-20 w-20 rounded-full object-cover"
                 />

@@ -1740,7 +1740,9 @@ export default function JoinSession() {
                           (option: any, optionIndex: number) => (
                             <label
                               key={option.id}
-                              className={`mb-3 flex cursor-pointer items-center gap-3 rounded-xl border p-4 text-sm font-medium transition-all sm:text-base ${
+                              // The radio itself is visually hidden, so show
+                              // keyboard focus on the whole option card.
+                              className={`mb-3 flex cursor-pointer items-center gap-3 rounded-xl border p-4 text-sm font-medium transition-all focus-within:outline-none focus-within:ring-4 focus-within:ring-violet-400 sm:text-base ${
                                 answers[question.id]?.selectedOptionIds?.[0] ===
                                 option.id
                                   ? 'border-violet-500 bg-violet-50 text-violet-950 shadow-sm ring-2 ring-violet-100'

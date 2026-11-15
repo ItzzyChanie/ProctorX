@@ -967,7 +967,7 @@ export default function Classes() {
                   {active.subject.name} · {questions.length} items
                 </p>
               </div>
-              <button onClick={close}>
+              <button type="button" aria-label="Close" onClick={close}>
                 <X />
               </button>
             </div>
