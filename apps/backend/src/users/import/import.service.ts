@@ -10,6 +10,7 @@ import * as XLSX from 'xlsx';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateStudentDto } from '../dto/create-student.dto';
 import { generateDefaultPassword } from './password.util';
+import { AvatarsService } from '../../avatars/avatars.service';
 
 const columns = [
   'Student ID',
@@ -24,7 +25,10 @@ type SpreadsheetRow = Record<(typeof columns)[number], unknown>;
 
 @Injectable()
 export class ImportService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private avatars: AvatarsService
+  ) {}
 
   private async institutionFor(userId: string) {
     const user = await this.prisma.user.findUnique({
@@ -111,7 +115,7 @@ export class ImportService {
         loginId: studentId,
         email,
         fullName,
-        profilePicture: input.profilePicture,
+        profilePicture: await this.avatars.resolve(input.profilePicture),
         passwordHash: await bcrypt.hash(initialPassword, 12),
         status: AccountStatus.PENDING,
         mustChangePassword: true,

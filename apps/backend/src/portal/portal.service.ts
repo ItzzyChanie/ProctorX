@@ -19,6 +19,8 @@ import * as XLSX from 'xlsx';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsGateway } from '../sessions/sessions.gateway';
+import { SessionRevocationService } from '../auth/session-revocation.service';
+import { AvatarsService } from '../avatars/avatars.service';
 import { generateDefaultPassword } from '../users/import/password.util';
 import { ROLE_DEFAULT_PERMISSIONS } from '../common/constants/role-permissions';
 import {
@@ -74,7 +76,9 @@ export class PortalService {
   constructor(
     private prisma: PrismaService,
     private gateway: SessionsGateway,
-    private ai: AiService
+    private ai: AiService,
+    private revocation: SessionRevocationService,
+    private avatars: AvatarsService
   ) {}
 
   async academicPeriods(institutionId?: string | null) {
@@ -1378,7 +1382,7 @@ export class PortalService {
             .filter(Boolean)
             .map((value) => value!.trim())
             .join(' '),
-          profilePicture: input.profilePicture,
+          profilePicture: await this.avatars.resolve(input.profilePicture),
           passwordHash: await bcrypt.hash(initialPassword, 12),
           status: AccountStatus.PENDING,
           mustChangePassword: true,
@@ -1430,14 +1434,16 @@ export class PortalService {
     });
 
     if (!exists) throw new NotFoundException('Faculty member not found');
+    const profilePicture = await this.avatars.resolve(
+      input.profilePicture,
+      exists.profilePicture
+    );
     const user = await this.prisma.user.update({
       where: { id },
       data: {
         fullName: input.fullName.trim(),
         email: input.email.trim().toLowerCase(),
-        ...(input.profilePicture !== undefined
-          ? { profilePicture: input.profilePicture || null }
-          : {}),
+        ...(profilePicture !== undefined ? { profilePicture } : {}),
         ...(exists.role === Role.DEAN
           ? {
               deanProfile: {
@@ -1462,6 +1468,7 @@ export class PortalService {
             }),
       },
     });
+    await this.avatars.discard(exists.profilePicture, profilePicture);
     await this.prisma.auditLog.create({
       data: {
         actorId: deanId,
@@ -1493,6 +1500,8 @@ export class PortalService {
       where: { id },
       data: { status, isActive: status === 'ACTIVE' },
     });
+    // A disabled faculty member is signed out everywhere immediately.
+    if (status === 'DISABLED') await this.revocation.revokeUser(id);
     await this.prisma.auditLog.create({
       data: {
         actorId: deanId,

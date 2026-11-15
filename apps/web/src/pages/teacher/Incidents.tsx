@@ -27,7 +27,7 @@ import type { LucideIcon } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { api } from '../../lib/api';
+import { api, assetSrc } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 
 type IncidentEvent = {
@@ -413,7 +413,7 @@ export default function Incidents() {
                 <span className="flex min-w-0 items-center gap-3">
                   {report.student.profilePicture ? (
                     <img
-                      src={report.student.profilePicture}
+                      src={assetSrc(report.student.profilePicture)}
                       alt=""
                       className="h-10 w-10 shrink-0 rounded-xl object-cover"
                     />
@@ -623,7 +623,7 @@ function IncidentModal({
           <div className="flex min-w-0 gap-3">
             {report.student.profilePicture ? (
               <img
-                src={report.student.profilePicture}
+                src={assetSrc(report.student.profilePicture)}
                 alt=""
                 className="h-11 w-11 shrink-0 rounded-xl object-cover"
               />

@@ -6,6 +6,8 @@ import {
 import { Role } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { SessionRevocationService } from '../auth/session-revocation.service';
+import { AvatarsService } from '../avatars/avatars.service';
 import { StudentQueryDto } from './dto/student-query.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
 import { CreateSectionDto } from './dto/create-section.dto';
@@ -17,7 +19,11 @@ import {
 
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private revocation: SessionRevocationService,
+    private avatars: AvatarsService
+  ) {}
   private async institutionFor(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -32,6 +38,10 @@ export class UsersService {
       where: {
         role: Role.STUDENT,
         institutionId,
+        // Teachers only see students enrolled in their own subjects.
+        ...(actorRole === Role.TEACHER
+          ? { enrollments: { some: { subject: { teacherId: actorId } } } }
+          : {}),
         studentProfile: {
           is: {
             program: query.program,
@@ -306,14 +316,16 @@ export class UsersService {
     });
 
     if (!exists) throw new NotFoundException('Student not found');
+    const profilePicture = await this.avatars.resolve(
+      input.profilePicture,
+      exists.profilePicture
+    );
     const user = await this.prisma.user.update({
       where: { id },
       data: {
         fullName: input.fullName,
         email: input.email?.toLowerCase(),
-        ...(input.profilePicture !== undefined
-          ? { profilePicture: input.profilePicture || null }
-          : {}),
+        ...(profilePicture !== undefined ? { profilePicture } : {}),
         ...(input.newPassword
           ? {
               passwordHash: await bcrypt.hash(input.newPassword, 12),
@@ -325,6 +337,9 @@ export class UsersService {
         },
       },
     });
+    await this.avatars.discard(exists.profilePicture, profilePicture);
+    // A password reset by the dean signs the student out everywhere.
+    if (input.newPassword) await this.revocation.revokeUser(id);
 
     await this.prisma.auditLog.create({
       data: {
@@ -357,6 +372,8 @@ export class UsersService {
       where: { id },
       data: { status, isActive: status === 'ACTIVE' },
     });
+    // A disabled student is signed out everywhere immediately.
+    if (status === 'DISABLED') await this.revocation.revokeUser(id);
     await this.prisma.auditLog.create({
       data: {
         actorId,

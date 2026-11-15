@@ -13,7 +13,7 @@ import axios from "axios"
 import { DashboardLayout } from "../../components/layout/DashboardLayout"
 import { Card, CardHeader } from "../../components/ui/Card"
 import { Button } from "../../components/ui/Button"
-import { api } from "../../lib/api"
+import { api, assetSrc } from "../../lib/api"
 import { useAuthStore } from "../../store/authStore"
 import type { User } from "@proctorx/shared-types"
 
@@ -493,7 +493,7 @@ export default function Departments() {
                   <td className="p-3">
                     {x.profilePicture ? (
                       <img
-                        src={x.profilePicture}
+                        src={assetSrc(x.profilePicture)}
                         className="h-9 w-9 rounded-full object-cover"
                       />
                     ) : (
@@ -955,7 +955,7 @@ function ImageInput({
     <label className="block text-sm">
       Profile Picture (optional)
       {value && (
-        <img src={value} className="my-2 h-20 w-20 rounded-full object-cover" />
+        <img src={assetSrc(value)} className="my-2 h-20 w-20 rounded-full object-cover" />
       )}
       <input
         type="file"

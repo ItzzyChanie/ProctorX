@@ -28,6 +28,13 @@ export type QuestionCounts = Record<
 @Injectable()
 export class AiService {
   constructor(private config: ConfigService) {}
+  private baseUrl() {
+    return this.config.get<string>('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000';
+  }
+  /** No insecure default: main.ts refuses to boot without INTERNAL_API_KEY. */
+  private apiKey() {
+    return this.config.getOrThrow<string>('INTERNAL_API_KEY');
+  }
   async scoreReduced(
     sessionId: string,
     studentId: string,
@@ -50,7 +57,7 @@ export class AiService {
   ) {
     try {
       const { data } = await axios.post(
-        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/fuzzy/score`,
+        `${this.baseUrl()}/v1/fuzzy/score`,
         {
           session_id: sessionId,
           student_id: studentId,
@@ -60,7 +67,7 @@ export class AiService {
         {
           headers: {
             'X-Internal-Api-Key':
-              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+              this.apiKey(),
           },
           timeout: 5000,
         }
@@ -91,12 +98,12 @@ export class AiService {
     );
     try {
       const { data } = await axios.post(
-        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/analysis/${kind}`,
+        `${this.baseUrl()}/v1/analysis/${kind}`,
         form,
         {
           headers: {
             'X-Internal-Api-Key':
-              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+              this.apiKey(),
           },
           timeout: 8000,
         }
@@ -111,12 +118,12 @@ export class AiService {
   async requestReport(payload: unknown, format: 'pdf' | 'html' | 'excel') {
     try {
       const { data } = await axios.post(
-        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/jobs/reports`,
+        `${this.baseUrl()}/v1/jobs/reports`,
         { payload, format },
         {
           headers: {
             'X-Internal-Api-Key':
-              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+              this.apiKey(),
           },
           timeout: 5000,
         }
@@ -131,11 +138,11 @@ export class AiService {
   async jobStatus(jobId: string) {
     try {
       const { data } = await axios.get(
-        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/jobs/${jobId}`,
+        `${this.baseUrl()}/v1/jobs/${jobId}`,
         {
           headers: {
             'X-Internal-Api-Key':
-              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+              this.apiKey(),
           },
           timeout: 5000,
         }
@@ -169,12 +176,12 @@ export class AiService {
     form.append('counts', JSON.stringify(counts));
     try {
       const { data } = await axios.post(
-        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/questions/generate`,
+        `${this.baseUrl()}/v1/questions/generate`,
         form,
         {
           headers: {
             'X-Internal-Api-Key':
-              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+              this.apiKey(),
           },
           timeout: 135_000,
         }

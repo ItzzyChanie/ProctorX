@@ -49,6 +49,8 @@ test('activation code resend enforces the 30-second cooldown', async () => {
     prisma as never,
     {} as never,
     email as never,
+    {} as never,
+    {} as never,
     {} as never
   );
 

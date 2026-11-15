@@ -5,6 +5,12 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import bcrypt from 'bcrypt';
 import { PortalService } from './portal.service';
 
+// Avatar storage is not under test: behave like "no picture supplied".
+const avatarStub = {
+  resolve: async (input?: string | null) => (input ? input : undefined),
+  discard: async () => undefined,
+};
+
 const inviteInput = {
   email: 'existing@example.edu',
   employeeId: 'FAC-001',
@@ -26,7 +32,7 @@ test('rejects an existing faculty email as a conflict before creation', async ()
       },
     },
   } as any;
-  const service = new PortalService(prisma, {} as any, {} as any);
+  const service = new PortalService(prisma, {} as any, {} as any, {} as any, avatarStub as any);
 
   await assert.rejects(
     service.invite('dean-1', inviteInput),
@@ -47,7 +53,7 @@ test('rejects an existing employee ID as a conflict before creation', async () =
       },
     },
   } as any;
-  const service = new PortalService(prisma, {} as any, {} as any);
+  const service = new PortalService(prisma, {} as any, {} as any, {} as any, avatarStub as any);
 
   await assert.rejects(
     service.invite('dean-1', inviteInput),
@@ -74,7 +80,7 @@ test('uses initials plus @123 for a new faculty account', async () => {
     },
     auditLog: { create: async () => ({}) },
   } as any;
-  const service = new PortalService(prisma, {} as any, {} as any);
+  const service = new PortalService(prisma, {} as any, {} as any, {} as any, avatarStub as any);
 
   const result = await service.invite('dean-1', inviteInput);
   assert.equal(result.initialPassword, 'Emf@123');
@@ -95,7 +101,7 @@ test('creates a normalized department inside the dean institution', async () => 
     },
     auditLog: { create: async () => ({}) },
   } as any;
-  const service = new PortalService(prisma, {} as any, {} as any);
+  const service = new PortalService(prisma, {} as any, {} as any, {} as any, avatarStub as any);
 
   const result = await service.createDepartment('dean-1', {
     code: ' ccs ',
@@ -119,7 +125,7 @@ test('does not allow permission overrides outside the dean institution', async (
       findFirst: async () => null,
     },
   } as any;
-  const service = new PortalService(prisma, {} as any, {} as any);
+  const service = new PortalService(prisma, {} as any, {} as any, {} as any, avatarStub as any);
 
   await assert.rejects(
     service.setPermissionOverride('dean-1', 'outside-faculty', {

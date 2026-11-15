@@ -212,7 +212,7 @@ model User {
   examSessions          ExamSession[]
   auditLogs             AuditLog[]
   notifications         Notification[]
-  studentLoginSession   StudentLoginSession?
+  loginSessions         LoginSession[]
   requestedReports      GeneratedReport[]
   questionBankItems     QuestionBankItem[]
   examStudentOverrides  ExamStudentOverride[]
@@ -223,16 +223,20 @@ model User {
   @@map("users")
 }
 
-model StudentLoginSession {
+/// One row per signed-in browser for every role. A JWT is valid only while its
+/// `jti` matches a row here, so logout / password change / account disable
+/// revoke access immediately. Students are limited to one live row.
+model LoginSession {
   id         String   @id
-  userId     String   @unique
+  userId     String
   createdAt  DateTime @default(now())
   lastSeenAt DateTime @default(now())
   expiresAt  DateTime
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
   @@index([expiresAt])
-  @@map("student_login_sessions")
+  @@map("login_sessions")
 }
 
 model DeanProfile {

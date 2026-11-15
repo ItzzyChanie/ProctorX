@@ -7,10 +7,12 @@ import {
 import { AccountStatus, Prisma, Role } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcrypt';
-import { randomUUID } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from './email.service';
 import { AuthGateway } from './auth.gateway';
+import { SessionRevocationService } from './session-revocation.service';
+import { AvatarsService } from '../avatars/avatars.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ROLE_DEFAULT_PERMISSIONS } from '../common/constants/role-permissions';
 
@@ -36,72 +38,72 @@ export class AuthService {
     private prisma: PrismaService,
     private jwt: JwtService,
     private email: EmailService,
-    private gateway: AuthGateway
+    private gateway: AuthGateway,
+    private revocation: SessionRevocationService,
+    private avatars: AvatarsService
   ) {}
 
+  /**
+   * Creates a revocable login session (the JWT `jti`) for every role.
+   * Students may hold only one live session: concurrent sign-ins for the same
+   * account are serialized with a row lock on the user.
+   */
   private async issueToken(user: UserWithProfile) {
-    let sessionId: string | undefined;
+    const sessionId = randomUUID();
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - STUDENT_LEASE_MS);
+    const isStudent = user.role === Role.STUDENT;
 
-    if (user.role === Role.STUDENT) {
-      sessionId = randomUUID();
-      const now = new Date();
-      const staleBefore = new Date(now.getTime() - STUDENT_LEASE_MS);
+    const created = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "users" WHERE "id" = ${user.id} FOR UPDATE`;
+      await tx.loginSession.deleteMany({
+        where: {
+          userId: user.id,
+          OR: [
+            { expiresAt: { lte: now } },
+            ...(isStudent ? [{ lastSeenAt: { lt: staleBefore } }] : []),
+          ],
+        },
+      });
+      if (isStudent && (await tx.loginSession.count({ where: { userId: user.id } })))
+        return false;
+      await tx.loginSession.create({
+        data: {
+          id: sessionId,
+          userId: user.id,
+          expiresAt: new Date(now.getTime() + TOKEN_LIFETIME_MS),
+        },
+      });
+      return true;
+    });
 
-      try {
-        await this.prisma.$transaction(async (tx) => {
-          await tx.studentLoginSession.deleteMany({
-            where: {
-              userId: user.id,
-              OR: [
-                { lastSeenAt: { lt: staleBefore } },
-                { expiresAt: { lte: now } },
-              ],
-            },
-          });
-
-          await tx.studentLoginSession.create({
-            data: {
-              id: sessionId!,
-              userId: user.id,
-              expiresAt: new Date(now.getTime() + TOKEN_LIFETIME_MS),
-            },
-          });
-        });
-      } catch (error) {
-        if (
-          !(error instanceof Prisma.PrismaClientKnownRequestError) ||
-          error.code !== 'P2002'
-        )
-          throw error;
-        const notification = await this.prisma.notification.create({
-          data: {
-            userId: user.id,
-            type: 'SECURITY_DOUBLE_LOGIN_BLOCKED',
-            message:
-              'A sign-in attempt from another browser or device was blocked because this account is already active.',
-          },
-        });
-
-        await this.prisma.auditLog.create({
-          data: {
-            actorId: user.id,
-            action: 'STUDENT_DOUBLE_LOGIN_BLOCKED',
-            targetType: 'User',
-            targetId: user.id,
-          },
-        });
-
-        this.gateway.notifyUser(user.id, notification);
-        throw new ConflictException(
-          'This student account is already active on another browser or device.'
-        );
-      }
+    if (!created) {
+      const notification = await this.prisma.notification.create({
+        data: {
+          userId: user.id,
+          type: 'SECURITY_DOUBLE_LOGIN_BLOCKED',
+          message:
+            'A sign-in attempt from another browser or device was blocked because this account is already active.',
+        },
+      });
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: 'STUDENT_DOUBLE_LOGIN_BLOCKED',
+          targetType: 'User',
+          targetId: user.id,
+        },
+      });
+      this.gateway.notifyUser(user.id, notification);
+      throw new ConflictException(
+        'This student account is already active on another browser or device.'
+      );
     }
     return this.jwt.signAsync({
       sub: user.id,
       role: user.role,
       mustChangePassword: user.mustChangePassword,
-      ...(sessionId ? { jti: sessionId } : {}),
+      jti: sessionId,
     });
   }
 
@@ -125,7 +127,7 @@ export class AuthService {
         return { sent: false, resendAvailableAt };
     }
 
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(randomInt(100000, 1_000_000));
     await this.prisma.activationCode.updateMany({
       where: { userId: user.id, consumedAt: null },
       data: { consumedAt: now },
@@ -337,7 +339,8 @@ export class AuthService {
   async changePassword(
     userId: string,
     currentPassword: string,
-    newPassword: string
+    newPassword: string,
+    currentSessionId?: string
   ) {
     try {
       const user = await this.prisma.user.findUnique({
@@ -346,16 +349,25 @@ export class AuthService {
       });
       if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash)))
         throw new UnauthorizedException('Invalid credentials');
-      return this.profile(
-        await this.prisma.user.update({
-          where: { id: userId },
-          include: profileInclude,
-          data: {
-            passwordHash: await bcrypt.hash(newPassword, 12),
-            mustChangePassword: false,
-          },
-        })
-      );
+      const updated = await this.prisma.user.update({
+        where: { id: userId },
+        include: profileInclude,
+        data: {
+          passwordHash: await bcrypt.hash(newPassword, 12),
+          mustChangePassword: false,
+        },
+      });
+      // Sign out every other browser/device that knew the old password.
+      await this.revocation.revokeUser(userId, currentSessionId);
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: userId,
+          action: 'PASSWORD_CHANGED',
+          targetType: 'User',
+          targetId: userId,
+        },
+      });
+      return this.profile(updated);
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientInitializationError ||
@@ -374,18 +386,21 @@ export class AuthService {
     return this.profile(user);
   }
   async updateProfilePicture(userId: string, profilePicture: string) {
-    if (
-      profilePicture &&
-      !/^data:image\/(png|jpe?g|webp);base64,/.test(profilePicture)
-    )
-      throw new ConflictException('Choose a PNG, JPEG, or WebP image');
-    return this.profile(
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: { profilePicture: profilePicture || null },
-        include: profileInclude,
-      })
+    const current = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { profilePicture: true },
+    });
+    const next = await this.avatars.resolve(
+      profilePicture,
+      current?.profilePicture
     );
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: next === undefined ? {} : { profilePicture: next },
+      include: profileInclude,
+    });
+    await this.avatars.discard(current?.profilePicture, next);
+    return this.profile(user);
   }
 
   async updateProfile(userId: string, input: UpdateProfileDto) {
@@ -432,7 +447,7 @@ export class AuthService {
 
   async heartbeat(userId: string, sessionId?: string) {
     if (!sessionId) throw new UnauthorizedException();
-    const result = await this.prisma.studentLoginSession.updateMany({
+    const result = await this.prisma.loginSession.updateMany({
       where: { userId, id: sessionId, expiresAt: { gt: new Date() } },
       data: { lastSeenAt: new Date() },
     });
@@ -441,12 +456,8 @@ export class AuthService {
     return { success: true };
   }
 
-  async logout(userId: string, sessionId?: string) {
-    if (sessionId) {
-      await this.prisma.studentLoginSession.deleteMany({
-        where: { userId, id: sessionId },
-      });
-    }
+  async logout(_userId: string, sessionId?: string) {
+    if (sessionId) await this.revocation.revokeSession(sessionId);
     return { success: true };
   }
 }

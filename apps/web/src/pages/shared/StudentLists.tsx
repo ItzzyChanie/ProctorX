@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
-import { api } from '../../lib/api';
+import { api, assetSrc } from '../../lib/api';
 import axios from 'axios';
 import { z } from 'zod';
 
@@ -750,7 +750,7 @@ export default function StudentLists({ role }: { role: Role }) {
                       <td className="px-5 py-4">
                         {student.profilePicture ? (
                           <img
-                            src={student.profilePicture}
+                            src={assetSrc(student.profilePicture)}
                             className="h-9 w-9 rounded-full object-cover"
                           />
                         ) : (
@@ -1173,7 +1173,7 @@ export default function StudentLists({ role }: { role: Role }) {
                 </span>
                 {form.profilePicture && (
                   <img
-                    src={form.profilePicture}
+                    src={assetSrc(form.profilePicture)}
                     className="mb-2 h-16 w-16 rounded-full object-cover"
                   />
                 )}
@@ -1291,7 +1291,7 @@ export default function StudentLists({ role }: { role: Role }) {
               Profile Picture (optional)
               {editForm.profilePicture && (
                 <img
-                  src={editForm.profilePicture}
+                  src={assetSrc(editForm.profilePicture)}
                   className="my-2 h-20 w-20 rounded-full object-cover"
                 />
               )}

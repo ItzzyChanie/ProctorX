@@ -4,7 +4,7 @@ import { CheckCircle2, Eye, RotateCcw, Search, Trash2, X, XCircle } from 'lucide
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { api } from '../../lib/api';
+import { api, assetSrc } from '../../lib/api';
 
 type Period = {
   id: string;
@@ -340,7 +340,7 @@ export default function SubmittedExams() {
                         <td className="px-3 py-3">
                           {student.profilePicture ? (
                             <img
-                              src={student.profilePicture}
+                              src={assetSrc(student.profilePicture)}
                               alt=""
                               className="h-9 w-9 rounded-full object-cover"
                             />

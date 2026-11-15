@@ -4,6 +4,7 @@ import { PassportStrategy } from "@nestjs/passport";
 import { ExtractJwt, Strategy } from "passport-jwt";
 import { AccountStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { isLiveLoginSession } from "../common/login-session";
 
 function sessionCookie(request: { headers?: { cookie?: string } }): string | null {
   const value = request.headers?.cookie
@@ -31,7 +32,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         sessionCookie,
       ]),
       ignoreExpiration: false,
-      secretOrKey: config.get<string>("JWT_SECRET") ?? "development-secret",
+      // No fallback: main.ts refuses to start without a strong JWT_SECRET.
+      secretOrKey: config.getOrThrow<string>("JWT_SECRET"),
     });
   }
   async validate(payload: { sub: string; role?: string; jti?: string }) {
@@ -47,11 +49,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     if (!user || !user.isActive || user.status === AccountStatus.DISABLED) throw new UnauthorizedException();
 
-    if (user.role === 'STUDENT') {
-      if (!payload.jti) throw new UnauthorizedException();
-      const session = await this.prisma.studentLoginSession.findUnique({ where: { userId: user.id } });
-      if (!session || session.id !== payload.jti || session.expiresAt <= new Date()) throw new UnauthorizedException();
-    }
+    // Every role must hold a live login session, so logout, password change
+    // and account disable revoke the JWT immediately.
+    if (!(await isLiveLoginSession(this.prisma, user.id, payload.jti)))
+      throw new UnauthorizedException();
     return { ...user, loginSessionId: payload.jti };
   }
 }

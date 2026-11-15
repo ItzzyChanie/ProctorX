@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Camera } from 'lucide-react';
 import { Button } from './ui/Button';
-import { api } from '../lib/api';
+import { api, assetSrc } from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 
 export function ProfilePictureEditor() {
@@ -42,7 +42,7 @@ export function ProfilePictureEditor() {
     <div className="mb-5 flex flex-col items-center gap-3 rounded-xl border border-border p-5">
       <div className="grid h-28 w-28 place-items-center overflow-hidden rounded-full bg-brand-soft text-brand">
         {picture ? (
-          <img src={picture} className="h-full w-full object-cover" />
+          <img src={assetSrc(picture)} className="h-full w-full object-cover" />
         ) : (
           <Camera size={32} />
         )}
