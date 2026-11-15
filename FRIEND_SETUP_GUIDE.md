@@ -222,6 +222,7 @@ Run the last three only after their corresponding development terminals are runn
 | Port 5432, 6379, 4000, 5173, or 8000 is already in use | Close the other program/container using that port, or ask the project owner before changing the port and related `.env` values. |
 | Prisma cannot connect to the database | Confirm Docker is running, use the exact local `DATABASE_URL` above, then run `docker compose up -d` and `npm run db:migrate` again. |
 | AI requests return unauthorized | Make `INTERNAL_API_KEY` identical in `apps\backend\.env` and `apps\ai-service\.env`, then restart both services. |
+| Backend or AI service exits with "must be set to at least 32 characters" | `JWT_SECRET` and `INTERNAL_API_KEY` are required and must be 32+ random characters. Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
 | AI question generation says Gemini is not configured | Put a valid private `GEMINI_API_KEY` in `apps\ai-service\.env`, then restart the AI terminal. |
 | Office-document conversion fails | Install LibreOffice and correct `LIBREOFFICE_PATH`; restart the AI service. |
 | `py -3.11` is not found | Install 64-bit Python 3.11, select **Add Python to PATH**, reopen PowerShell, and retry. |
