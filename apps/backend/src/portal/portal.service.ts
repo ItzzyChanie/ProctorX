@@ -825,14 +825,22 @@ export class PortalService {
                 enrollments: { select: { subjectId: true } },
               },
             },
-            recording: true,
             scoreHistory: { orderBy: { computedAt: 'asc' } },
             events: {
               orderBy: { occurredAt: 'asc' },
               include: {
                 evidenceClips: {
                   where: {
-                    phase: EvidenceClipPhase.CENTERED,
+                    // CENTERED is the current single clip per incident.
+                    // BEFORE/AFTER are from the first clip format (early
+                    // September 2026) and are still valid evidence.
+                    phase: {
+                      in: [
+                        EvidenceClipPhase.CENTERED,
+                        EvidenceClipPhase.BEFORE,
+                        EvidenceClipPhase.AFTER,
+                      ],
+                    },
                     status: EvidenceClipStatus.COMPLETE,
                   },
                   orderBy: { startedAt: 'asc' },
@@ -886,22 +894,6 @@ export class PortalService {
           endedAt: session.endedAt,
           proctorReviewDecision: session.proctorReviewDecision,
           proctorReviewedAt: session.proctorReviewedAt,
-          recording: session.recording
-            ? {
-                status: session.recording.status,
-                durationSec:
-                  session.recording.durationSec ??
-                  (session.endedAt
-                    ? Math.max(
-                        0,
-                        Math.round(
-                          (+session.endedAt - +session.startedAt) / 1000
-                        )
-                      )
-                    : null),
-                playbackUrl: `/teacher/sessions/${session.id}/recording`,
-              }
-            : null,
           scoreTimeline: session.scoreHistory.map((score) => ({
             computedAt: score.computedAt,
             score: score.score,
@@ -912,7 +904,15 @@ export class PortalService {
             type: event.type,
             occurredAt: event.occurredAt,
             intensity: event.intensity,
-            clips: event.evidenceClips.map((clip) => ({
+            // Prefer the centered clip; fall back to legacy before/after parts.
+            clips: (event.evidenceClips.some(
+              (clip) => clip.phase === EvidenceClipPhase.CENTERED
+            )
+              ? event.evidenceClips.filter(
+                  (clip) => clip.phase === EvidenceClipPhase.CENTERED
+                )
+              : event.evidenceClips
+            ).map((clip) => ({
               id: clip.id,
               phase: clip.phase,
               startedAt: clip.startedAt,
@@ -957,21 +957,6 @@ export class PortalService {
       throw new NotFoundException('Evidence clip is not available');
     return clip.storagePath;
   }
-  async recordingFile(teacherId: string, sessionId: string) {
-    const session = await this.prisma.examSession.findFirst({
-      where: {
-        id: sessionId,
-        status: SessionStatus.COMPLETED,
-        exam: { subject: { teacherId } },
-      },
-      include: { recording: true },
-    });
-
-    if (!session?.recording)
-      throw new NotFoundException('Recording is not available');
-    return session.recording.storagePath;
-  }
-
   async raise(userId: string, sessionId: string, reason?: string) {
     const s = await this.prisma.examSession.findFirst({
       where: { id: sessionId, studentId: userId },

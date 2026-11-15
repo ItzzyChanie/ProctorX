@@ -10,11 +10,9 @@ import {
   EventType,
   Prisma,
   QuestionType,
-  RecordingStatus,
   SessionStatus,
 } from '@prisma/client';
 import {
-  appendFile,
   mkdir,
   rename,
   stat,
@@ -587,38 +585,6 @@ export class SessionsService {
       await unlink(temporaryPath).catch(() => undefined);
     }
   }
-  async recording(sessionId: string, studentId: string, chunk: Buffer) {
-    const session = await this.prisma.examSession.findFirst({
-      where: {
-        id: sessionId,
-        studentId,
-        OR: [
-          { status: SessionStatus.IN_PROGRESS },
-          {
-            status: SessionStatus.COMPLETED,
-            endedAt: { gte: new Date(Date.now() - 30_000) },
-          },
-        ],
-      },
-    });
-    if (!session) throw new ForbiddenException();
-    const dir = join(process.cwd(), 'storage', 'recordings');
-    await mkdir(dir, { recursive: true });
-    const path = join(dir, `${sessionId}.webm`);
-    await appendFile(path, chunk);
-    const record = await this.prisma.recording.upsert({
-      where: { sessionId },
-      create: {
-        sessionId,
-        storagePath: path,
-        status: RecordingStatus.UPLOADING,
-        fileSizeBytes: BigInt(chunk.length),
-      },
-      update: { fileSizeBytes: { increment: BigInt(chunk.length) } },
-    });
-    return { id: record.id };
-  }
-
   async monitor(examId: string, teacherId: string) {
     const exam = await this.prisma.exam.findFirst({
       where: { id: examId, subject: { teacherId } },

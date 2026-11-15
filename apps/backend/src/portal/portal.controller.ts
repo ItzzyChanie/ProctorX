@@ -199,19 +199,6 @@ export class PortalController {
     response.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     return response.sendFile(path);
   }
-  @Get('teacher/sessions/:id/recording')
-  @Roles(Role.TEACHER)
-  @RequirePermission('VIEW_OWN_CLASS_SESSIONS')
-  async recording(
-    @Req() r: any,
-    @Param('id') id: string,
-    @Res() response: Response
-  ) {
-    const path = await this.p.recordingFile(r.user.id, id);
-    response.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    return response.sendFile(path);
-  }
-
   @Get('teacher/raise-hand-queue')
   @Roles(Role.TEACHER)
   @RequirePermission('VIEW_OWN_CLASS_SESSIONS')

@@ -19,7 +19,6 @@ type PlaybackSession = {
   endedAt: string | null;
   proctorReviewDecision: 'PENDING' | 'NEGATIVE' | 'POSITIVE';
   proctorReviewedAt: string | null;
-  recording: { status: string; durationSec: number | null; playbackUrl: string } | null;
   scoreTimeline: { computedAt: string; score: number; tier: string }[];
   events: {
     id: string;
@@ -28,7 +27,7 @@ type PlaybackSession = {
     intensity: number | null;
     clips: {
       id: string;
-      phase: 'CENTERED';
+      phase: 'CENTERED' | 'BEFORE' | 'AFTER';
       startedAt: string;
       endedAt: string;
       status: string;
@@ -37,6 +36,23 @@ type PlaybackSession = {
     }[];
   }[];
 };
+type PlaybackClip = PlaybackSession["events"][number]["clips"][number];
+
+/** CENTERED is the current clip format; BEFORE/AFTER come from the first format. */
+const clipButtonLabel = (clip: PlaybackClip) =>
+  clip.phase === "BEFORE"
+    ? "Play clip before the incident"
+    : clip.phase === "AFTER"
+      ? "Play clip after the incident"
+      : `Play centered clip · incident at ${clip.eventOffsetSec.toFixed(1)}s`;
+
+const clipDescription = (clip: PlaybackClip) =>
+  clip.phase === "BEFORE"
+    ? "evidence recorded before the incident"
+    : clip.phase === "AFTER"
+      ? "evidence recorded after the incident"
+      : `centered evidence · incident at ${clip.eventOffsetSec.toFixed(1)}s`;
+
 type PlaybackManifest = {
   exam: { id: string; title: string; subjectCode: string; subjectName: string };
   sessions: PlaybackSession[];
@@ -188,7 +204,7 @@ export default function Recordings() {
         <Card padded={false}><div className="border-b border-border p-5"><CardHeader title={manifest.exam.title} subtitle={`${manifest.exam.subjectCode} · ${manifest.exam.subjectName}`} /></div>{!manifest.sessions.length && <p className="p-5 text-sm text-text-2">No completed student sessions were found.</p>}{manifest.sessions.map(session => <button key={session.sessionId} type="button" onClick={() => { setSelectedId(session.sessionId); setSelectedClipId(''); }} className={`flex w-full items-center gap-3 border-b border-border p-4 text-left transition-colors last:border-b-0 ${selectedId === session.sessionId ? 'bg-brand-soft' : 'hover:bg-canvas'}`}>{session.student.profilePicture ? <img src={assetSrc(session.student.profilePicture)} alt={`${session.student.fullName} profile`} className="h-10 w-10 shrink-0 rounded-xl object-cover" /> : <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand"><UserRound size={18} /></span>}<span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-text-1">{session.student.fullName}</span><span className="mt-1 flex items-center gap-1 text-xs text-text-3"><Clock3 size={12} />{session.events.reduce((count, event) => count + event.clips.length, 0)} evidence clips</span></span><PlayCircle size={18} className={session.events.some(event => event.clips.length) ? 'text-brand' : 'text-text-3'} /></button>)}</Card>
         <Card>{!selected && <div className="grid min-h-[360px] place-items-center text-center text-text-3"><div><PlayCircle className="mx-auto mb-3" size={42} /><p className="text-sm">Select a student to open the recorded exam screen.</p></div></div>}{selected && <><div className="flex items-center gap-3">
           {selected.student.profilePicture ? <img src={assetSrc(selected.student.profilePicture)} alt={`${selected.student.fullName} profile`} className="h-12 w-12 shrink-0 rounded-xl object-cover" /> : <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand"><UserRound size={21} /></span>}
-          <div className="min-w-0"><h2 className="truncate font-head text-lg font-semibold text-text-1">{selected.student.fullName} — screen recording</h2><p className="mt-1 text-sm text-text-2">{selectedClip ? [formatDateTime(selectedClip.event.occurredAt), selectedClip.event.type.replace(/_/g, ' '), `centered evidence · incident at ${selectedClip.eventOffsetSec.toFixed(1)}s`].join(' · ') : formatDateTime(selected.startedAt)}</p></div>
+          <div className="min-w-0"><h2 className="truncate font-head text-lg font-semibold text-text-1">{selected.student.fullName} — screen recording</h2><p className="mt-1 text-sm text-text-2">{selectedClip ? [formatDateTime(selectedClip.event.occurredAt), selectedClip.event.type.replace(/_/g, ' '), clipDescription(selectedClip)].join(' · ') : formatDateTime(selected.startedAt)}</p></div>
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-canvas/40 p-3">
           <span className="text-xs font-medium text-text-2">Final teacher decision: {selected.proctorReviewDecision === 'PENDING' ? 'Pending' : selected.proctorReviewDecision}</span>
@@ -196,7 +212,7 @@ export default function Recordings() {
             <button type="button" disabled={reviewProctoring.isPending} onClick={() => reviewProctoring.mutate({ sessionId: selected.sessionId, decision: 'NEGATIVE' })} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition disabled:opacity-50 ${selected.proctorReviewDecision === 'NEGATIVE' ? 'border-emerald-400 bg-emerald-200 text-emerald-900' : 'border-emerald-200 bg-emerald-50/60 text-emerald-700 hover:bg-emerald-100'}`}><CheckCircle2 size={15} />Negative — No issue</button>
             <button type="button" disabled={reviewProctoring.isPending} onClick={() => reviewProctoring.mutate({ sessionId: selected.sessionId, decision: 'POSITIVE' })} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition disabled:opacity-50 ${selected.proctorReviewDecision === 'POSITIVE' ? 'border-rose-400 bg-rose-200 text-rose-900' : 'border-rose-200 bg-rose-50/60 text-rose-700 hover:bg-rose-100'}`}><TriangleAlert size={15} />Positive — Violation confirmed</button>
           </div>
-        </div><div className="mb-4 mt-4 grid min-h-[320px] place-items-center overflow-hidden rounded-xl bg-black">{videoSource ? <video key={videoSource} controls preload="metadata" src={videoSource} className="max-h-[560px] w-full" /> : <div className="text-center text-white/70"><PlayCircle className="mx-auto mb-2" size={38} /><p>No tab-switch or fullscreen-exit evidence clip is available for this student.</p></div>}</div>{incidentClips.length > 0 && <div className="mb-5 space-y-3"><p className="text-sm font-semibold text-text-1">Incident evidence</p>{selected.events.filter(event => event.clips.length > 0).map((event, index) => <div key={event.id} className="rounded-xl border border-border bg-canvas p-3"><div className="mb-2 flex items-center justify-between gap-3"><span className="text-sm font-semibold text-text-1">Incident {index + 1}: {event.type.replace(/_/g, ' ')}</span><span className="text-xs text-text-3">{formatTime(event.occurredAt)}</span></div><div className="flex flex-wrap gap-2">{event.clips.map(clip => <button key={clip.id} type="button" onClick={() => setSelectedClipId(clip.id)} className={`rounded-lg border px-3 py-2 text-xs font-semibold ${selectedClip?.id === clip.id ? 'border-brand bg-brand text-white shadow-md' : 'border-brand/40 bg-brand-soft text-brand shadow-sm hover:border-brand hover:bg-brand hover:text-white'}`}>{`Play centered clip · incident at ${clip.eventOffsetSec.toFixed(1)}s`}</button>)}</div></div>)}</div>}<div className="mb-1.5 text-xs font-medium text-text-2">Selected student's suspicion score across the session</div>{selected.scoreTimeline.length ? <ResponsiveChart width="100%" height={120}><AreaChart data={selected.scoreTimeline.map(point => ({ time: formatTime(point.computedAt), score: point.score }))}><XAxis dataKey="time" hide /><YAxis domain={[0, 100]} hide /><Tooltip {...tooltipProps(palette)} /><Area type="monotone" dataKey="score" stroke={palette.brand} fill={palette.brand} fillOpacity={0.25} /></AreaChart></ResponsiveChart> : <p className="text-sm text-text-2">No score samples are available.</p>}</>}</Card>
+        </div><div className="mb-4 mt-4 grid min-h-[320px] place-items-center overflow-hidden rounded-xl bg-black">{videoSource ? <video key={videoSource} controls preload="metadata" src={videoSource} className="max-h-[560px] w-full" /> : <div className="text-center text-white/70"><PlayCircle className="mx-auto mb-2" size={38} /><p>{selected.events.length ? `${selected.events.length} incident${selected.events.length === 1 ? "" : "s"} recorded, but no video evidence was captured for them. See the suspicion timeline below.` : "No incidents were recorded for this student."}</p></div>}</div>{incidentClips.length > 0 && <div className="mb-5 space-y-3"><p className="text-sm font-semibold text-text-1">Incident evidence</p>{selected.events.filter(event => event.clips.length > 0).map((event, index) => <div key={event.id} className="rounded-xl border border-border bg-canvas p-3"><div className="mb-2 flex items-center justify-between gap-3"><span className="text-sm font-semibold text-text-1">Incident {index + 1}: {event.type.replace(/_/g, ' ')}</span><span className="text-xs text-text-3">{formatTime(event.occurredAt)}</span></div><div className="flex flex-wrap gap-2">{event.clips.map(clip => <button key={clip.id} type="button" onClick={() => setSelectedClipId(clip.id)} className={`rounded-lg border px-3 py-2 text-xs font-semibold ${selectedClip?.id === clip.id ? 'border-brand bg-brand text-white shadow-md' : 'border-brand/40 bg-brand-soft text-brand shadow-sm hover:border-brand hover:bg-brand hover:text-white'}`}>{clipButtonLabel(clip)}</button>)}</div></div>)}</div>}<div className="mb-1.5 text-xs font-medium text-text-2">Selected student's suspicion score across the session</div>{selected.scoreTimeline.length ? <ResponsiveChart width="100%" height={120}><AreaChart data={selected.scoreTimeline.map(point => ({ time: formatTime(point.computedAt), score: point.score }))}><XAxis dataKey="time" hide /><YAxis domain={[0, 100]} hide /><Tooltip {...tooltipProps(palette)} /><Area type="monotone" dataKey="score" stroke={palette.brand} fill={palette.brand} fillOpacity={0.25} /></AreaChart></ResponsiveChart> : <p className="text-sm text-text-2">No score samples are available.</p>}</>}</Card>
       </div>}
     </div>
   </DashboardLayout>;

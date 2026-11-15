@@ -205,22 +205,6 @@ export class SessionsController {
       file.mimetype
     );
   }
-  @Post(':id/recording-chunks')
-  @Roles(Role.STUDENT)
-  @UseInterceptors(FileInterceptor('chunk'))
-  chunk(
-    @Req() r: any,
-    @Param('id') id: string,
-    @UploadedFile(
-      new ParseFilePipeBuilder()
-        .addFileTypeValidator({ fileType: /^video\/webm(?:;.*)?$/i })
-        .addMaxSizeValidator({ maxSize: 25_000_000 })
-        .build()
-    )
-    f: Express.Multer.File
-  ) {
-    return this.s.recording(id, r.user.id, f.buffer);
-  }
   @Get('exam/:examId/monitor') @Roles(Role.TEACHER)
   @RequirePermission('VIEW_OWN_CLASS_SESSIONS') monitor(
     @Req() r: any,
