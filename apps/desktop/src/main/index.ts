@@ -2,15 +2,12 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { normalize, prohibitedApps, sanitizePolicy, type Policy } from './lockdown-policy'
 
 const execute = promisify(execFile)
-type Policy = { mode: 'BLACKLIST' | 'WHITELIST'; list: string[] }
 let mainWindow: BrowserWindow | null = null
 let policy: Policy | null = null
 let inspectionTimer: NodeJS.Timeout | null = null
-
-const normalize = (name: string) =>
-  name.trim().toLowerCase().replace(/\.exe$/u, '').replace(/\.app$/u, '')
 
 async function visibleApplications() {
   if (process.platform === 'win32') {
@@ -29,18 +26,6 @@ async function visibleApplications() {
     return stdout.split(',').map(normalize).filter(Boolean)
   }
   throw new Error('Lockdown is supported only on Windows and macOS')
-}
-
-function prohibitedApps(openApps: string[], activePolicy: Policy) {
-  const configured = activePolicy.list.map(normalize).filter(Boolean)
-  const shellAllowList = ['proctorx', 'electron', 'finder', 'dock', 'windowserver', 'explorer']
-  return openApps.filter((openApp) => {
-    if (shellAllowList.some((allowed) => openApp.includes(allowed))) return false
-    const configuredMatch = configured.some(
-      (entry) => openApp.includes(entry) || entry.includes(openApp)
-    )
-    return activePolicy.mode === 'BLACKLIST' ? configuredMatch : !configuredMatch
-  })
 }
 
 async function inspectApplications() {
@@ -84,10 +69,12 @@ function createWindow() {
   })
 }
 
-ipcMain.handle('lockdown:start', async (_event, nextPolicy: Policy) => {
+ipcMain.handle('lockdown:start', async (_event, nextPolicy: unknown) => {
   if (!['win32', 'darwin'].includes(process.platform))
     throw new Error('Lockdown is supported only on Windows and macOS')
-  policy = nextPolicy
+  // A missing or malformed policy must never flag every open window.
+  policy = sanitizePolicy(nextPolicy)
+  if (!policy) return { platform: process.platform, inspecting: false }
   mainWindow?.setKiosk(true)
   mainWindow?.setAlwaysOnTop(true, 'screen-saver')
   if (inspectionTimer) clearInterval(inspectionTimer)

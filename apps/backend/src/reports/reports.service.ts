@@ -68,7 +68,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       snapshot,
       session.events.filter((event) => event.type === 'TAB_SWITCH').length
     );
-    return this.ai.requestReport(
+    const job = await this.ai.requestReport(
       {
         session_id: session.id,
         student: session.student.fullName,
@@ -83,13 +83,42 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       },
       'pdf'
     );
+    // The AI job queue does not know who asked for a report, so the
+    // append-only audit log records ownership for later status/download checks.
+    if (typeof job?.job_id === 'string')
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: teacherId,
+          action: 'INCIDENT_REPORT_REQUESTED',
+          targetType: 'ReportJob',
+          targetId: job.job_id,
+          metadata: { sessionId: session.id },
+        },
+      });
+    return job;
   }
 
-  jobStatus(jobId: string) {
+  /** Only the teacher who requested a report job may poll or download it. */
+  private async assertJobOwner(jobId: string, teacherId: string) {
+    const owner = await this.prisma.auditLog.findFirst({
+      where: {
+        actorId: teacherId,
+        action: 'INCIDENT_REPORT_REQUESTED',
+        targetType: 'ReportJob',
+        targetId: jobId,
+      },
+      select: { id: true },
+    });
+    if (!owner) throw new NotFoundException('Report job not found');
+  }
+
+  async jobStatus(jobId: string, teacherId: string) {
+    await this.assertJobOwner(jobId, teacherId);
     return this.ai.jobStatus(jobId);
   }
 
-  async jobDownload(jobId: string) {
+  async jobDownload(jobId: string, teacherId: string) {
+    await this.assertJobOwner(jobId, teacherId);
     const job = await this.ai.jobStatus(jobId);
     const path =
       job.status === 'SUCCESS' && typeof job.result?.path === 'string'

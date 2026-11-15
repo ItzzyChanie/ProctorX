@@ -14,6 +14,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateResultReleaseDto } from './dto/result-release.dto';
+import { isPastGrace, sessionRemainingSeconds } from './session-timing';
 
 type SubmittedAnswer = {
   questionId: string;
@@ -135,6 +136,10 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       },
     });
     if (!session) throw new ForbiddenException();
+    if (session.isLocked)
+      throw new ForbiddenException('Your teacher has locked this attempt');
+    if (isPastGrace(session, session.exam))
+      throw new ConflictException('Time is up for this assessment');
     const byQuestion = new Map(
       answers.map((answer) => [answer.questionId, answer])
     );
@@ -193,27 +198,9 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
         result: session.submission,
       };
 
-    const elapsed = session.activeStartedAt
-      ? Math.max(0, Math.floor((+now - +session.activeStartedAt) / 1000))
-      : 0;
-    const deadlineRemaining = session.exam.endsAt
-      ? Math.max(
-          0,
-          Math.floor((+session.exam.endsAt - +now) / 1000) +
-            session.extraTimeSeconds
-        )
-      : Number.MAX_SAFE_INTEGER;
-    const remainingSeconds = Math.min(
-      Math.max(
-        0,
-        (session.remainingSeconds ??
-          session.exam.durationMinutes * 60 + session.extraTimeSeconds) -
-          elapsed
-      ),
-      deadlineRemaining
-    );
+    const remainingSeconds = sessionRemainingSeconds(session, session.exam, now);
     if (remainingSeconds <= 0) {
-      const result = await this.autoSubmit(sessionId);
+      const result = await this.finalizeSession(sessionId);
       return { expired: true, remainingSeconds: 0, result };
     }
     await this.prisma.examSession.update({
@@ -227,7 +214,15 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
     return { expired: false, remainingSeconds, serverTime: now };
   }
 
-  private async autoSubmit(sessionId: string) {
+  /**
+   * Grades whatever the student last saved and closes the attempt. Used when
+   * time runs out, when the exam window closes, and when a teacher stops the
+   * exam, so an unsubmitted attempt is never left without a score.
+   */
+  async finalizeSession(
+    sessionId: string,
+    mode: SubmissionMode = SubmissionMode.AUTO_TIMEOUT
+  ) {
     const session = await this.prisma.examSession.findUnique({
       where: { id: sessionId },
       include: { submission: { include: { answers: true } } },
@@ -240,24 +235,53 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
         responseText: answer.responseText ?? undefined,
         selectedOptionIds: answer.selectedOptionIds,
       })) ?? [];
-    return this.submit(
-      sessionId,
-      session.studentId,
-      answers,
-      SubmissionMode.AUTO_TIMEOUT
-    );
+    try {
+      return await this.submit(sessionId, session.studentId, answers, mode);
+    } catch (error) {
+      // Another path (manual submit, heartbeat, expiry job) finished first.
+      if (error instanceof ConflictException)
+        return this.prisma.submission.findUnique({
+          where: { sessionId },
+          include: { answers: true },
+        });
+      throw error;
+    }
   }
 
-  private async finishExpiredSessions() {
+  /** Finalizes every open attempt for an exam (window closed or stopped). */
+  async finalizeExam(examId: string) {
     const sessions = await this.prisma.examSession.findMany({
       where: {
-        status: SessionStatus.IN_PROGRESS,
-        exam: { endsAt: { lte: new Date() } },
+        examId,
+        status: { in: [SessionStatus.IN_PROGRESS, SessionStatus.DISCONNECTED] },
       },
       select: { id: true },
     });
     await Promise.allSettled(
-      sessions.map((session) => this.autoSubmit(session.id))
+      sessions.map((session) => this.finalizeSession(session.id))
+    );
+  }
+
+  private async finishExpiredSessions() {
+    const now = new Date();
+    const sessions = await this.prisma.examSession.findMany({
+      where: {
+        status: { in: [SessionStatus.IN_PROGRESS, SessionStatus.DISCONNECTED] },
+      },
+      select: {
+        id: true,
+        startedAt: true,
+        timerStartedAt: true,
+        extraTimeSeconds: true,
+        exam: { select: { durationMinutes: true, endsAt: true } },
+      },
+    });
+    // Students who never come back are finalized once their grace window has
+    // passed, so an in-flight manual submission still wins the race.
+    await Promise.allSettled(
+      sessions
+        .filter((session) => isPastGrace(session, session.exam, now))
+        .map((session) => this.finalizeSession(session.id))
     );
   }
 
@@ -276,6 +300,17 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
     if (!session) throw new ForbiddenException();
     if (session.status === SessionStatus.COMPLETED)
       throw new ConflictException('This exam has already been submitted');
+    if (mode === SubmissionMode.MANUAL) {
+      if (session.isLocked)
+        throw new ForbiddenException('Your teacher has locked this attempt');
+      if (isPastGrace(session, session.exam)) {
+        // Too late to accept new answers: grade the last saved draft instead.
+        await this.finalizeSession(sessionId);
+        throw new ConflictException(
+          'Time is up. Your last saved answers were submitted automatically.'
+        );
+      }
+    }
     const byQuestion = new Map(
       answers.map((answer) => [answer.questionId, answer])
     );
@@ -311,6 +346,14 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       (question) => question.type === QuestionType.ESSAY
     );
     const submission = await this.prisma.$transaction(async (tx) => {
+      const endedAt = new Date();
+      // Claim the attempt first; only one finalize path can win.
+      const claimed = await tx.examSession.updateMany({
+        where: { id: sessionId, status: { not: SessionStatus.COMPLETED } },
+        data: { status: SessionStatus.COMPLETED, endedAt },
+      });
+      if (!claimed.count)
+        throw new ConflictException('This exam has already been submitted');
       const record = await tx.submission.upsert({
         where: { sessionId },
         create: {
@@ -337,11 +380,6 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
           answers: { deleteMany: {}, create: rows },
         },
         include: { answers: true },
-      });
-      const endedAt = new Date();
-      await tx.examSession.update({
-        where: { id: sessionId },
-        data: { status: SessionStatus.COMPLETED, endedAt },
       });
       await tx.recording.updateMany({
         where: { sessionId },

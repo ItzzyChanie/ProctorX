@@ -28,13 +28,16 @@ import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsGateway } from './sessions.gateway';
 import { extraTimeWindowError } from './extra-time-policy';
+import { GradingService } from './grading.service';
+import { sessionRemainingSeconds } from './session-timing';
 
 @Injectable()
 export class SessionsService {
   constructor(
     private prisma: PrismaService,
     private ai: AiService,
-    private gateway: SessionsGateway
+    private gateway: SessionsGateway,
+    private grading: GradingService
   ) {}
 
   private async availableExam(code: string, studentId: string) {
@@ -141,10 +144,6 @@ export class SessionsService {
     if (session?.status === SessionStatus.COMPLETED)
       throw new ConflictException('This exam has already been completed');
     if (!session) {
-      const scheduledSeconds = exam.endsAt
-        ? Math.max(0, Math.floor((+exam.endsAt - +now) / 1000)) +
-          extraTimeSeconds
-        : exam.durationMinutes * 60 + extraTimeSeconds;
       session = await this.prisma.examSession.create({
         data: {
           examId: exam.id,
@@ -157,9 +156,10 @@ export class SessionsService {
           extraTimeSeconds,
           questionOrder: randomizedQuestionIds,
           optionOrder: randomizedOptionIds,
-          remainingSeconds: Math.min(
-            exam.durationMinutes * 60 + extraTimeSeconds,
-            scheduledSeconds
+          remainingSeconds: sessionRemainingSeconds(
+            { startedAt: now, extraTimeSeconds },
+            exam,
+            now
           ),
         },
         include: {
@@ -172,30 +172,14 @@ export class SessionsService {
         },
       });
     } else {
-      const previouslyConsumed =
-        session.activeStartedAt && session.lastHeartbeatAt
-          ? Math.max(
-              0,
-              Math.floor(
-                (+session.lastHeartbeatAt - +session.activeStartedAt) / 1000
-              )
-            )
-          : 0;
-      const deadlineSeconds = exam.endsAt
-        ? Math.max(
-            0,
-            Math.floor((+exam.endsAt - +now) / 1000) + session.extraTimeSeconds
-          )
-        : Number.MAX_SAFE_INTEGER;
-      const remainingSeconds = Math.min(
-        Math.max(
-          0,
-          (session.remainingSeconds ??
-            exam.durationMinutes * 60 + session.extraTimeSeconds) -
-            previouslyConsumed
-        ),
-        deadlineSeconds
-      );
+      // The countdown keeps running while the student is away (wall clock).
+      const remainingSeconds = sessionRemainingSeconds(session, exam, now);
+      if (remainingSeconds <= 0) {
+        await this.grading.finalizeSession(session.id);
+        throw new ConflictException(
+          'Time is up for this assessment. Your last saved answers were submitted.'
+        );
+      }
       session = await this.prisma.examSession.update({
         where: { id: session.id },
         data: {
@@ -239,6 +223,8 @@ export class SessionsService {
         extraTimeMinutes: Math.floor(session.extraTimeSeconds / 60),
         requireCamera: exam.requireCamera,
         requireMicrophone: exam.requireMicrophone,
+        appPolicyMode: exam.appPolicyMode,
+        appPolicyList: exam.appPolicyList,
         sourceType: exam.sourceType,
         externalFormUrl: exam.externalFormUrl,
         questions: this.orderQuestions(exam.questions, session).map(
@@ -391,12 +377,9 @@ export class SessionsService {
     await this.prisma.incident.create({
       data: { sessionId, eventId: event.id },
     });
-    const connectedAt = await this.gateway.connectedAt(sessionId);
+    // Score the whole attempt; reconnecting must not reset the evidence.
     const all = await this.prisma.proctoringEvent.findMany({
-      where: {
-        sessionId,
-        ...(connectedAt ? { occurredAt: { gte: connectedAt } } : {}),
-      },
+      where: { sessionId },
     });
     const score = await this.ai.scoreReduced(sessionId, studentId, {
       tab_switch_count: all.filter((x) => x.type === EventType.TAB_SWITCH)
@@ -710,7 +693,7 @@ export class SessionsService {
     const tabSwitchCount = new Map(
       tabSwitches.map((row) => [row.sessionId, row._count._all])
     );
-    const now = Date.now();
+    const now = new Date();
     return sessions.map(({ _count, ...session }) => ({
       ...session,
       connected: states.has(session.id),
@@ -720,13 +703,7 @@ export class SessionsService {
       eventCount: _count.events,
       tabSwitchCount: tabSwitchCount.get(session.id) ?? 0,
       raisedHand: Boolean(session.raiseHandRequests.length),
-      remainingSeconds: Math.max(
-        0,
-        (session.remainingSeconds ?? exam.durationMinutes * 60) -
-          (session.activeStartedAt
-            ? Math.floor((now - +session.activeStartedAt) / 1000)
-            : 0)
-      ),
+      remainingSeconds: sessionRemainingSeconds(session, exam, now),
     }));
   }
 
@@ -878,16 +855,13 @@ export class SessionsService {
         'This student has already completed the assessment'
       );
     const now = new Date();
-    const elapsed = session.activeStartedAt
-      ? Math.max(0, Math.floor((+now - +session.activeStartedAt) / 1000))
-      : 0;
-    const currentRemaining = Math.max(
-      0,
-      (session.remainingSeconds ?? session.exam.durationMinutes * 60) - elapsed
-    );
     const addedSeconds = minutes * 60;
-    const remainingSeconds = currentRemaining + addedSeconds;
     const extraTimeSeconds = session.extraTimeSeconds + addedSeconds;
+    const remainingSeconds = sessionRemainingSeconds(
+      { ...session, extraTimeSeconds },
+      session.exam,
+      now
+    );
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.examSession.updateMany({
         where: {

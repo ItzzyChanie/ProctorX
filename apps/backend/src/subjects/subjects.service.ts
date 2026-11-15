@@ -26,6 +26,7 @@ import {
 } from './dto/subjects.dto';
 import { AiService, QuestionCounts } from '../ai/ai.service';
 import { SessionsGateway } from '../sessions/sessions.gateway';
+import { GradingService } from '../sessions/grading.service';
 import { QuestionBankItemDto } from './dto/subjects.dto';
 
 @Injectable()
@@ -34,7 +35,8 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private prisma: PrismaService,
     private ai: AiService,
-    private gateway: SessionsGateway
+    private gateway: SessionsGateway,
+    private grading: GradingService
   ) {}
   onModuleInit() {
     void this.closeExpiredExams().catch(() => undefined);
@@ -91,15 +93,14 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
         message: `The scheduled ${exam.assessmentType === AssessmentType.QUIZ ? 'quiz' : 'exam'} "${exam.title}" for ${exam.subject.subjectCode} has ended.`,
       }))
     );
-    const endedAt = new Date();
+    // Grade every unsubmitted attempt from its last saved draft before the
+    // exam is archived. Failures stay open and are retried by the grading
+    // expiry job, so no attempt is silently closed without a score.
+    for (const id of ids) await this.grading.finalizeExam(id);
     await this.prisma.$transaction([
       this.prisma.exam.updateMany({
         where: { id: { in: ids }, status: ExamStatus.PUBLISHED },
         data: { status: ExamStatus.ARCHIVED },
-      }),
-      this.prisma.examSession.updateMany({
-        where: { examId: { in: ids }, status: SessionStatus.IN_PROGRESS },
-        data: { status: SessionStatus.COMPLETED, endedAt },
       }),
       this.prisma.recording.updateMany({
         where: { session: { examId: { in: ids } }, status: 'UPLOADING' },
@@ -1295,16 +1296,13 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
           where: { id: examId },
           data: { status: ExamStatus.ARCHIVED },
         });
+      await this.grading.finalizeExam(examId);
       return { ...exam, status: ExamStatus.ARCHIVED, alreadyInactive: true };
     }
     const stopped = await this.prisma.$transaction(async (tx) => {
       const saved = await tx.exam.update({
         where: { id: examId },
         data: { status: ExamStatus.ARCHIVED, endsAt: endedAt },
-      });
-      await tx.examSession.updateMany({
-        where: { examId, status: SessionStatus.IN_PROGRESS },
-        data: { status: SessionStatus.COMPLETED, endedAt },
       });
       await tx.recording.updateMany({
         where: { session: { examId }, status: 'UPLOADING' },
@@ -1324,6 +1322,8 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
         });
       return saved;
     });
+    // Grade each open attempt from its last saved draft (H1).
+    await this.grading.finalizeExam(examId);
     void this.gateway.clearExam(examId);
     await this.prisma.auditLog.create({
       data: {

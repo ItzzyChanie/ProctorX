@@ -35,6 +35,16 @@ type Signal = {
   description?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
 };
+
+/** Server explanation for expected refusals (time is up, attempt locked). */
+function conflictMessage(error: unknown): string | undefined {
+  if (!axios.isAxiosError(error)) return undefined;
+  const status = error.response?.status;
+  const message = error.response?.data?.message;
+  return (status === 409 || status === 403) && typeof message === 'string'
+    ? message
+    : undefined;
+}
 type Answer = {
   responseText?: string;
   selectedOptionIds?: string[];
@@ -352,12 +362,13 @@ export default function JoinSession() {
       setPreview(undefined);
       setSelectedSubject(undefined);
       setFullscreenLost(false);
-    } catch {
+    } catch (error) {
       if (document.fullscreenElement) await document.exitFullscreen();
       setNotice(
-        cameraOnly
-          ? 'The assessment room could not be entered. Check your connection and try again.'
-          : 'The assessment room could not be entered. Allow fullscreen and try again.'
+        conflictMessage(error) ??
+          (cameraOnly
+            ? 'The assessment room could not be entered. Check your connection and try again.'
+            : 'The assessment room could not be entered. Allow fullscreen and try again.')
       );
     }
   };
@@ -1039,7 +1050,8 @@ export default function JoinSession() {
           });
         }
       } catch {
-        // A temporary disconnect intentionally pauses the persisted timer.
+        // Offline: the server-side countdown keeps running (wall clock); the
+        // local timer keeps ticking and resyncs on the next heartbeat.
       } finally {
         busy = false;
       }
@@ -1098,8 +1110,13 @@ export default function JoinSession() {
       setSubmissionReason('submitted');
       setScore(result);
       setSubmitted(true);
-    } catch {
-      setNotice('Your answers could not be submitted. Please try again.');
+    } catch (error) {
+      // 409 "time is up" / 403 "locked" come from the server; the next
+      // heartbeat picks up an auto-submitted result.
+      setNotice(
+        conflictMessage(error) ??
+          'Your answers could not be submitted. Please try again.'
+      );
     }
   };
   if (!exam)

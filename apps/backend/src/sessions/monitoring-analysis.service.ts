@@ -62,12 +62,9 @@ export class MonitoringAnalysisService {
         emitted.push(event);
       }
     if (!emitted.length) return result;
-    const connectedAt = await this.gateway.connectedAt(sessionId);
+    // Score the whole attempt; reconnecting must not reset the evidence.
     const all = await this.prisma.proctoringEvent.findMany({
-      where: {
-        sessionId,
-        ...(connectedAt ? { occurredAt: { gte: connectedAt } } : {}),
-      },
+      where: { sessionId },
       orderBy: { occurredAt: 'desc' },
     });
 

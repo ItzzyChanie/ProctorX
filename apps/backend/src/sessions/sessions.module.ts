@@ -16,6 +16,6 @@ import { AuthModule } from '../auth/auth.module';
     MonitoringAnalysisService,
     GradingService,
   ],
-  exports: [SessionsGateway],
+  exports: [SessionsGateway, GradingService],
 })
 export class SessionsModule {}

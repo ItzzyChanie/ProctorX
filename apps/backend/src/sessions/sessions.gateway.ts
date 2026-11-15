@@ -380,13 +380,6 @@ export class SessionsGateway implements OnGatewayDisconnect {
     return states;
   }
 
-  async connectedAt(sessionId: string) {
-    const times = (await this.studentSockets(rooms.student(sessionId)))
-      .map((data) => data.connectedAt)
-      .filter((time): time is number => typeof time === 'number');
-    return times.length ? new Date(Math.min(...times)) : undefined;
-  }
-
   async clearExam(examId: string) {
     const sessionIds = new Set(
       (await this.studentSockets(rooms.examStudents(examId)))
