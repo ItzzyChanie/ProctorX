@@ -31,214 +31,31 @@ import {
 import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-type Signal = {
-  description?: RTCSessionDescriptionInit;
-  candidate?: RTCIceCandidateInit;
-};
-
-/** Below this RMS level (about -40 dBFS) a chunk is treated as silence. */
-const SILENCE_RMS = 0.01;
-
-function rms(samples: Float32Array | number[]) {
-  let sum = 0;
-  for (let index = 0; index < samples.length; index++)
-    sum += samples[index]! * samples[index]!;
-  return samples.length ? Math.sqrt(sum / samples.length) : 0;
-}
-
-/**
- * Downsamples to 16 kHz (enough for speech, and a rate the server's voice
- * detector accepts) by averaging, cutting each upload to a third at 48 kHz.
- * Returns rate 0 when the capture rate cannot be converted.
- */
-function toSpeechRate(samples: number[], rate: number) {
-  if (rate === 8000 || rate === 16000) return { samples, rate };
-  if (rate % 16000 !== 0) return { samples: [], rate: 0 };
-  const factor = rate / 16000;
-  const out = new Array<number>(Math.floor(samples.length / factor));
-  for (let index = 0; index < out.length; index++) {
-    let sum = 0;
-    for (let offset = 0; offset < factor; offset++)
-      sum += samples[index * factor + offset]!;
-    out[index] = sum / factor;
-  }
-  return { samples: out, rate: 16000 };
-}
-
-/** Server explanation for expected refusals (time is up, attempt locked). */
-function conflictMessage(error: unknown): string | undefined {
-  if (!axios.isAxiosError(error)) return undefined;
-  const status = error.response?.status;
-  const message = error.response?.data?.message;
-  return (status === 409 || status === 403) && typeof message === 'string'
-    ? message
-    : undefined;
-}
-type Answer = {
-  responseText?: string;
-  selectedOptionIds?: string[];
-  enumerationAnswers?: string[];
-};
-type StudentSubject = {
-  id: string;
-  code: string;
-  subjectCode?: string;
-  schedule?: string;
-  name: string;
-  teacher: { fullName: string };
-  exams: {
-    assessmentType: 'EXAM' | 'QUIZ';
-    status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
-    endsAt: string | null;
-    sessions: { endedAt: string }[];
-  }[];
-};
-type StreamQuality = 'off' | 'thumb' | 'focus';
-// Grid tiles are ~300px wide, so thumbnails are capped at 540p / 5 fps; only
-// the student the teacher has enlarged is sent at full quality.
-const QUALITY_PRESETS: Record<
-  StreamQuality,
-  {
-    active: boolean;
-    maxBitrate: number;
-    maxFramerate: number;
-    maxHeight: number;
-  }
-> = {
-  off: { active: false, maxBitrate: 100_000, maxFramerate: 1, maxHeight: 360 },
-  thumb: { active: true, maxBitrate: 250_000, maxFramerate: 5, maxHeight: 540 },
-  focus: {
-    active: true,
-    maxBitrate: 2_500_000,
-    maxFramerate: 15,
-    maxHeight: 0,
-  },
-};
-const applyStreamQuality = async (
-  connection: RTCPeerConnection,
-  quality: StreamQuality
-) => {
-  const sender = connection
-    .getSenders()
-    .find((candidate) => candidate.track?.kind === 'video');
-  if (!sender) return;
-  const parameters = sender.getParameters();
-  // Encodings only exist once negotiation is done; applied again afterwards.
-  if (!parameters.encodings?.length) return;
-  const preset = QUALITY_PRESETS[quality];
-  const height = sender.track?.getSettings().height ?? 0;
-  parameters.encodings[0] = {
-    ...parameters.encodings[0],
-    active: preset.active,
-    maxBitrate: preset.maxBitrate,
-    maxFramerate: preset.maxFramerate,
-    scaleResolutionDownBy:
-      preset.maxHeight && height > preset.maxHeight
-        ? height / preset.maxHeight
-        : 1,
-  };
-  await sender.setParameters(parameters).catch(() => undefined);
-};
-const captureEntireScreen = async () => {
-  const screen = await navigator.mediaDevices.getDisplayMedia({
-    video: {
-      displaySurface: 'monitor',
-      frameRate: { ideal: 15, max: 20 },
-    },
-    audio: false,
-    monitorTypeSurfaces: 'include',
-    preferCurrentTab: false,
-    selfBrowserSurface: 'exclude',
-    surfaceSwitching: 'exclude',
-  } as DisplayMediaStreamOptions);
-  const track = screen.getVideoTracks()[0];
-  if (track?.getSettings().displaySurface !== 'monitor') {
-    screen.getTracks().forEach((item) => item.stop());
-    throw new Error('The entire screen must be shared.');
-  }
-  // Screens are mostly text: keep resolution sharp, drop frames instead.
-  track.contentHint = 'detail';
-  await track
-    .applyConstraints({ frameRate: { ideal: 15, max: 20 } })
-    .catch(() => undefined);
-  return screen;
-};
-/** Camera-only mode (phones/tablets): the front camera stands in for the screen. */
-const captureCameraFeed = async () => {
-  const camera = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: 'user',
-      width: { ideal: 640 },
-      height: { ideal: 480 },
-      frameRate: { ideal: 15, max: 20 },
-    },
-    audio: false,
-  });
-  const track = camera.getVideoTracks()[0];
-  if (track) track.contentHint = 'motion';
-  return camera;
-};
-type DesktopLockdown = {
-  startLockdown(policy: {
-    mode: 'BLACKLIST' | 'WHITELIST';
-    list: string[];
-  }): Promise<{ platform: string }>;
-  stopLockdown(): Promise<void>;
-  onViolation(callback: (apps: string[]) => void): () => void;
-  onFocusLost(callback: () => void): () => void;
-};
-const desktopLockdown = (window as Window & { proctorX?: DesktopLockdown })
-  .proctorX;
-const roomCodeSchema = z.string().trim().min(1).max(32);
-const QUESTIONS_PER_PAGE = 10;
-const enumerationEntries = (question: any, answer?: Answer) =>
-  answer?.enumerationAnswers ??
-  Array.from(
-    { length: Math.max(1, question.enumerationAnswerCount ?? 1) },
-    () => ''
-  );
-const parseEnumerationResponse = (responseText?: string) => {
-  if (!responseText) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(responseText);
-    return Array.isArray(parsed) ? parsed.map(String) : undefined;
-  } catch {
-    return responseText.split(/\r?\n/u);
-  }
-};
-const hasAnswer = (question: any, answer?: Answer) =>
-  question.type === 'MULTIPLE_CHOICE'
-    ? Boolean(answer?.selectedOptionIds?.length)
-    : question.type === 'ENUMERATION'
-      ? Boolean(answer?.enumerationAnswers?.some((value) => value.trim()))
-      : Boolean(answer?.responseText?.trim());
-const submissionAnswer = (question: any, answer?: Answer) => ({
-  questionId: question.id,
-  responseText:
-    question.type === 'ENUMERATION'
-      ? JSON.stringify(
-          (answer?.enumerationAnswers ?? [])
-            .map((value) => value.trim())
-            .filter(Boolean)
-        )
-      : answer?.responseText,
-  selectedOptionIds: answer?.selectedOptionIds,
-});
-const formatCountdown = (total: number) => {
-  const safe = Math.max(0, total);
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
-  const seconds = safe % 60;
-  return [hours, minutes, seconds]
-    .map((value) => String(value).padStart(2, '0'))
-    .join(':');
-};
-
-const answerSchema = z.object({
-  questionId: z.string().min(1).max(128),
-  responseText: z.string().max(5000).optional(),
-  selectedOptionIds: z.array(z.string().min(1).max(128)).max(1).optional(),
-});
+import {
+  answerSchema,
+  conflictMessage,
+  enumerationEntries,
+  formatCountdown,
+  hasAnswer,
+  parseEnumerationResponse,
+  QUESTIONS_PER_PAGE,
+  roomCodeSchema,
+  submissionAnswer,
+  type Answer,
+  type StudentSubject,
+} from './exam/answers';
+import {
+  applyStreamQuality,
+  captureCameraFeed,
+  captureEntireScreen,
+  desktopLockdown,
+  isStreamQuality,
+  rms,
+  SILENCE_RMS,
+  toSpeechRate,
+  type Signal,
+  type StreamQuality,
+} from './exam/media';
 
 export default function JoinSession() {
   const queryClient = useQueryClient();
@@ -477,7 +294,7 @@ export default function JoinSession() {
       quality?: StreamQuality;
     }) => {
       const viewer = viewerId ? viewers.get(viewerId) : undefined;
-      if (!viewer || !quality || !(quality in QUALITY_PRESETS)) return;
+      if (!viewer || !quality || !isStreamQuality(quality)) return;
       viewer.quality = quality;
       void applyStreamQuality(viewer.connection, quality);
     };
@@ -1002,9 +819,10 @@ export default function JoinSession() {
   }, [exam, submitted, captureAttempt, cameraOnly]);
 
   useEffect(() => {
-    if (!exam || submitted || !desktopLockdown) return;
+    const lockdown = desktopLockdown;
+    if (!exam || submitted || !lockdown) return;
     let violationPending = false;
-    void desktopLockdown
+    void lockdown
       .startLockdown({
         mode: exam.exam.appPolicyMode,
         list: exam.exam.appPolicyList ?? [],
@@ -1014,7 +832,7 @@ export default function JoinSession() {
           'Desktop lockdown could not start. Close the exam and check system permissions.'
         )
       );
-    const removeViolation = desktopLockdown.onViolation((applications) => {
+    const removeViolation = lockdown.onViolation((applications) => {
       if (!applications.length) {
         setNativeBlocked(false);
         return;
@@ -1032,13 +850,13 @@ export default function JoinSession() {
           violationPending = false;
         });
     });
-    const removeFocusLost = desktopLockdown.onFocusLost(() => {
+    const removeFocusLost = lockdown.onFocusLost(() => {
       setFullscreenLost(true);
     });
     return () => {
       removeViolation();
       removeFocusLost();
-      void desktopLockdown.stopLockdown();
+      void lockdown.stopLockdown();
     };
   }, [exam, submitted]);
   useEffect(() => {
