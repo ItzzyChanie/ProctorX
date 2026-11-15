@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { Check, Copy, Pencil, Plus, Trash2, Upload, X } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -971,13 +971,15 @@ export default function Classes() {
                 <X />
               </button>
             </div>
-            <div className="mb-5 flex flex-wrap gap-2">
+            <div className="mb-5 grid gap-2 sm:flex sm:flex-wrap">
               {(['manual', 'file', 'google'] as const).map((m) => (
                 <Button
                   key={m}
                   type="button"
                   variant={mode === m ? 'primary' : 'ghost'}
                   onClick={() => setMode(m)}
+                  // Labels may wrap on phones; give wrapped lines room.
+                  className="w-full text-center leading-tight sm:w-auto"
                 >
                   {m === 'manual'
                     ? 'Manual'
@@ -1065,11 +1067,22 @@ export default function Classes() {
               </div>
             )}
             {mode === 'file' && (
-              <div className="mb-5 rounded-xl border border-brand/20 bg-brand-soft p-4">
+              <div className="mb-5 min-w-0 rounded-xl border border-brand/20 bg-brand-soft p-4">
+                {/* Styled picker: the native file input has a fixed minimum
+                    width that overflows this panel on phones. */}
+                <label className="flex w-full cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-brand/30 bg-surface px-4 py-5 text-center transition hover:border-brand/60 focus-within:ring-4 focus-within:ring-brand/15 sm:flex-row sm:gap-3 sm:py-4 sm:text-left">
+                  <Upload size={18} className="shrink-0 text-brand" aria-hidden="true" />
+                  <span className="text-sm font-semibold text-text-1">
+                    Choose files
+                  </span>
+                  <span className="text-xs text-text-3">
+                    PPT, PPTX, PDF or DOCX · up to 20 files
+                  </span>
                 <input
                   type="file"
                   multiple
                   accept=".ppt,.pptx,.pdf,.docx"
+                  className="sr-only"
                   onChange={(e) => {
                     const incoming = Array.from(e.target.files ?? []);
                     setSourceFiles((current) => {
@@ -1085,6 +1098,7 @@ export default function Classes() {
                     e.currentTarget.value = '';
                   }}
                 />
+                </label>
                 {!!sourceFiles.length && (
                   <div className="mt-3 space-y-2">
                     <div className="flex items-center justify-between text-xs text-text-2">
@@ -1110,7 +1124,7 @@ export default function Classes() {
                         </span>
                         <button
                           type="button"
-                          className="font-semibold text-risk-high"
+                          className="shrink-0 font-semibold text-risk-high"
                           onClick={() => {
                             setSourceFiles((current) =>
                               current.filter((item) => item !== file)
@@ -1124,7 +1138,7 @@ export default function Classes() {
                     ))}
                   </div>
                 )}
-                <div className="mt-4 grid gap-2 sm:grid-cols-4">
+                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
                   {(Object.keys(counts) as QType[]).map((t) => (
                     <label className="text-xs font-semibold" key={t}>
                       {t.replace('_', ' ')}
@@ -1152,6 +1166,7 @@ export default function Classes() {
                 </p>
                 <Button
                   type="button"
+                  className="w-full leading-tight sm:w-auto"
                   disabled={!sourceFiles.length || generateDraft.isPending}
                   onClick={() => generateDraft.mutate()}
                 >
