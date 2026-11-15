@@ -7,6 +7,7 @@ import {
 import { Role } from '@prisma/client';
 import { unlink } from 'fs/promises';
 import { PrismaService } from '../prisma/prisma.service';
+import { runExclusive } from '../common/job-lock';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 180;
@@ -39,7 +40,9 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     const run = () =>
-      void this.purgeExpired().catch((error) =>
+      void runExclusive(this.prisma, 'retention-purge', () =>
+        this.purgeExpired()
+      ).catch((error) =>
         this.logger.error(`Retention purge failed: ${String(error)}`)
       );
     this.timers.push(setTimeout(run, FIRST_RUN_DELAY_MS));

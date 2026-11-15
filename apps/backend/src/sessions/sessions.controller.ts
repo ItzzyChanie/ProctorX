@@ -155,7 +155,7 @@ export class SessionsController {
     )
     file: Express.Multer.File
   ) {
-    return this.analysis.analyze(id, r.user.id, 'face', file.buffer);
+    return this.analysis.analyze(id, r.user.id, 'face', file.buffer, file.mimetype);
   }
   @Post(':id/audio-sample')
   @Roles(Role.STUDENT)
@@ -173,7 +173,7 @@ export class SessionsController {
     )
     file: Express.Multer.File
   ) {
-    return this.analysis.analyze(id, r.user.id, 'audio', file.buffer);
+    return this.analysis.analyze(id, r.user.id, 'audio', file.buffer, file.mimetype);
   }
   @Post(':id/events') @Roles(Role.STUDENT) event(
     @Req() r: any,

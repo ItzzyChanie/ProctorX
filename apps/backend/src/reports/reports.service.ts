@@ -15,6 +15,7 @@ import { readFile } from 'fs/promises';
 import { basename, extname } from 'path';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { runExclusive } from '../common/job-lock';
 import { SessionsGateway } from '../sessions/sessions.gateway';
 
 @Injectable()
@@ -27,7 +28,10 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
   ) {}
   onModuleInit() {
     this.syncTimer = setInterval(
-      () => void this.syncPendingDeanReports().catch(() => undefined),
+      () =>
+        void runExclusive(this.prisma, 'sync-dean-reports', () =>
+          this.syncPendingDeanReports()
+        ).catch(() => undefined),
       10_000
     );
   }

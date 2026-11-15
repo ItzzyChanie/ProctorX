@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
 import { basename, join } from 'path';
 import { PrismaService } from '../prisma/prisma.service';
+import { runExclusive } from '../common/job-lock';
 
 /** Value stored in users.profilePicture and served at GET /avatars/:file. */
 const PREFIX = 'avatars/';
@@ -56,7 +57,8 @@ export class AvatarsService implements OnModuleInit {
 
   onModuleInit() {
     // Move pictures saved before this change out of the database.
-    void this.backfill().catch((error) =>
+    void runExclusive(this.prisma, 'avatar-backfill', () => this.backfill()).catch(
+      (error) =>
       this.logger.error(`Avatar backfill failed: ${String(error)}`)
     );
   }

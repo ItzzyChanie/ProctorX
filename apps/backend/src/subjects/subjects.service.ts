@@ -18,6 +18,8 @@ import {
   SessionStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+
+import { runExclusive } from '../common/job-lock';
 import {
   CreateExamDto,
   CreateSubjectDto,
@@ -39,9 +41,9 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     private grading: GradingService
   ) {}
   onModuleInit() {
-    void this.closeExpiredExams().catch(() => undefined);
+    void this.closeExpiredExamsOnce().catch(() => undefined);
     this.expiryTimer = setInterval(
-      () => void this.closeExpiredExams().catch(() => undefined),
+      () => void this.closeExpiredExamsOnce().catch(() => undefined),
       5_000
     );
   }
@@ -56,6 +58,11 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     if (!user?.institutionId)
       throw new ForbiddenException('Institution is not configured');
     return user.institutionId;
+  }
+  private closeExpiredExamsOnce() {
+    return runExclusive(this.prisma, 'close-expired-exams', () =>
+      this.closeExpiredExams()
+    );
   }
   private async closeExpiredExams() {
     const now = new Date();

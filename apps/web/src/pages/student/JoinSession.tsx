@@ -36,6 +36,35 @@ type Signal = {
   candidate?: RTCIceCandidateInit;
 };
 
+/** Below this RMS level (about -40 dBFS) a chunk is treated as silence. */
+const SILENCE_RMS = 0.01;
+
+function rms(samples: Float32Array | number[]) {
+  let sum = 0;
+  for (let index = 0; index < samples.length; index++)
+    sum += samples[index]! * samples[index]!;
+  return samples.length ? Math.sqrt(sum / samples.length) : 0;
+}
+
+/**
+ * Downsamples to 16 kHz (enough for speech, and a rate the server's voice
+ * detector accepts) by averaging, cutting each upload to a third at 48 kHz.
+ * Returns rate 0 when the capture rate cannot be converted.
+ */
+function toSpeechRate(samples: number[], rate: number) {
+  if (rate === 8000 || rate === 16000) return { samples, rate };
+  if (rate % 16000 !== 0) return { samples: [], rate: 0 };
+  const factor = rate / 16000;
+  const out = new Array<number>(Math.floor(samples.length / factor));
+  for (let index = 0; index < out.length; index++) {
+    let sum = 0;
+    for (let offset = 0; offset < factor; offset++)
+      sum += samples[index * factor + offset]!;
+    out[index] = sum / factor;
+  }
+  return { samples: out, rate: 16000 };
+}
+
 /** Server explanation for expected refusals (time is up, attempt locked). */
 function conflictMessage(error: unknown): string | undefined {
   if (!axios.isAxiosError(error)) return undefined;
@@ -850,7 +879,12 @@ export default function JoinSession() {
             );
           };
           sample();
-          timers.current.push(window.setInterval(sample, 3000));
+          timers.current.push(
+            window.setInterval(
+              sample,
+              (exam.exam.monitoring?.faceSampleSeconds ?? 10) * 1000
+            )
+          );
         }
         if (exam.exam.requireMicrophone) {
           microphoneStream.current = await navigator.mediaDevices.getUserMedia({
@@ -872,10 +906,11 @@ export default function JoinSession() {
           source.connect(processor);
           processor.connect(context.destination);
           const sample = () => {
-            const samples = pcm.splice(0),
-              rate = context.sampleRate;
-            if (!samples.length || ![8000, 16000, 32000, 48000].includes(rate))
-              return;
+            const captured = pcm.splice(0);
+            const { samples, rate } = toSpeechRate(captured, context.sampleRate);
+            // Only send audio that could contain speech; the server's voice
+            // detector still makes the decision. Saves ~95% of uploads.
+            if (!samples.length || !rate || rms(samples) < SILENCE_RMS) return;
             const data = new ArrayBuffer(44 + samples.length * 2),
               view = new DataView(data),
               write = (offset: number, text: string) =>
@@ -909,7 +944,12 @@ export default function JoinSession() {
             );
             void postInBackground(`/sessions/${id}/audio-sample`, form);
           };
-          timers.current.push(window.setInterval(sample, 4000));
+          timers.current.push(
+            window.setInterval(
+              sample,
+              (exam.exam.monitoring?.audioSampleSeconds ?? 10) * 1000
+            )
+          );
         }
       } catch {
         if (!active) return;

@@ -26,7 +26,7 @@ class ServiceStatus(BaseModel):
     health: str | None = None
 
 @app.get("/", response_model=ServiceStatus)
-def root() -> ServiceStatus:
+async def root() -> ServiceStatus:
     return {
         "service": "proctorx-ai",
         "status": "ok",
@@ -35,7 +35,7 @@ def root() -> ServiceStatus:
     }
 
 @app.get("/health", response_model=ServiceStatus)
-def health() -> ServiceStatus:
+async def health() -> ServiceStatus:
     return ServiceStatus(status="ok", service="proctorx-ai")
 
 @app.get("/favicon.ico", include_in_schema=False)

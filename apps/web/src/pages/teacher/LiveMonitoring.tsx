@@ -622,23 +622,30 @@ export default function LiveMonitoring() {
       event,
     }: {
       sessionId: string;
-      score: number;
-      tier: string;
-      event: { type: string };
+      // null while the AI scorer is unavailable (the event is still shown);
+      // a later update without an event carries the recomputed score.
+      score: number | null;
+      tier: string | null;
+      event?: { type: string };
     }) =>
       setStudents((current) =>
         current.map((student) =>
           student.id === sessionId
             ? {
                 ...student,
-                score,
-                tier: tier.toUpperCase() as Student['tier'],
+                ...(score !== null && tier
+                  ? {
+                      score,
+                      tier: tier.toUpperCase() as Student['tier'],
+                    }
+                  : {}),
                 tabSwitches:
                   student.tabSwitches +
-                  (['TAB_SWITCH', 'FULLSCREEN_EXIT'].includes(event.type)
+                  (event &&
+                  ['TAB_SWITCH', 'FULLSCREEN_EXIT'].includes(event.type)
                     ? 1
                     : 0),
-                eventCount: student.eventCount + 1,
+                eventCount: student.eventCount + (event ? 1 : 0),
               }
             : student
         )

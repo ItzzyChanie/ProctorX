@@ -83,17 +83,29 @@ export class AiService {
     kind: 'face' | 'audio',
     sessionId: string,
     buffer: Buffer,
-    filename: string
+    filename: string,
+    sampleSeconds?: number,
+    mimeType?: string,
+    streaks?: Record<string, number>
   ) {
     const bytes = buffer.buffer.slice(
       buffer.byteOffset,
       buffer.byteOffset + buffer.byteLength
     ) as ArrayBuffer;
     const form = new FormData();
-    if (kind === 'face') form.append('session_id', sessionId);
+    if (kind === 'face') {
+      form.append('session_id', sessionId);
+      if (sampleSeconds) form.append('sample_seconds', String(sampleSeconds));
+      // The AI service is stateless: it continues from the caller's counters.
+      if (streaks) form.append('state', JSON.stringify(streaks));
+    }
+    // The AI service validates the part's media type, so it must be set
+    // (a bare Blob is sent as application/octet-stream and rejected).
     form.append(
       kind === 'face' ? 'frame' : 'chunk',
-      new Blob([bytes]),
+      new Blob([bytes], {
+        type: mimeType ?? (kind === 'face' ? 'image/jpeg' : 'audio/wav'),
+      }),
       filename
     );
     try {

@@ -13,8 +13,11 @@ import {
   SubmissionMode,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { runExclusive } from '../common/job-lock';
 import { UpdateResultReleaseDto } from './dto/result-release.dto';
 import { isPastGrace, sessionRemainingSeconds } from './session-timing';
+
+const HEARTBEAT_WRITE_INTERVAL_MS = 60_000;
 
 type SubmittedAnswer = {
   questionId: string;
@@ -69,7 +72,10 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     this.timeoutTimer = setInterval(
-      () => void this.finishExpiredSessions().catch(() => undefined),
+      () =>
+        void runExclusive(this.prisma, 'finish-expired-sessions', () =>
+          this.finishExpiredSessions()
+        ).catch(() => undefined),
       10_000
     );
   }
@@ -133,6 +139,7 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       where: { id: sessionId, studentId, status: SessionStatus.IN_PROGRESS },
       include: {
         exam: { include: { questions: { include: { options: true } } } },
+        submission: { include: { answers: true } },
       },
     });
     if (!session) throw new ForbiddenException();
@@ -163,21 +170,52 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
         gradeStatus: GradeStatus.UNGRADED,
       };
     });
-    await this.prisma.submission.upsert({
-      where: { sessionId },
-      create: {
-        sessionId,
-        submittedAt: null,
-        maxScore: session.exam.totalPoints,
-        totalScore: null,
-        gradeStatus: GradeStatus.UNGRADED,
-        answers: { create: rows },
-      },
-      update: {
-        maxScore: session.exam.totalPoints,
-        answers: { deleteMany: {}, create: rows },
-      },
+    const draft = session.submission;
+    if (!draft) {
+      await this.prisma.submission.create({
+        data: {
+          sessionId,
+          submittedAt: null,
+          maxScore: session.exam.totalPoints,
+          totalScore: null,
+          gradeStatus: GradeStatus.UNGRADED,
+          answers: { create: rows },
+        },
+      });
+      return { savedAt: new Date() };
+    }
+    // Autosave runs after every edit; write only the answers that changed
+    // (usually one) instead of deleting and re-inserting the whole draft.
+    const saved = new Map(draft.answers.map((answer) => [answer.questionId, answer]));
+    const changed = rows.filter((row) => {
+      const previous = saved.get(row.questionId);
+      return (
+        !previous ||
+        previous.responseText !== row.responseText ||
+        previous.selectedOptionIds.length !== row.selectedOptionIds.length ||
+        previous.selectedOptionIds.some(
+          (id, index) => id !== row.selectedOptionIds[index]
+        )
+      );
     });
+    if (changed.length)
+      await this.prisma.$transaction(
+        changed.map((row) =>
+          this.prisma.answer.upsert({
+            where: {
+              submissionId_questionId: {
+                submissionId: draft.id,
+                questionId: row.questionId,
+              },
+            },
+            create: { ...row, submissionId: draft.id },
+            update: {
+              responseText: row.responseText,
+              selectedOptionIds: row.selectedOptionIds,
+            },
+          })
+        )
+      );
     return { savedAt: new Date() };
   }
 
@@ -203,14 +241,22 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       const result = await this.finalizeSession(sessionId);
       return { expired: true, remainingSeconds: 0, result };
     }
-    await this.prisma.examSession.update({
-      where: { id: sessionId },
-      data: {
-        remainingSeconds,
-        activeStartedAt: now,
-        lastHeartbeatAt: now,
-      },
-    });
+    // The countdown is computed from the wall clock, so these columns are only
+    // "last seen" bookkeeping. Writing them every 5 s per student was the
+    // largest source of database commits in the load test; once a minute is
+    // plenty.
+    if (
+      !session.lastHeartbeatAt ||
+      +now - +session.lastHeartbeatAt >= HEARTBEAT_WRITE_INTERVAL_MS
+    )
+      await this.prisma.examSession.update({
+        where: { id: sessionId },
+        data: {
+          remainingSeconds,
+          activeStartedAt: now,
+          lastHeartbeatAt: now,
+        },
+      });
     return { expired: false, remainingSeconds, serverTime: now };
   }
 

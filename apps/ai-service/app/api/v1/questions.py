@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.core.security import verify_internal_api_key
@@ -40,7 +41,9 @@ async def generate(files: list[UploadFile] = File(...), counts: str = Form(...))
                     f"Combined documents exceed the {settings.max_document_total_size_mb} MB size limit"
                 )
             try:
-                extracted = extract_document(data, extension)
+                # Extraction can shell out to LibreOffice for up to a minute;
+                # keep it off the event loop so monitoring keeps flowing.
+                extracted = await run_in_threadpool(extract_document, data, extension)
             except DocumentExtractionError as error:
                 raise DocumentExtractionError(
                     f'Could not read "{filename}": {error}'

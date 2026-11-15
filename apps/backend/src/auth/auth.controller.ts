@@ -154,7 +154,7 @@ export class AuthController {
 
   @AllowPasswordChangeRequired()
   @UseGuards(JwtAuthGuard) @Get('me') me(@Req() req: any) {
-    return this.auth.me(req.user);
+    return this.auth.me(req.user.id);
   }
 
   @UseGuards(JwtAuthGuard) @Post('profile-picture') profilePicture(

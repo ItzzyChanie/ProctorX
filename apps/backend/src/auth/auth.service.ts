@@ -75,7 +75,7 @@ export class AuthService {
         },
       });
       return true;
-    });
+    }, { maxWait: 10_000, timeout: 10_000 });
 
     if (!created) {
       const notification = await this.prisma.notification.create({
@@ -382,7 +382,13 @@ export class AuthService {
       throw error;
     }
   }
-  me(user: UserWithProfile) {
+  /** Full profile for the signed-in user (the auth guard loads only a few columns). */
+  async me(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: profileInclude,
+    });
+    if (!user) throw new UnauthorizedException();
     return this.profile(user);
   }
   async updateProfilePicture(userId: string, profilePicture: string) {

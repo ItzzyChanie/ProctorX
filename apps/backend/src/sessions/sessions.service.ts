@@ -8,6 +8,7 @@ import {
   EvidenceClipPhase,
   EvidenceClipStatus,
   EventType,
+  Prisma,
   QuestionType,
   RecordingStatus,
   SessionStatus,
@@ -29,7 +30,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SessionsGateway } from './sessions.gateway';
 import { extraTimeWindowError } from './extra-time-policy';
 import { GradingService } from './grading.service';
+import { ProctoringScoreService } from './proctoring-score.service';
 import { sessionRemainingSeconds } from './session-timing';
+import { monitoringIntervals } from './monitoring-config';
 
 @Injectable()
 export class SessionsService {
@@ -37,7 +40,8 @@ export class SessionsService {
     private prisma: PrismaService,
     private ai: AiService,
     private gateway: SessionsGateway,
-    private grading: GradingService
+    private grading: GradingService,
+    private scoring: ProctoringScoreService
   ) {}
 
   private async availableExam(code: string, studentId: string) {
@@ -223,6 +227,8 @@ export class SessionsService {
         extraTimeMinutes: Math.floor(session.extraTimeSeconds / 60),
         requireCamera: exam.requireCamera,
         requireMicrophone: exam.requireMicrophone,
+        // Camera/audio sampling cadence chosen by the server (see monitoring-config).
+        monitoring: monitoringIntervals(),
         appPolicyMode: exam.appPolicyMode,
         appPolicyList: exam.appPolicyList,
         sourceType: exam.sourceType,
@@ -366,49 +372,20 @@ export class SessionsService {
       include: { exam: true },
     });
     if (!session) throw new ForbiddenException();
-    const event = await this.prisma.proctoringEvent.create({
-      data: {
-        sessionId,
-        type,
-        metadata: metadata as any,
-        occurredAt: new Date(),
-      },
+    const event = await this.scoring.record(sessionId, {
+      type,
+      metadata: metadata as Prisma.InputJsonValue | undefined,
     });
-    await this.prisma.incident.create({
-      data: { sessionId, eventId: event.id },
-    });
-    // Score the whole attempt; reconnecting must not reset the evidence.
-    const all = await this.prisma.proctoringEvent.findMany({
-      where: { sessionId },
-    });
-    const score = await this.ai.scoreReduced(sessionId, studentId, {
-      tab_switch_count: all.filter((x) => x.type === EventType.TAB_SWITCH)
-        .length,
-      blacklisted_app_seconds: all
-        .filter((x) => x.type === EventType.BLACKLISTED_APP)
-        .reduce((n, x) => n + Number((x.metadata as any)?.seconds ?? 0), 0),
-      idle_seconds: all
-        .filter((x) => x.type === EventType.IDLE)
-        .reduce((n, x) => n + Number((x.metadata as any)?.seconds ?? 0), 0),
-      usb_event_count: all.filter((x) => x.type === EventType.USB_EVENT).length,
-    });
-    await this.prisma.suspicionScoreSnapshot.create({
-      data: {
-        sessionId,
-        score: score.suspicion_score,
-        tier: score.tier.toUpperCase(),
-        contributingFactors: score.contributing_factors,
-        computedAt: new Date(),
-      },
-    });
-    this.gateway.emitMonitor(session.examId, 'monitor:update', {
-      sessionId,
-      studentId,
-      score: score.suspicion_score,
-      tier: score.tier,
-      event,
-    });
-    return { ...score, eventId: event.id, occurredAt: event.occurredAt };
+    // Scores the whole attempt; a reconnect never resets the evidence. If the
+    // AI service is down the event is still saved, shown and rescored later.
+    const score = await this.scoring.rescore(session);
+    this.scoring.publish(session, [event], score);
+    return {
+      ...(score ?? { suspicion_score: null, tier: null }),
+      scored: Boolean(score),
+      eventId: event.id,
+      occurredAt: event.occurredAt,
+    };
   }
 
   async evidenceClip(
