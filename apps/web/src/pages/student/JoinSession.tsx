@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Camera,
+  Flag,
   ChevronLeft,
   ChevronRight,
   Clock3,
@@ -56,6 +57,8 @@ import {
   type Signal,
   type StreamQuality,
 } from './exam/media';
+import { QuestionNavigator } from './exam/QuestionNavigator';
+import { SubmitReviewDialog } from './exam/SubmitReviewDialog';
 
 export default function JoinSession() {
   const queryClient = useQueryClient();
@@ -88,6 +91,10 @@ export default function JoinSession() {
   const [preview, setPreview] = useState<any>();
   const [consent, setConsent] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
+  // Questions the student marked to come back to (kept for this attempt).
+  const [flagged, setFlagged] = useState<Set<string>>(() => new Set());
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [fullscreenLost, setFullscreenLost] = useState(false);
   const [screenShareLost, setScreenShareLost] = useState(false);
   const [multipleDisplays, setMultipleDisplays] = useState(false);
@@ -918,6 +925,56 @@ export default function JoinSession() {
     const timer = window.setInterval(() => void heartbeat(), 5000);
     return () => window.clearInterval(timer);
   }, [exam, queryClient, submitted]);
+  const attemptId: string | undefined = exam?.session?.id;
+  useEffect(() => {
+    if (!attemptId) return;
+    try {
+      const saved = window.sessionStorage.getItem(`proctorx.flags.${attemptId}`);
+      setFlagged(new Set(saved ? (JSON.parse(saved) as string[]) : []));
+    } catch {
+      setFlagged(new Set());
+    }
+  }, [attemptId]);
+  const toggleFlag = (questionId: string) =>
+    setFlagged((current) => {
+      const next = new Set(current);
+      if (next.has(questionId)) next.delete(questionId);
+      else next.add(questionId);
+      try {
+        if (attemptId)
+          window.sessionStorage.setItem(
+            `proctorx.flags.${attemptId}`,
+            JSON.stringify([...next])
+          );
+      } catch {
+        // Flags are a convenience; ignore storage failures.
+      }
+      return next;
+    });
+  const goToQuestion = (index: number) => {
+    setNotice('');
+    setQuestionIndex(Math.floor(index / QUESTIONS_PER_PAGE));
+    window.setTimeout(
+      () =>
+        document
+          .getElementById(`exam-q-${index}`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      50
+    );
+  };
+  const isAnswered = (questionId: string) => {
+    const question = exam?.exam.questions.find((item: any) => item.id === questionId);
+    return question ? hasAnswer(question, answers[questionId]) : false;
+  };
+  const confirmSubmit = async () => {
+    setSubmitting(true);
+    try {
+      await submit();
+    } finally {
+      setSubmitting(false);
+      setReviewOpen(false);
+    }
+  };
   const submit = async () => {
     const unanswered = exam.exam.questions.findIndex((question: any) => {
       if (!question.isRequired) return false;
@@ -1497,6 +1554,14 @@ export default function JoinSession() {
               </div>
             ) : (
               <>
+                <QuestionNavigator
+                  questions={exam.exam.questions}
+                  isAnswered={isAnswered}
+                  flagged={flagged}
+                  currentPage={questionIndex}
+                  perPage={QUESTIONS_PER_PAGE}
+                  onGo={goToQuestion}
+                />
                 <fieldset
                   disabled={locked || nativeBlocked}
                   className="mx-auto max-w-5xl space-y-5"
@@ -1509,8 +1574,11 @@ export default function JoinSession() {
                     .map((question: any, pageOffset: number) => (
                       <div
                         key={question.id}
-                        className={`group overflow-hidden rounded-2xl border bg-white/95 p-5 shadow-md transition-all duration-300 hover:-translate-y-0.5 hover:shadow-xl sm:p-6 ${
-                          hasAnswer(question, answers[question.id])
+                        id={`exam-q-${questionIndex * QUESTIONS_PER_PAGE + pageOffset}`}
+                        className={`group scroll-mt-28 overflow-hidden rounded-2xl border bg-white/95 p-5 shadow-md transition-all duration-300 hover:-translate-y-0.5 hover:shadow-xl sm:p-6 ${
+                          flagged.has(question.id)
+                            ? 'border-amber-300 ring-1 ring-amber-100'
+                            : hasAnswer(question, answers[question.id])
                             ? 'border-emerald-300 ring-1 ring-emerald-100'
                             : 'border-slate-200'
                         }`}
@@ -1530,6 +1598,19 @@ export default function JoinSession() {
                                 {question.points}{' '}
                                 {question.points === 1 ? 'point' : 'points'}
                               </span>
+                              <button
+                                type="button"
+                                aria-pressed={flagged.has(question.id)}
+                                onClick={() => toggleFlag(question.id)}
+                                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 focus:outline-none focus:ring-2 focus:ring-amber-400 ${
+                                  flagged.has(question.id)
+                                    ? 'bg-amber-400 text-amber-950'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-amber-100'
+                                }`}
+                              >
+                                <Flag size={11} aria-hidden="true" />
+                                {flagged.has(question.id) ? 'Flagged' : 'Flag for review'}
+                              </button>
                               {question.isRequired && (
                                 <span className="rounded-full bg-rose-100 px-2.5 py-1 text-rose-700">
                                   Required
@@ -1733,12 +1814,22 @@ export default function JoinSession() {
                       Next
                     </Button>
                   ) : (
-                    <Button onClick={() => void submit()}>
-                      Submit{' '}
-                      {exam.exam.assessmentType === 'QUIZ' ? 'quiz' : 'exam'}
+                    <Button onClick={() => setReviewOpen(true)}>
+                      Review & submit
                     </Button>
                   )}
                 </div>
+                <SubmitReviewDialog
+                  open={reviewOpen}
+                  kind={exam.exam.assessmentType === 'QUIZ' ? 'quiz' : 'exam'}
+                  questions={exam.exam.questions}
+                  isAnswered={isAnswered}
+                  flagged={flagged}
+                  submitting={submitting}
+                  onGo={goToQuestion}
+                  onCancel={() => setReviewOpen(false)}
+                  onConfirm={() => void confirmSubmit()}
+                />
               </>
             )}
           </>
