@@ -21,6 +21,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SessionsGateway } from '../sessions/sessions.gateway';
 import { SessionRevocationService } from '../auth/session-revocation.service';
 import { AvatarsService } from '../avatars/avatars.service';
+import { resultsReleased, studentGradeStatus } from './result-release';
 import { generateDefaultPassword } from '../users/import/password.util';
 import { ROLE_DEFAULT_PERMISSIONS } from '../common/constants/role-permissions';
 import {
@@ -257,7 +258,16 @@ export class PortalService {
         ? Math.round((+x.endedAt - +x.startedAt) / 1000)
         : null,
       status: x.status,
-      submission: x.submission,
+      // Scores stay hidden until the exam closes (see result-release.ts).
+      submission: x.submission
+        ? {
+            ...x.submission,
+            gradeStatus: studentGradeStatus(x.submission.gradeStatus, x.exam.status),
+            totalScore: resultsReleased(x.submission.gradeStatus, x.exam.status)
+              ? x.submission.totalScore
+              : null,
+          }
+        : null,
       reviewStatus:
         x.proctorReviewDecision !== ProctorReviewDecision.PENDING
           ? x.proctorReviewDecision
@@ -315,7 +325,8 @@ export class PortalService {
         where: {
           gradeStatus: GradeStatus.TEACHER_CONFIRMED,
           deletedAt: null,
-          session: { studentId: userId },
+          // Notify only once results are actually visible (exam closed).
+          session: { studentId: userId, exam: { status: { not: 'PUBLISHED' } } },
         },
         select: {
           id: true,
@@ -468,7 +479,8 @@ export class PortalService {
       scoreHistory: sessions
         .filter(
           (x) =>
-            x.submission?.gradeStatus === GradeStatus.TEACHER_CONFIRMED &&
+            !!x.submission &&
+            resultsReleased(x.submission.gradeStatus, x.exam.status) &&
             x.submission.totalScore !== null
         )
         .map((x) => ({
@@ -573,7 +585,10 @@ export class PortalService {
       },
     });
     if (!submission) throw new NotFoundException('Result not found');
-    const released = submission.gradeStatus === GradeStatus.TEACHER_CONFIRMED;
+    const released = resultsReleased(
+      submission.gradeStatus,
+      submission.session.exam.status
+    );
     const showCorrect = released && submission.session.exam.showCorrectAnswers;
     return {
       id: submission.id,
@@ -581,7 +596,10 @@ export class PortalService {
       submittedAt: submission.submittedAt,
       totalScore: released ? submission.totalScore : null,
       maxScore: submission.maxScore,
-      gradeStatus: submission.gradeStatus,
+      gradeStatus: studentGradeStatus(
+        submission.gradeStatus,
+        submission.session.exam.status
+      ),
       teacherFeedback: released ? submission.teacherFeedback : null,
       showCorrectAnswers: showCorrect,
       exam: {
@@ -621,7 +639,7 @@ export class PortalService {
   async studentAnalytics(userId: string) {
     const submissions = await this.prisma.submission.findMany({
       where: {
-        session: { studentId: userId },
+        session: { studentId: userId, exam: { status: { not: 'PUBLISHED' } } },
         gradeStatus: GradeStatus.TEACHER_CONFIRMED,
         totalScore: { not: null },
         deletedAt: null,

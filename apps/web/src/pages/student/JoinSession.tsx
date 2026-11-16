@@ -1390,27 +1390,14 @@ export default function JoinSession() {
                   ? 'Your latest saved answers were submitted automatically when the timer reached zero.'
                   : 'Your responses are safely recorded. You may now leave the exam room.'}
               </p>
-              {score?.gradeStatus === 'TEACHER_CONFIRMED' &&
-                score.maxScore > 0 && (
-                  <div className="mt-6 rounded-2xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-cyan-50 p-6 text-emerald-900">
-                    <div className="text-sm font-semibold">Automatic score</div>
-                    <div className="mt-1 text-4xl font-black">
-                      {score.totalScore} / {score.maxScore}
-                    </div>
-                    <div className="mt-2 text-sm text-emerald-700">
-                      {Math.round(
-                        ((score.totalScore ?? 0) / score.maxScore) * 100
-                      )}
-                      % of the available points
-                    </div>
-                  </div>
-                )}
-              {score?.gradeStatus !== 'TEACHER_CONFIRMED' && (
-                <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
-                  Your objective responses are saved. A teacher will review
-                  written answers before your final score is released.
-                </div>
-              )}
+              {/* Scores are never shown at submit time: they are released in
+                  My Sessions once the exam closes, so early finishers cannot
+                  share which answers were right. */}
+              <div className="mt-6 rounded-2xl border border-violet-200 bg-violet-50 p-5 text-sm text-violet-900">
+                Your result will appear in <b>My Sessions</b> after the exam
+                closes{score?.maxScore ? ` (out of ${score.maxScore} points)` : ''}.
+                Written answers are graded by your teacher first.
+              </div>
               <Button
                 className="mt-7"
                 onClick={() => {

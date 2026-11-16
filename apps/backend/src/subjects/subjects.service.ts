@@ -1135,6 +1135,24 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
         throw new ConflictException(
           'This question type requires a correct answer'
         );
+      if (question.type === 'ENUMERATION') {
+        // The key is a JSON list of expected items; a malformed key used to
+        // crash exam creation with a server error.
+        let items: unknown;
+        try {
+          items = JSON.parse(question.correctAnswer!);
+        } catch {
+          items = null;
+        }
+        if (
+          !Array.isArray(items) ||
+          !items.length ||
+          items.some((item) => typeof item !== 'string' || !item.trim())
+        )
+          throw new BadRequestException(
+            `Enumeration question "${question.prompt.slice(0, 60)}" needs a list of expected answers`
+          );
+      }
     }
     const exam = await this.prisma.$transaction(async (tx) => {
       return tx.exam.create({

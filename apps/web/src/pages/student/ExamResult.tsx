@@ -113,7 +113,9 @@ export default function ExamResult() {
             ) : (
               <div className="rounded-xl bg-amber-100 px-4 py-3 text-amber-800">
                 <Clock3 className="inline mr-2" size={17} />
-                Pending teacher grading
+                {data.gradeStatus === 'PENDING_RELEASE'
+                  ? 'Results are released after the exam closes'
+                  : 'Pending teacher grading'}
               </div>
             )}
           </div>

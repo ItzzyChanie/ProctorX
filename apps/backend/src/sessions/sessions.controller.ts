@@ -67,12 +67,14 @@ export class SessionsController {
   ) {
     return this.s.monitorableExams(r.user.id);
   }
-  @Post(':id/submit') @Roles(Role.STUDENT) submit(
+  @Post(':id/submit') @Roles(Role.STUDENT) async submit(
     @Req() r: any,
     @Param('id') id: string,
     @Body() body: SubmitDto
   ) {
-    return this.grading.submit(id, r.user.id, body.answers);
+    return this.grading.studentReceipt(
+      await this.grading.submit(id, r.user.id, body.answers)
+    );
   }
   @Post(':id/draft') @Roles(Role.STUDENT) saveDraft(
     @Req() r: any,

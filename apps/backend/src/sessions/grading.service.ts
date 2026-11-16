@@ -233,12 +233,12 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       return {
         expired: true,
         remainingSeconds: 0,
-        result: session.submission,
+        result: this.studentReceipt(session.submission),
       };
 
     const remainingSeconds = sessionRemainingSeconds(session, session.exam, now);
     if (remainingSeconds <= 0) {
-      const result = await this.finalizeSession(sessionId);
+      const result = this.studentReceipt(await this.finalizeSession(sessionId));
       return { expired: true, remainingSeconds: 0, result };
     }
     // The countdown is computed from the wall clock, so these columns are only
@@ -258,6 +258,24 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
         },
       });
     return { expired: false, remainingSeconds, serverTime: now };
+  }
+
+  /**
+   * What a student is told right after submitting: no score and no
+   * per-question marks. Results are released only after the exam closes, so
+   * an early finisher cannot tell classmates which answers were right.
+   */
+  studentReceipt(
+    submission: { id: string; submittedAt: Date | null; maxScore: number; mode?: string } | null
+  ) {
+    if (!submission) return null;
+    return {
+      id: submission.id,
+      submittedAt: submission.submittedAt,
+      maxScore: submission.maxScore,
+      mode: submission.mode,
+      resultsPending: true as const,
+    };
   }
 
   /**
