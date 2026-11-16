@@ -44,6 +44,42 @@ const answerValues = (value: unknown) =>
     : value == null
       ? []
       : [String(value)];
+const isChoice = (type: string) =>
+  type === 'MULTIPLE_CHOICE' || type === 'MULTIPLE_RESPONSE';
+
+/** A list answer (enumeration / fill in the blank) is stored as JSON. */
+const listAnswer = (responseText: string | null) => {
+  if (!responseText) return [] as string[];
+  try {
+    const parsed: unknown = JSON.parse(responseText);
+    if (Array.isArray(parsed)) return parsed.map((value) => String(value ?? ''));
+  } catch {
+    // older newline-separated answers
+  }
+  return responseText.split(/\r?\n/u);
+};
+
+/** The student's answer as readable text. */
+const formatResponse = (type: string, responseText: string | null) => {
+  if (type === 'FILL_IN_THE_BLANK')
+    return listAnswer(responseText)
+      .map((value, index) => `Blank ${index + 1}: ${value.trim() || '(blank)'}`)
+      .join('\n');
+  if (type === 'ENUMERATION')
+    return listAnswer(responseText).filter((value) => value.trim()).join(', ');
+  return responseText ?? '';
+};
+
+/** The answer key as readable text. */
+const formatKey = (type: string, key: unknown) => {
+  if (type === 'FILL_IN_THE_BLANK' && Array.isArray(key))
+    return key
+      .map((accepted, index) => `Blank ${index + 1}: ${answerValues(accepted).join(' or ')}`)
+      .join('\n');
+  if (type === 'IDENTIFICATION') return answerValues(key).join(' or ');
+  return answerValues(key).join(', ');
+};
+
 export default function ExamResult() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
@@ -151,7 +187,7 @@ export default function ExamResult() {
               </div>
               <div className="mt-4 rounded-xl border border-border bg-canvas/50 p-3">
                 <div className="text-xs font-bold text-text-3">Your answer</div>
-                {answer.question.type === 'MULTIPLE_CHOICE' ? (
+                {isChoice(answer.question.type) ? (
                   <div className="mt-2 space-y-2">
                     {answer.question.options
                       .filter((option) =>
@@ -166,7 +202,7 @@ export default function ExamResult() {
                   </div>
                 ) : (
                   <p className="mt-1 whitespace-pre-wrap">
-                    {answer.responseText || 'No answer'}
+                    {formatResponse(answer.question.type, answer.responseText) || 'No answer'}
                   </p>
                 )}
               </div>
@@ -176,7 +212,7 @@ export default function ExamResult() {
                     <CheckCircle2 size={14} />
                     Correct answer
                   </div>
-                  {answer.question.type === 'MULTIPLE_CHOICE' ? (
+                  {isChoice(answer.question.type) ? (
                     <div className="mt-1">
                       {answer.question.options
                         .filter((option) => option.isCorrect)
@@ -185,7 +221,7 @@ export default function ExamResult() {
                     </div>
                   ) : (
                     <div className="mt-1 whitespace-pre-wrap">
-                      {answerValues(answer.question.correctAnswer).join(', ') ||
+                      {formatKey(answer.question.type, answer.question.correctAnswer) ||
                         'Teacher-reviewed response'}
                     </div>
                   )}

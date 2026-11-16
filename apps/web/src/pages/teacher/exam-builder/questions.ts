@@ -42,8 +42,10 @@ export const TYPE_LABELS: Record<QType, string> = {
 /** Types offered in the builder. */
 export const AVAILABLE_TYPES: QType[] = [
   'MULTIPLE_CHOICE',
+  'MULTIPLE_RESPONSE',
   'IDENTIFICATION',
   'ENUMERATION',
+  'FILL_IN_THE_BLANK',
   'ESSAY',
 ];
 

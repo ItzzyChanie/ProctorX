@@ -10,10 +10,8 @@ import {
   EyeOff,
   LogIn,
   Mic,
-  Minus,
   Monitor,
   MonitorOff,
-  Plus,
   ShieldCheck,
   Sparkles,
   Trophy,
@@ -197,7 +195,7 @@ export default function JoinSession() {
               enumerationAnswers:
                 joined.exam.questions.find(
                   (question: any) => question.id === answer.questionId
-                )?.type === 'ENUMERATION'
+                )?.type.match(/^(ENUMERATION|FILL_IN_THE_BLANK)$/)
                   ? parseEnumerationResponse(answer.responseText)
                   : undefined,
             },
@@ -966,6 +964,24 @@ export default function JoinSession() {
     const question = exam?.exam.questions.find((item: any) => item.id === questionId);
     return question ? hasAnswer(question, answers[questionId]) : false;
   };
+  const isSelected = (questionId: string, optionId: string) =>
+    Boolean(answers[questionId]?.selectedOptionIds?.includes(optionId));
+  /** Radio behaviour for multiple choice, toggle for "select all that apply". */
+  const choose = (question: any, optionId: string) =>
+    setAnswers((current) => {
+      const selected = current[question.id]?.selectedOptionIds ?? [];
+      return {
+        ...current,
+        [question.id]: {
+          selectedOptionIds:
+            question.type === 'MULTIPLE_RESPONSE'
+              ? selected.includes(optionId)
+                ? selected.filter((id) => id !== optionId)
+                : [...selected, optionId]
+              : [optionId],
+        },
+      };
+    });
   const confirmSubmit = async () => {
     setSubmitting(true);
     try {
@@ -1622,6 +1638,11 @@ export default function JoinSession() {
                             </h2>
                           </div>
                         </div>
+                        {question.type === 'MULTIPLE_RESPONSE' && (
+                          <p className="mb-3 text-sm font-semibold text-violet-700">
+                            Select all that apply.
+                          </p>
+                        )}
                         {question.options?.map(
                           (option: any, optionIndex: number) => (
                             <label
@@ -1629,45 +1650,76 @@ export default function JoinSession() {
                               // The radio itself is visually hidden, so show
                               // keyboard focus on the whole option card.
                               className={`mb-3 flex cursor-pointer items-center gap-3 rounded-xl border p-4 text-sm font-medium transition-all focus-within:outline-none focus-within:ring-4 focus-within:ring-violet-400 sm:text-base ${
-                                answers[question.id]?.selectedOptionIds?.[0] ===
-                                option.id
+                                isSelected(question.id, option.id)
                                   ? 'border-violet-500 bg-violet-50 text-violet-950 shadow-sm ring-2 ring-violet-100'
                                   : 'border-slate-200 bg-white text-slate-700 hover:border-violet-300 hover:bg-violet-50/50'
                               }`}
                             >
                               <input
-                                type="radio"
-                                className="sr-only"
-                                checked={
-                                  answers[question.id]
-                                    ?.selectedOptionIds?.[0] === option.id
+                                type={
+                                  question.type === 'MULTIPLE_RESPONSE'
+                                    ? 'checkbox'
+                                    : 'radio'
                                 }
+                                className="sr-only"
+                                checked={isSelected(question.id, option.id)}
                                 onChange={() =>
-                                  setAnswers((current) => ({
-                                    ...current,
-                                    [question.id]: {
-                                      selectedOptionIds: [option.id],
-                                    },
-                                  }))
+                                  choose(question, option.id)
                                 }
                                 name={question.id}
                               />
                               <span
-                                className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-black ${answers[question.id]?.selectedOptionIds?.[0] === option.id ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-500'}`}
+                                className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-black ${isSelected(question.id, option.id) ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-500'}`}
                               >
                                 {String.fromCharCode(65 + optionIndex)}
                               </span>
                               <span className="flex-1">{option.label}</span>
                               <span
-                                className={`h-5 w-5 rounded-full border-2 p-1 ${answers[question.id]?.selectedOptionIds?.[0] === option.id ? 'border-violet-600' : 'border-slate-300'}`}
+                                className={`h-5 w-5 border-2 p-1 ${question.type === 'MULTIPLE_RESPONSE' ? 'rounded-md' : 'rounded-full'} ${isSelected(question.id, option.id) ? 'border-violet-600' : 'border-slate-300'}`}
                               >
-                                {answers[question.id]
-                                  ?.selectedOptionIds?.[0] === option.id && (
-                                  <span className="block h-full w-full rounded-full bg-violet-600" />
+                                {isSelected(question.id, option.id) && (
+                                  <span
+                                    className={`block h-full w-full bg-violet-600 ${question.type === 'MULTIPLE_RESPONSE' ? 'rounded-sm' : 'rounded-full'}`}
+                                  />
                                 )}
                               </span>
                             </label>
                           )
+                        )}
+                        {question.type === 'FILL_IN_THE_BLANK' && (
+                          <div className="space-y-3">
+                            <p className="text-sm text-slate-600">
+                              Fill in each blank (___) in order.
+                            </p>
+                            {enumerationEntries(
+                              question,
+                              answers[question.id]
+                            ).map((value, blankIndex, entries) => (
+                              <label
+                                key={blankIndex}
+                                className="flex items-center gap-2"
+                              >
+                                <span className="shrink-0 rounded-xl bg-cyan-100 px-3 py-2.5 text-sm font-bold text-cyan-800">
+                                  Blank {blankIndex + 1}
+                                </span>
+                                <input
+                                  value={value}
+                                  onChange={(event) =>
+                                    setAnswers((current) => {
+                                      const next = [...entries];
+                                      next[blankIndex] = event.target.value;
+                                      return {
+                                        ...current,
+                                        [question.id]: { enumerationAnswers: next },
+                                      };
+                                    })
+                                  }
+                                  className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-900 outline-none transition focus:border-violet-500 focus:bg-white focus:ring-4 focus:ring-violet-100"
+                                  placeholder={`Answer for blank ${blankIndex + 1}`}
+                                />
+                              </label>
+                            ))}
+                          </div>
                         )}
                         {question.type === 'ENUMERATION' && (
                           <div className="space-y-3">
@@ -1699,49 +1751,12 @@ export default function JoinSession() {
                                   className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-900 outline-none transition focus:border-violet-500 focus:bg-white focus:ring-4 focus:ring-violet-100"
                                   placeholder={`Answer ${entryIndex + 1}`}
                                 />
-                                <button
-                                  type="button"
-                                  aria-label={`Remove answer ${entryIndex + 1}`}
-                                  disabled={entries.length === 1}
-                                  onClick={() =>
-                                    setAnswers((current) => ({
-                                      ...current,
-                                      [question.id]: {
-                                        enumerationAnswers: entries.filter(
-                                          (_, index) => index !== entryIndex
-                                        ),
-                                      },
-                                    }))
-                                  }
-                                  className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-rose-200 text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-35"
-                                >
-                                  <Minus size={17} />
-                                </button>
                               </div>
                             ))}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setAnswers((current) => ({
-                                  ...current,
-                                  [question.id]: {
-                                    enumerationAnswers: [
-                                      ...enumerationEntries(
-                                        question,
-                                        current[question.id]
-                                      ),
-                                      '',
-                                    ],
-                                  },
-                                }))
-                              }
-                              className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-bold text-violet-700 transition hover:bg-violet-100"
-                            >
-                              <Plus size={16} /> Add another answer
-                            </button>
                             <p className="text-xs text-slate-500">
-                              Answer order does not matter. Each entry is
-                              checked separately.
+                              Give {enumerationEntries(question, answers[question.id]).length}{' '}
+                              answers. Order does not matter; each correct
+                              answer is checked separately.
                             </p>
                           </div>
                         )}

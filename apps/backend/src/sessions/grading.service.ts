@@ -16,54 +16,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import { runExclusive } from '../common/job-lock';
 import { UpdateResultReleaseDto } from './dto/result-release.dto';
 import { isPastGrace, sessionRemainingSeconds } from './session-timing';
+import {
+  round2,
+  scoreAnswer,
+  type ScorableQuestion,
+  type SubmittedAnswer as ScoringAnswer,
+} from './scoring';
 
 const HEARTBEAT_WRITE_INTERVAL_MS = 60_000;
 
-type SubmittedAnswer = {
-  questionId: string;
-  responseText?: string;
-  selectedOptionIds?: string[];
-};
-
-const superscriptDigits: Record<number, string> = {
-  0x2070: '0',
-  0x00b9: '1',
-  0x00b2: '2',
-  0x00b3: '3',
-  0x2074: '4',
-  0x2075: '5',
-  0x2076: '6',
-  0x2077: '7',
-  0x2078: '8',
-  0x2079: '9',
-};
-
-const normalizeObjectiveText = (input: unknown) =>
-  String(input ?? '')
-    .replace(
-      /[\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+/gu,
-      (digits) =>
-        `^${[...digits].map((digit) => superscriptDigits[digit.codePointAt(0)!]).join('')}`
-    )
-    .normalize('NFKC')
-    .toLocaleLowerCase()
-    .trim()
-    .replace(/[\u2010-\u2015]/gu, '-')
-    .replace(/\s*([/\\*^#!+=<>%])\s*/gu, '$1')
-    .replace(/([\p{L}])\s*-\s*(?=\p{L})/gu, '$1')
-    .replace(/([\p{L}])\s+(?=\p{L})/gu, '$1')
-    .replace(/\s+/gu, ' ');
-
-const enumerationValues = (responseText?: string) => {
-  if (!responseText?.trim()) return [];
-  try {
-    const parsed: unknown = JSON.parse(responseText);
-    if (Array.isArray(parsed)) return parsed.map(String);
-  } catch {
-    // Compatibility with enumeration responses saved before separate fields.
-  }
-  return responseText.split(/\r?\n/gu);
-};
+type SubmittedAnswer = ScoringAnswer;
 
 @Injectable()
 export class GradingService implements OnModuleInit, OnModuleDestroy {
@@ -84,50 +46,9 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
     if (this.timeoutTimer) clearInterval(this.timeoutTimer);
   }
 
-  private objectivePoints(
-    question: {
-      type: QuestionType;
-      points: number;
-      correctAnswer: unknown;
-      options: { id: string; isCorrect: boolean }[];
-    },
-    answer: SubmittedAnswer
-  ) {
-    if (question.type === QuestionType.ESSAY) return null;
-    if (question.type === QuestionType.MULTIPLE_CHOICE) {
-      const expected = question.options
-        .filter((option) => option.isCorrect)
-        .map((option) => option.id)
-        .sort();
-      const actual = [...(answer.selectedOptionIds ?? [])].sort();
-      return expected.length === actual.length &&
-        expected.every((id, index) => id === actual[index])
-        ? question.points
-        : 0;
-    }
-    const expected = Array.isArray(question.correctAnswer)
-      ? question.correctAnswer
-      : [question.correctAnswer];
-    if (question.type === QuestionType.ENUMERATION) {
-      const normalizedExpected = expected
-        .map(normalizeObjectiveText)
-        .filter(Boolean)
-        .sort();
-      const normalizedActual = enumerationValues(answer.responseText)
-        .map(normalizeObjectiveText)
-        .filter(Boolean)
-        .sort();
-      return normalizedExpected.length === normalizedActual.length &&
-        normalizedExpected.every(
-          (value, index) => value === normalizedActual[index]
-        )
-        ? question.points
-        : 0;
-    }
-    const actual = normalizeObjectiveText(answer.responseText);
-    return expected.some((value) => normalizeObjectiveText(value) === actual)
-      ? question.points
-      : 0;
+  /** Points for one answer, or null when the teacher must grade it. */
+  private objectivePoints(question: ScorableQuestion, answer: SubmittedAnswer) {
+    return scoreAnswer(question, answer);
   }
 
   async saveDraft(
@@ -402,9 +323,8 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
             : GradeStatus.AUTO_GRADED,
       };
     });
-    const totalScore = rows.reduce(
-      (total, answer) => total + (answer.awardedPoints ?? 0),
-      0
+    const totalScore = round2(
+      rows.reduce((total, answer) => total + (answer.awardedPoints ?? 0), 0)
     );
     const hasEssay = session.exam.questions.some(
       (question) => question.type === QuestionType.ESSAY
@@ -737,12 +657,16 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
     if (!answer) throw new NotFoundException('Answer not found');
     if (answer.submission.session.exam.subject.teacherId !== teacherId)
       throw new ForbiddenException();
+    // Partial credit allows up to two decimals (e.g. 1.5 or 1.33).
     if (
-      !Number.isInteger(points) ||
+      !Number.isFinite(points) ||
       points < 0 ||
-      points > answer.question.points
+      points > answer.question.points ||
+      Math.abs(round2(points) - points) > 1e-9
     )
-      throw new ConflictException("Points must be within the question's range");
+      throw new ConflictException(
+        "Points must be within the question's range, with at most two decimals"
+      );
     await this.prisma.answer.update({
       where: { id: answerId },
       data: {
@@ -761,9 +685,8 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.submission.update({
       where: { id: answer.submissionId },
       data: {
-        totalScore: answers.reduce(
-          (total, item) => total + (item.awardedPoints ?? 0),
-          0
+        totalScore: round2(
+          answers.reduce((total, item) => total + (item.awardedPoints ?? 0), 0)
         ),
         gradeStatus: pending
           ? GradeStatus.UNGRADED

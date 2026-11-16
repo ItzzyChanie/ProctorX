@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   IsArray,
   IsDateString,
   IsIn,
@@ -57,15 +58,18 @@ export class AddExtraTimeDto {
   @IsInt() @Min(1) @Max(240) minutes!: number;
 }
 export class AnswerDto {
-  @IsString() questionId!: string;
-  @IsOptional() @IsString() responseText?: string;
+  @IsString() @MaxLength(128) questionId!: string;
+  @IsOptional() @IsString() @MaxLength(20000) responseText?: string;
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(50)
   @IsString({ each: true })
+  @MaxLength(128, { each: true })
   selectedOptionIds?: string[];
 }
 export class SubmitDto {
   @IsArray()
+  @ArrayMaxSize(500)
   @ValidateNested({ each: true })
   @Type(() => AnswerDto)
   answers!: AnswerDto[];

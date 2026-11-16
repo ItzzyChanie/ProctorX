@@ -650,7 +650,7 @@ model Submission {
   id              String         @id @default(uuid())
   sessionId       String         @unique
   submittedAt     DateTime?
-  totalScore      Int?
+  totalScore      Float?
   maxScore        Int
   gradeStatus     GradeStatus    @default(UNGRADED)
   mode            SubmissionMode @default(MANUAL)
@@ -669,7 +669,7 @@ model Answer {
   questionId        String
   responseText      String?
   selectedOptionIds String[]    @default([])
-  awardedPoints     Int?
+  awardedPoints     Float?
   aiSuggestedPoints Int?
   aiJustification   String?
   gradeStatus       GradeStatus @default(UNGRADED)

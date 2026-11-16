@@ -31,8 +31,9 @@ export const QUESTIONS_PER_PAGE = 10;
 
 export const answerSchema = z.object({
   questionId: z.string().min(1).max(128),
-  responseText: z.string().max(5000).optional(),
-  selectedOptionIds: z.array(z.string().min(1).max(128)).max(1).optional(),
+  responseText: z.string().max(20000).optional(),
+  // Checkbox questions allow several choices.
+  selectedOptionIds: z.array(z.string().min(1).max(128)).max(50).optional(),
 });
 
 /** Server explanation for expected refusals (time is up, attempt locked). */
@@ -45,12 +46,17 @@ export function conflictMessage(error: unknown): string | undefined {
     : undefined;
 }
 
-export const enumerationEntries = (question: any, answer?: Answer) =>
-  answer?.enumerationAnswers ??
-  Array.from(
-    { length: Math.max(1, question.enumerationAnswerCount ?? 1) },
-    () => ''
+/** Inputs for enumeration items, or one per blank for fill in the blank. */
+export const enumerationEntries = (question: any, answer?: Answer) => {
+  const length = Math.max(
+    1,
+    question.type === 'FILL_IN_THE_BLANK'
+      ? (question.blankCount ?? 1)
+      : (question.enumerationAnswerCount ?? 1)
   );
+  const saved = answer?.enumerationAnswers ?? [];
+  return Array.from({ length }, (_, index) => saved[index] ?? '');
+};
 
 export const parseEnumerationResponse = (responseText?: string) => {
   if (!responseText) return undefined;
@@ -63,11 +69,13 @@ export const parseEnumerationResponse = (responseText?: string) => {
 };
 
 export const hasAnswer = (question: any, answer?: Answer) =>
-  question.type === 'MULTIPLE_CHOICE'
+  question.type === 'MULTIPLE_CHOICE' || question.type === 'MULTIPLE_RESPONSE'
     ? Boolean(answer?.selectedOptionIds?.length)
     : question.type === 'ENUMERATION'
       ? Boolean(answer?.enumerationAnswers?.some((value) => value.trim()))
-      : Boolean(answer?.responseText?.trim());
+      : question.type === 'FILL_IN_THE_BLANK'
+        ? enumerationEntries(question, answer).every((value) => value.trim())
+        : Boolean(answer?.responseText?.trim());
 
 export const submissionAnswer = (question: any, answer?: Answer) => ({
   questionId: question.id,
@@ -78,7 +86,10 @@ export const submissionAnswer = (question: any, answer?: Answer) => ({
             .map((value) => value.trim())
             .filter(Boolean)
         )
-      : answer?.responseText,
+      : question.type === 'FILL_IN_THE_BLANK'
+        ? // Positions matter: blank 2's answer must stay in slot 2.
+          JSON.stringify(enumerationEntries(question, answer).map((value) => value.trim()))
+        : answer?.responseText,
   selectedOptionIds: answer?.selectedOptionIds,
 });
 

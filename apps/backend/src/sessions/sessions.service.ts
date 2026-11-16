@@ -244,6 +244,12 @@ export class SessionsService {
               Array.isArray(question.correctAnswer)
                 ? question.correctAnswer.length
                 : undefined,
+            // Number of ___ blanks (answers are never sent to the student).
+            blankCount:
+              question.type === QuestionType.FILL_IN_THE_BLANK &&
+              Array.isArray(question.correctAnswer)
+                ? question.correctAnswer.length
+                : undefined,
             options: this.orderOptions(
               question.options,
               question.id,

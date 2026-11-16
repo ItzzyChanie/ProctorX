@@ -600,7 +600,9 @@ function AnswerCard({
     onError,
   });
   const q = answer.question,
-    correct = (answer.awardedPoints ?? 0) === q.points;
+    correct = (answer.awardedPoints ?? 0) === q.points,
+    partial =
+      (answer.awardedPoints ?? 0) > 0 && (answer.awardedPoints ?? 0) < q.points;
   const expected = Array.isArray(q.correctAnswer)
     ? q.correctAnswer.map(String)
     : q.correctAnswer == null
@@ -624,6 +626,10 @@ function AnswerCard({
               <span className="flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-emerald-700">
                 <CheckCircle2 size={12} /> Correct
               </span>
+            ) : partial ? (
+              <span className="flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-amber-800">
+                Partial · {answer.awardedPoints} / {q.points}
+              </span>
             ) : (
               <span className="flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-red-700">
                 <XCircle size={12} /> Review
@@ -634,7 +640,7 @@ function AnswerCard({
         </div>
       </div>
       <div className="mt-5">
-        {q.type === 'MULTIPLE_CHOICE' && (
+        {(q.type === 'MULTIPLE_CHOICE' || q.type === 'MULTIPLE_RESPONSE') && (
           <div className="grid gap-2">
             {q.options.map((option) => {
               const selected = answer.selectedOptionIds.includes(option.id);
@@ -663,6 +669,23 @@ function AnswerCard({
               values={parseEnumeration(answer.responseText)}
             />
             <AnswerList title="Correct answers" values={expected} />
+          </div>
+        )}
+        {q.type === 'FILL_IN_THE_BLANK' && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <AnswerList
+              title="Student answers (per blank)"
+              values={parseEnumeration(answer.responseText).map(
+                (value, index) => `Blank ${index + 1}: ${value || '(blank)'}`
+              )}
+            />
+            <AnswerList
+              title="Accepted answers (per blank)"
+              values={(Array.isArray(q.correctAnswer) ? q.correctAnswer : []).map(
+                (accepted: unknown, index: number) =>
+                  `Blank ${index + 1}: ${(Array.isArray(accepted) ? accepted : [accepted]).join(' or ')}`
+              )}
+            />
           </div>
         )}
         {q.type === 'IDENTIFICATION' && (
@@ -694,7 +717,7 @@ function AnswerCard({
             type="number"
             min={0}
             max={q.points}
-            step={1}
+            step={0.5}
             value={points}
             onChange={(event) =>
               setPoints(
