@@ -34,3 +34,17 @@ test('small walls are sized to fit on screen without scrolling', () => {
 test('an empty page falls back to one column', () => {
   assert.deepEqual(autoGrid(0, wide, tall), { columns: 1 });
 });
+
+test('phones never shrink tiles to fit the height; they scroll instead', () => {
+  const phone = { width: 360, height: 780 }; // portrait
+  for (const count of [1, 2, 4, 6, 9]) {
+    const { columns, maxWidth } = autoGrid(count, phone.width, phone.height);
+    assert.equal(columns, 1);
+    const tileWidth = maxWidth ?? phone.width;
+    assert.ok(tileWidth >= 260, `${count} tiles: ${tileWidth}px wide is too small`);
+  }
+  // Landscape phone: two columns, still readable.
+  const landscape = autoGrid(4, 780, 360);
+  const tileWidth = ((landscape.maxWidth ?? 780) - 12 * (landscape.columns - 1)) / landscape.columns;
+  assert.ok(tileWidth >= 260);
+});

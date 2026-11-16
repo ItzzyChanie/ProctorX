@@ -45,9 +45,11 @@ export function autoGrid(
   const rows = Math.ceil(count / columns);
   const availableHeight = Math.max(240, viewportHeight - CHROME_HEIGHT);
   const tileHeight = (availableHeight - GAP * (rows - 1)) / rows;
-  const maxWidth = Math.round(
-    ((tileHeight * 16) / 9) * columns + GAP * (columns - 1)
-  );
+  const tileWidth = (tileHeight * 16) / 9;
+  // On short or narrow screens (phones), fitting every row on screen would
+  // make tiles unreadably small: keep them full width and let the page scroll.
+  if (tileWidth < MIN_AUTO_TILE_WIDTH) return { columns };
+  const maxWidth = Math.round(tileWidth * columns + GAP * (columns - 1));
   return maxWidth < containerWidth ? { columns, maxWidth } : { columns };
 }
 
