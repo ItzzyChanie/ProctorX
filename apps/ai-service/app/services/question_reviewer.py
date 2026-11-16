@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.services.exam_style import DIFFICULTY_EXAMPLES, DIFFICULTY_GUIDE, source_reference
 from app.services.gemini import call_gemini_json
 
 Difficulty = Literal["EASY", "MEDIUM", "HARD"]
@@ -25,6 +26,7 @@ IssueCode = Literal[
     "NEGATIVE_WORDING",
     "ANSWER_LEAK",
     "KEY_MAY_BE_WRONG",
+    "DEPENDS_ON_SOURCE_CONTEXT",
 ]
 ISSUE_CODES = list(IssueCode.__args__)  # type: ignore[attr-defined]
 MAX_SOURCE_CHARACTERS = 200_000
@@ -124,6 +126,17 @@ def _validate(report: ReviewReport, request: ReviewRequest) -> ReviewReport:
     actual = [item.index for item in report.questions]
     if actual != expected:
         raise ValueError("the review must cover every question exactly once")
+    prompts = {question.index: question.prompt for question in request.questions}
+    for item in report.questions:
+        phrase = source_reference(prompts[item.index])
+        already = any(issue.code == "DEPENDS_ON_SOURCE_CONTEXT" for issue in item.issues)
+        if phrase and not already:
+            item.issues.append(
+                Issue(
+                    code="DEPENDS_ON_SOURCE_CONTEXT",
+                    message=f'Refers to the uploaded material ("{phrase}"); students without it may be confused.',
+                )
+            )
     return report
 
 
@@ -135,10 +148,13 @@ Computer Science / Information Technology students before the teacher publishes 
 
 For EACH question estimate how difficult it is for a typical student who studied the
 material, independently of the difficulty the teacher chose (you will see the teacher's
-choice; do not just copy it). Use these anchors:
-- EASY: recall of a fact or definition stated directly in the material; most students answer correctly.
-- MEDIUM: requires understanding or applying a concept, combining two facts, or a short procedure.
-- HARD: multi-step reasoning, analysis or evaluation, unfamiliar context, or subtle distinctions.
+choice; do not just copy it). Judge what the question asks students to DO, not how long or
+technical its wording is.
+
+{DIFFICULTY_GUIDE}
+
+{DIFFICULTY_EXAMPLES}
+
 Also give the Bloom's taxonomy level, the time a typical student needs (estimatedSeconds),
 up to three short reasons, and a confidence from 0 to 1.
 
@@ -146,7 +162,9 @@ Flag item-writing problems with these codes only:
 AMBIGUOUS_WORDING, MULTIPLE_DEFENSIBLE_ANSWERS, ANSWER_NOT_IN_SOURCE (only if source text is
 provided), WEAK_DISTRACTORS (implausible wrong choices), ANSWER_CUEING (the correct choice
 stands out, e.g. longest or most specific), NEGATIVE_WORDING (NOT/EXCEPT without emphasis),
-ANSWER_LEAK (another question reveals this answer), KEY_MAY_BE_WRONG.
+ANSWER_LEAK (another question reveals this answer), KEY_MAY_BE_WRONG,
+DEPENDS_ON_SOURCE_CONTEXT (the question only makes sense with the uploaded material in hand,
+e.g. "according to the slide", or asks about a person/example that exists only in the material).
 When useful, give one concrete suggestion to fix the question or reach the teacher's chosen
 difficulty. Then write a short overall assessment and a note on topic coverage.
 

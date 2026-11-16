@@ -116,7 +116,9 @@ export default function Classes() {
     [stopping, setStopping] = useState<Subject>(),
     [rosterSubject, setRosterSubject] = useState<Subject>(),
     [removingStudent, setRemovingStudent] = useState<Enrollment>(),
-    [notice, setNotice] = useState(''),
+    [notice, setNoticeText] = useState(''),
+    // Success messages are marked explicitly; others fall back to a keyword check.
+    [noticeIsSuccess, setNoticeIsSuccess] = useState(false),
     [academicPeriodId, setAcademicPeriodId] = useState(''),
     [term, setTerm] = useState(''),
     [active, setActive] = useState<{
@@ -168,7 +170,17 @@ export default function Classes() {
     scheduledAt: string;
     endsAt: string;
   }>();
+  const setNotice = (message: string) => {
+    setNoticeText(message);
+    setNoticeIsSuccess(false);
+  };
+  /** Green toast regardless of wording (e.g. "Students cannot see it yet"). */
+  const notifySuccess = (message: string) => {
+    setNoticeText(message);
+    setNoticeIsSuccess(true);
+  };
   const noticeIsError =
+    !noticeIsSuccess &&
     /could not|cannot|check|enter|choose|set at least|complete the|need|invalid|required|declined|failed|error|unsupported|exceed|unavailable|rate limit/i.test(
       notice
     );
@@ -355,7 +367,7 @@ export default function Classes() {
     mutationFn: (v: { id: string; status: 'APPROVED' | 'DECLINED' }) =>
       api.post(`/subjects/join-requests/${v.id}/review`, { status: v.status }),
     onSuccess: (_data, variables) => {
-      setNotice(
+      notifySuccess(
         `Student request ${variables.status === 'APPROVED' ? 'approved' : 'declined'} successfully.`
       );
       void qc.invalidateQueries({ queryKey: ['join-requests'] });
@@ -449,12 +461,12 @@ export default function Classes() {
       void qc.invalidateQueries({ queryKey: ['subjects'] });
       void qc.invalidateQueries({ queryKey: ['previous-exams'] });
       if (publish) {
-        setNotice(`${kind} published. Students can now see it.`);
+        notifySuccess(`${kind} published. Students can now see it.`);
         close();
         return;
       }
       setDraftId(saved.id);
-      setNotice(
+      notifySuccess(
         `${kind} saved as a draft. Students cannot see it until you publish.`
       );
     },
@@ -611,7 +623,7 @@ export default function Classes() {
       }
       setAiReport(exam.aiReview ?? null);
       setReviewStale(false);
-      setNotice('Draft opened. Save or publish when you are ready.');
+      notifySuccess('Draft opened. Save or publish when you are ready.');
     },
     onError: () => setNotice('Could not open the draft.'),
   });
@@ -621,7 +633,7 @@ export default function Classes() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['previous-exams'] });
       close();
-      setNotice('Draft deleted.');
+      notifySuccess('Draft deleted.');
     },
     onError: () => setNotice('Could not delete the draft.'),
   });
@@ -640,7 +652,7 @@ export default function Classes() {
     onSuccess: (report) => {
       setAiReport(report);
       setReviewStale(false);
-      setNotice(
+      notifySuccess(
         report.summary.mismatches || report.summary.issues
           ? 'AI review ready. Check the flagged questions before publishing.'
           : 'AI review ready. No difficulty mismatches or issues found.'
@@ -673,7 +685,7 @@ export default function Classes() {
         ...fromGenerated(rewritten),
         points: questions[index]!.points,
       });
-      setNotice(
+      notifySuccess(
         `Question ${index + 1} rewritten. Review it, then save and run the AI review again.`
       );
     },

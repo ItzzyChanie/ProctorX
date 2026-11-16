@@ -44,6 +44,7 @@ const ISSUE_LABELS: Record<string, string> = {
   NEGATIVE_WORDING: 'Negative wording (NOT/EXCEPT)',
   ANSWER_LEAK: 'Another question gives the answer away',
   KEY_MAY_BE_WRONG: 'Answer key may be wrong',
+  DEPENDS_ON_SOURCE_CONTEXT: 'Needs the slides to make sense',
 };
 
 const BLOOM_LABELS: Record<string, string> = {
