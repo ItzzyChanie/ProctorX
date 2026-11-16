@@ -27,6 +27,7 @@ export class EventDto {
     'IDLE',
     'SCREEN_SHARE_STOPPED',
     'MULTIPLE_DISPLAYS',
+    'EXTERNAL_FORM_OPENED',
   ])
   type!:
     | 'TAB_SWITCH'
@@ -35,7 +36,8 @@ export class EventDto {
     | 'USB_EVENT'
     | 'IDLE'
     | 'SCREEN_SHARE_STOPPED'
-    | 'MULTIPLE_DISPLAYS';
+    | 'MULTIPLE_DISPLAYS'
+    | 'EXTERNAL_FORM_OPENED';
   @IsOptional() @IsNumber() @Min(0) @Max(1) intensity?: number;
   @IsOptional() @IsObject() metadata?: Record<string, unknown>;
 }

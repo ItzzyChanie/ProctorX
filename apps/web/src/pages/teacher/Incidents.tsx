@@ -107,6 +107,11 @@ const eventDetails: Record<
     Icon: MonitorOff,
     color: 'bg-violet-600',
   },
+  EXTERNAL_FORM_OPENED: {
+    label: 'Opened the Google Form in a new tab (note, not a violation)',
+    Icon: AppWindow,
+    color: 'bg-slate-400',
+  },
 };
 const detailsFor = (type: string) =>
   eventDetails[type] ?? {

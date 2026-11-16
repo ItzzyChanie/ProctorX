@@ -1,3 +1,4 @@
+import { embeddableGoogleFormUrl } from './google-form';
 import {
   BadRequestException,
   ConflictException,
@@ -126,26 +127,6 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       this.prisma.notification.createMany({ data: notifications }),
     ]);
     ids.forEach((id) => void this.gateway.clearExam(id));
-  }
-  private googleFormUrl(value: string) {
-    let url: URL;
-    try {
-      url = new URL(value.trim());
-    } catch {
-      throw new BadRequestException('Enter a valid Google Form URL');
-    }
-    if (
-      url.protocol !== 'https:' ||
-      url.hostname !== 'docs.google.com' ||
-      !url.pathname.startsWith('/forms/')
-    )
-      throw new BadRequestException(
-        'Only https://docs.google.com/forms links can be embedded'
-      );
-    if (url.pathname.endsWith('/edit'))
-      url.pathname = `${url.pathname.slice(0, -5)}/viewform`;
-    url.searchParams.set('embedded', 'true');
-    return url.toString();
   }
   async create(teacherId: string, dto: CreateSubjectDto) {
     const institutionId = await this.institutionFor(teacherId);
@@ -1126,7 +1107,7 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
         sourceType: sourceType as ExamSourceType,
         externalFormUrl:
           sourceType === 'GOOGLE_FORMS_IMPORT'
-            ? this.googleFormUrl(dto.externalFormUrl!)
+            ? await embeddableGoogleFormUrl(dto.externalFormUrl!)
             : null,
         ...(dto.sourceText !== undefined
           ? { sourceText: dto.sourceText || null }

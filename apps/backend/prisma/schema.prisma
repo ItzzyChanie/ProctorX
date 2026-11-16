@@ -138,6 +138,7 @@ enum EventType {
   IDLE
   SCREEN_SHARE_STOPPED
   MULTIPLE_DISPLAYS
+  EXTERNAL_FORM_OPENED
 }
 
 enum RecordingStatus {

@@ -107,6 +107,8 @@ export default function ExamResult() {
       </DashboardLayout>
     );
   const released = data.gradeStatus === 'TEACHER_CONFIRMED';
+  // Google Form exams have no ProctorX questions; Google Forms holds the score.
+  const externalForm = data.maxScore === 0 && data.answers.length === 0;
   const percentage =
     released && data.totalScore !== null && data.maxScore
       ? Math.round((data.totalScore / data.maxScore) * 100)
@@ -134,7 +136,15 @@ export default function ExamResult() {
                 {data.exam.term.replace('_', ' ')}
               </div>
             </div>
-            {released ? (
+            {externalForm ? (
+              <div className="max-w-xs rounded-xl bg-sky-100 px-4 py-3 text-sm text-sky-900">
+                <div className="font-bold">Scored in Google Forms</div>
+                <div className="text-xs">
+                  Your answers were submitted through Google Forms. Your
+                  teacher shares the score from there.
+                </div>
+              </div>
+            ) : released ? (
               <div
                 className={`rounded-xl px-5 py-3 text-center ${passed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}
               >

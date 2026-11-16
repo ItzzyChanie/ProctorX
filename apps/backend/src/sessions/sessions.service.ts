@@ -1,3 +1,4 @@
+import { VIOLATION_EVENTS } from '../common/violation-events';
 import {
   ConflictException,
   ForbiddenException,
@@ -8,6 +9,7 @@ import {
   EvidenceClipPhase,
   EvidenceClipStatus,
   EventType,
+  ExamSourceType,
   Prisma,
   QuestionType,
   SessionStatus,
@@ -377,6 +379,21 @@ export class SessionsService {
       include: { exam: true },
     });
     if (!session) throw new ForbiddenException();
+    if (type === EventType.EXTERNAL_FORM_OPENED) {
+      // A note, not a violation: no incident and no effect on the score.
+      if (session.exam.sourceType !== ExamSourceType.GOOGLE_FORMS_IMPORT)
+        throw new ForbiddenException();
+      const note = await this.prisma.proctoringEvent.create({
+        data: { sessionId, type, occurredAt: new Date() },
+      });
+      return {
+        suspicion_score: null,
+        tier: null,
+        scored: false,
+        eventId: note.id,
+        occurredAt: note.occurredAt,
+      };
+    }
     const event = await this.scoring.record(sessionId, {
       type,
       metadata: metadata as Prisma.InputJsonValue | undefined,
@@ -617,7 +634,7 @@ export class SessionsService {
           },
         },
         scoreHistory: { orderBy: { computedAt: 'desc' }, take: 1 },
-        _count: { select: { events: true } },
+        _count: { select: { events: { where: VIOLATION_EVENTS } } },
         raiseHandRequests: {
           where: { resolvedAt: null },
           orderBy: { raisedAt: 'desc' },

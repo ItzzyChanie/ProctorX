@@ -1,3 +1,4 @@
+import { VIOLATION_EVENTS, isViolationEvent } from '../common/violation-events';
 import {
   ForbiddenException,
   Injectable,
@@ -58,7 +59,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       include: {
         student: { select: { fullName: true } },
         exam: { include: { subject: true } },
-        events: { orderBy: { occurredAt: 'asc' } },
+        events: { where: VIOLATION_EVENTS, orderBy: { occurredAt: 'asc' } },
         scoreHistory: { orderBy: { computedAt: 'desc' }, take: 1 },
       },
     });
@@ -143,7 +144,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
     const sessions = await this.prisma.examSession.findMany({
       where: {
         exam: { subject: { teacherId } },
-        events: { some: {} },
+        events: { some: VIOLATION_EVENTS },
         integrityArchivedAt: archived ? { not: null } : null,
       },
       select: {
@@ -203,7 +204,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
           (status !== 'PUBLISHED' || (!!endsAt && endsAt <= new Date())) &&
           activeSessions.length === 0,
         scoreHistory: [score],
-        eventCount: session.events.length,
+        eventCount: session.events.filter(isViolationEvent).length,
         latestEventAt: session.events[0]?.occurredAt ?? session.startedAt,
       };
     });
@@ -578,7 +579,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
             : {}),
         },
         include: {
-          events: true,
+          events: { where: VIOLATION_EVENTS },
           scoreHistory: { orderBy: { computedAt: 'desc' }, take: 1 },
         },
       });

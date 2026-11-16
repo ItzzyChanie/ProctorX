@@ -1359,9 +1359,44 @@ export default function Classes() {
                     type="url"
                     value={source}
                     onChange={(e) => setSource(e.target.value)}
-                    placeholder="https://docs.google.com/forms/..."
+                    placeholder="https://forms.gle/... or https://docs.google.com/forms/..."
                   />
                 </label>
+                {source.trim() &&
+                  !/^https:\/\/(docs\.google\.com\/forms\/|forms\.gle\/)/i.test(
+                    source.trim()
+                  ) && (
+                    <p className="-mt-2 text-xs font-semibold text-risk-high">
+                      Use the link from Google Forms → Send → Link (forms.gle/…),
+                      or the docs.google.com/forms link.
+                    </p>
+                  )}
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+                  <p className="font-bold">
+                    So the form opens inside the exam room, check these Google
+                    Form settings first:
+                  </p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                    <li>
+                      Settings → Responses: turn <b>off</b> “Collect email
+                      addresses: Verified” and “Limit to 1 response”. Use
+                      “Responder input” to collect emails instead.
+                    </li>
+                    <li>
+                      Don’t use <b>File upload</b> questions. These need a
+                      Google sign-in, which Google blocks inside embedded forms.
+                    </li>
+                    <li>
+                      Make sure the form is <b>accepting responses</b> and
+                      isn’t restricted to your organization only.
+                    </li>
+                  </ul>
+                  <p className="mt-1">
+                    Answers and scores stay in Google Forms. ProctorX monitors
+                    the attempt; import scores later in Score Upload &amp;
+                    Correlation if you need them here.
+                  </p>
+                </div>
                 <div className="grid gap-3 md:grid-cols-2">
                   <label className="text-xs font-semibold">
                     Start date and time

@@ -143,7 +143,9 @@ export default function MySessions() {
                   className="mt-2 !px-2.5 !py-1.5"
                   onClick={() => navigate(`/student/sessions/${r.sessionId}/result`)}
                 >
-                  {r.submission.gradeStatus === 'TEACHER_CONFIRMED'
+                  {r.submission.maxScore === 0
+                    ? 'Scored in Google Forms'
+                    : r.submission.gradeStatus === 'TEACHER_CONFIRMED'
                     ? 'View result'
                     : r.submission.gradeStatus === 'PENDING_RELEASE'
                       ? 'Results after exam closes'

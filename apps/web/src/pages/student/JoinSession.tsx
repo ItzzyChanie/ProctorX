@@ -57,6 +57,10 @@ import {
 } from './exam/media';
 import { QuestionNavigator } from './exam/QuestionNavigator';
 import { SubmitReviewDialog } from './exam/SubmitReviewDialog';
+import { GoogleFormPanel } from './exam/GoogleFormPanel';
+
+/** How long after "open in a new tab" the tab switch counts as that action. */
+const EXTERNAL_FORM_GRACE_MS = 4000;
 
 export default function JoinSession() {
   const queryClient = useQueryClient();
@@ -143,6 +147,9 @@ export default function JoinSession() {
   });
   const recorder = useRef<MediaRecorder | null>(null);
   const suppressIncidentRef = useRef(false);
+  // When the student opens the exam's own Google Form in a new tab, the next
+  // tab switch is recorded as a note for the teacher instead of a violation.
+  const externalFormOpenedAtRef = useRef(0);
   const endingRecordingRef = useRef(false);
   const recordingUploads = useRef<Promise<unknown>>(Promise.resolve());
   const screenStream = useRef<MediaStream | null>(null);
@@ -370,17 +377,30 @@ export default function JoinSession() {
     );
     let lastTabSwitchAt = 0;
     let monitoringArmed = false;
+    const openedExternalForm = () =>
+      Date.now() - externalFormOpenedAtRef.current < EXTERNAL_FORM_GRACE_MS;
     const reportTabSwitch = () => {
       const now = Date.now();
       if (now - lastTabSwitchAt < 1000) return;
       lastTabSwitchAt = now;
-      if (!suppressIncidentRef.current) void captureEvidence('TAB_SWITCH');
+      if (suppressIncidentRef.current) return;
+      if (openedExternalForm()) {
+        externalFormOpenedAtRef.current = 0;
+        void send('EXTERNAL_FORM_OPENED');
+        return;
+      }
+      void captureEvidence('TAB_SWITCH');
     };
     const visibility = () => document.hidden && reportTabSwitch();
     const fullscreen = () => {
       const exited = !document.fullscreenElement;
       setFullscreenLost(exited);
-      if (exited && monitoringArmed && !suppressIncidentRef.current)
+      if (
+        exited &&
+        monitoringArmed &&
+        !suppressIncidentRef.current &&
+        !openedExternalForm()
+      )
         void captureEvidence('FULLSCREEN_EXIT');
     };
     document.addEventListener('visibilitychange', visibility);
@@ -1540,34 +1560,15 @@ export default function JoinSession() {
             </div>
             {exam.exam.sourceType === 'GOOGLE_FORMS_IMPORT' &&
             exam.exam.externalFormUrl ? (
-              <div className="mx-auto max-w-5xl">
-                <div className="overflow-hidden rounded-xl border border-border bg-white">
-                  <iframe
-                    title={exam.exam.title}
-                    src={exam.exam.externalFormUrl}
-                    className="h-[calc(100dvh-190px)] min-h-[480px] w-full"
-                    sandbox="allow-forms allow-scripts allow-same-origin allow-popups"
-                    referrerPolicy="strict-origin-when-cross-origin"
-                  />
-                </div>
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                  <a
-                    className="text-sm font-semibold text-brand underline"
-                    href={exam.exam.externalFormUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Open form in a new tab if it does not load
-                  </a>
-                  <Button onClick={() => void submit()}>
-                    I submitted the Google Form
-                  </Button>
-                </div>
-                <p className="mt-2 text-xs text-text-2">
-                  Submit inside Google Forms first, then use the button above to
-                  complete your monitored ProctorX session.
-                </p>
-              </div>
+              <GoogleFormPanel
+                url={exam.exam.externalFormUrl}
+                title={exam.exam.title}
+                submitting={submitting}
+                onOpenInNewTab={() => {
+                  externalFormOpenedAtRef.current = Date.now();
+                }}
+                onFinish={() => void confirmSubmit()}
+              />
             ) : (
               <>
                 <QuestionNavigator

@@ -525,7 +525,8 @@ function ReviewModal({
   const exam = detail.session.exam,
     student = detail.session.student,
     score = detail.totalScore ?? 0,
-    passed = detail.maxScore > 0 && score >= detail.maxScore / 2;
+    passed = detail.maxScore > 0 && score >= detail.maxScore / 2,
+    externalForm = detail.maxScore === 0;
   return (
     <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-900/80 p-3 sm:p-6">
       <div className="mx-auto max-w-6xl">
@@ -544,12 +545,19 @@ function ReviewModal({
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <div className={`rounded-xl px-5 py-3 text-center ${passed ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-700'}`}>
-              <div className="text-xs font-bold uppercase">Current score</div>
-              <div className="text-2xl font-black">
-                {score} / {detail.maxScore}
+            {externalForm ? (
+              <div className="rounded-xl bg-sky-100 px-5 py-3 text-center text-sky-900">
+                <div className="text-xs font-bold uppercase">Score</div>
+                <div className="text-base font-black">In Google Forms</div>
               </div>
-            </div>
+            ) : (
+              <div className={`rounded-xl px-5 py-3 text-center ${passed ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-700'}`}>
+                <div className="text-xs font-bold uppercase">Current score</div>
+                <div className="text-2xl font-black">
+                  {score} / {detail.maxScore}
+                </div>
+              </div>
+            )}
             <button
               onClick={onClose}
               className="rounded-xl p-3 hover:bg-slate-100"

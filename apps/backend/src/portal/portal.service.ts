@@ -1,3 +1,4 @@
+import { VIOLATION_EVENTS } from '../common/violation-events';
 import {
   ConflictException,
   ForbiddenException,
@@ -1603,7 +1604,7 @@ export class PortalService {
           include: { studentProfile: { include: { section: true } } },
         },
         exam: { include: { subject: true } },
-        events: true,
+        events: { where: VIOLATION_EVENTS },
         scoreHistory: { orderBy: { computedAt: 'asc' } },
       },
     });
@@ -1894,7 +1895,7 @@ export class PortalService {
             include: { studentProfile: { include: { section: true } } },
           },
           exam: { include: { subject: true } },
-          events: true,
+          events: { where: VIOLATION_EVENTS },
           scoreHistory: { orderBy: { computedAt: 'desc' }, take: 1 },
         },
       }),
