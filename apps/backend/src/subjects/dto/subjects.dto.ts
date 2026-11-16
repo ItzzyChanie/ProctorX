@@ -30,26 +30,37 @@ export class AssignSectionDto {
   @IsUUID() sectionId!: string;
   @IsBoolean() enrollCurrentStudents!: boolean;
 }
+export const QUESTION_TYPES = [
+  'MULTIPLE_CHOICE',
+  'MULTIPLE_RESPONSE',
+  'ENUMERATION',
+  'ESSAY',
+  'IDENTIFICATION',
+  'FILL_IN_THE_BLANK',
+] as const;
+export const DIFFICULTIES = ['EASY', 'MEDIUM', 'HARD'] as const;
+
 export class QuestionOptionDto {
   @IsString() @IsNotEmpty() @MaxLength(500) label!: string;
   @IsBoolean() isCorrect!: boolean;
 }
 export class QuestionDto {
-  @IsIn(['MULTIPLE_CHOICE', 'ENUMERATION', 'ESSAY', 'IDENTIFICATION']) type!:
-    | 'MULTIPLE_CHOICE'
-    | 'ENUMERATION'
-    | 'ESSAY'
-    | 'IDENTIFICATION';
+  @IsIn(QUESTION_TYPES) type!: (typeof QUESTION_TYPES)[number];
   @IsString() @IsNotEmpty() @MaxLength(5000) prompt!: string;
   @IsBoolean() isRequired!: boolean;
   @IsInt() @Min(1) points!: number;
-  @IsOptional() @IsString() @MaxLength(5000) correctAnswer?: string;
+  /** JSON text: list of answers, or one list per blank for fill-in-the-blank. */
+  @IsOptional() @IsString() @MaxLength(20000) correctAnswer?: string;
   @IsOptional() @IsString() @MaxLength(5000) rubric?: string;
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => QuestionOptionDto)
   options?: QuestionOptionDto[];
+  @IsOptional() @IsIn(DIFFICULTIES) difficulty?: (typeof DIFFICULTIES)[number];
+  @IsOptional() @IsString() @MaxLength(300) sourceReference?: string;
+  @IsOptional() @IsBoolean() allowTypos?: boolean;
+  @IsOptional() @IsBoolean() partialCredit?: boolean;
 }
 export class CreateExamDto {
   @IsString() @IsNotEmpty() @MaxLength(80) academicPeriodId!: string;
@@ -83,15 +94,15 @@ export class CreateExamDto {
   @ValidateNested({ each: true })
   @Type(() => QuestionDto)
   questions?: QuestionDto[];
+  /** false = save as a draft (not visible to students); default publishes. */
+  @IsOptional() @IsBoolean() publish?: boolean;
+  /** Text extracted from the source documents (AI-generated exams). */
+  @IsOptional() @IsString() @MaxLength(600000) sourceText?: string;
 }
 
 export class QuestionBankItemDto {
   @IsOptional() @IsUUID() subjectId?: string;
-  @IsIn(['MULTIPLE_CHOICE', 'ENUMERATION', 'ESSAY', 'IDENTIFICATION']) type!:
-    | 'MULTIPLE_CHOICE'
-    | 'ENUMERATION'
-    | 'ESSAY'
-    | 'IDENTIFICATION';
+  @IsIn(QUESTION_TYPES) type!: (typeof QUESTION_TYPES)[number];
   @IsString() @IsNotEmpty() @MaxLength(5000) prompt!: string;
   @IsInt() @Min(1) points!: number;
   @IsBoolean() isRequired!: boolean;

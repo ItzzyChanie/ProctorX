@@ -251,6 +251,38 @@ export class SubjectsController {
   ) {
     return this.subjects.createExam(id, req.user.id, body);
   }
+  /** Replace a draft's settings and questions. */
+  @Patch(':id/exams/:examId/draft')
+  @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
+  updateDraft(
+    @Param('id') id: string,
+    @Param('examId') examId: string,
+    @Req() req: any,
+    @Body() body: CreateExamDto
+  ) {
+    return this.subjects.updateDraft(id, examId, req.user.id, body);
+  }
+  @Post(':id/exams/:examId/publish')
+  @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
+  publishDraft(
+    @Param('id') id: string,
+    @Param('examId') examId: string,
+    @Req() req: any
+  ) {
+    return this.subjects.publishDraft(id, examId, req.user.id);
+  }
+  @Delete(':id/exams/:examId/draft')
+  @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
+  deleteDraft(
+    @Param('id') id: string,
+    @Param('examId') examId: string,
+    @Req() req: any
+  ) {
+    return this.subjects.deleteDraft(id, examId, req.user.id);
+  }
   @Patch(':id/exams/:examId/schedule')
   @Roles(Role.TEACHER)
   @RequirePermission('CREATE_EXAM')

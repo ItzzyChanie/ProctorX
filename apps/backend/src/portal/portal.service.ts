@@ -533,7 +533,8 @@ export class PortalService {
             name: true,
             teacher: { select: { fullName: true } },
             exams: {
-              where: { scheduledAt: { not: null } },
+              // Drafts are never shown to students.
+              where: { scheduledAt: { not: null }, status: { not: 'DRAFT' } },
               select: {
                 id: true,
                 title: true,

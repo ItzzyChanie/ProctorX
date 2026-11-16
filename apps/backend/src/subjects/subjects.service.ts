@@ -13,6 +13,7 @@ import {
   ExamSourceType,
   ExamStatus,
   JoinRequestStatus,
+  Prisma,
   QuestionType,
   Role,
   SessionStatus,
@@ -30,6 +31,7 @@ import { AiService, QuestionCounts } from '../ai/ai.service';
 import { SessionsGateway } from '../sessions/sessions.gateway';
 import { GradingService } from '../sessions/grading.service';
 import { QuestionBankItemDto } from './dto/subjects.dto';
+import { normalizeQuestions } from './question-rules';
 
 @Injectable()
 export class SubjectsService implements OnModuleInit, OnModuleDestroy {
@@ -430,6 +432,8 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
         name: true,
         teacher: { select: { fullName: true } },
         exams: {
+          // Drafts are never shown to students.
+          where: { status: { not: ExamStatus.DRAFT } },
           select: {
             assessmentType: true,
             status: true,
@@ -1062,8 +1066,12 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       orderBy: { version: 'desc' },
     });
   }
-  async createExam(subjectId: string, teacherId: string, dto: CreateExamDto) {
-    const subject = await this.owned(subjectId, teacherId);
+  /** Validates everything shared by creating, editing and publishing an exam. */
+  private async examContent(
+    subjectId: string,
+    teacherId: string,
+    dto: CreateExamDto
+  ) {
     const institutionId = await this.institutionFor(teacherId);
     const academicPeriod = await this.prisma.academicPeriod.findFirst({
       where: { id: dto.academicPeriodId, institutionId },
@@ -1074,6 +1082,59 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       throw new ConflictException(
         'Assessments cannot be created in a closed semester'
       );
+    const sourceType = dto.sourceType ?? 'MANUAL';
+    const questions = dto.questions ?? [];
+    if (sourceType !== 'GOOGLE_FORMS_IMPORT' && questions.length === 0)
+      throw new ConflictException('At least one question is required');
+    if (sourceType === 'GOOGLE_FORMS_IMPORT' && !dto.externalFormUrl)
+      throw new ConflictException('Google Form link is required');
+    if (
+      dto.scheduledAt &&
+      dto.endsAt &&
+      new Date(dto.endsAt) <= new Date(dto.scheduledAt)
+    )
+      throw new ConflictException('End time must be after start time');
+    const normalized = normalizeQuestions(
+      sourceType === 'GOOGLE_FORMS_IMPORT' ? [] : questions
+    );
+    return {
+      fields: {
+        academicPeriodId: dto.academicPeriodId,
+        term: dto.term,
+        assessmentType: dto.assessmentType as AssessmentType,
+        title: dto.title.trim(),
+        instructions: dto.instructions?.trim(),
+        totalPoints: normalized.totalPoints,
+        durationMinutes: dto.durationMinutes,
+        requireCamera: dto.requireCamera,
+        requireMicrophone: dto.requireMicrophone,
+        appPolicyMode: dto.appPolicyMode as AppPolicyMode,
+        appPolicyList: dto.appPolicyList,
+        randomizeQuestions: dto.randomizeQuestions ?? false,
+        randomizeOptions: dto.randomizeOptions ?? false,
+        scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
+        endsAt: dto.endsAt ? new Date(dto.endsAt) : null,
+        sourceType: sourceType as ExamSourceType,
+        externalFormUrl:
+          sourceType === 'GOOGLE_FORMS_IMPORT'
+            ? this.googleFormUrl(dto.externalFormUrl!)
+            : null,
+        ...(dto.sourceText !== undefined
+          ? { sourceText: dto.sourceText || null }
+          : {}),
+      },
+      questions: normalized.create.map((question) => ({
+        ...question,
+        source:
+          sourceType === 'AI_GENERATED' && question.sourceReference
+            ? ExamSourceType.AI_GENERATED
+            : ExamSourceType.MANUAL,
+      })),
+    };
+  }
+
+  /** Only one published, not-yet-ended exam or quiz per subject at a time. */
+  private async assertNoActiveExam(subjectId: string, exceptExamId?: string) {
     const now = new Date();
     await this.prisma.exam.updateMany({
       where: { subjectId, status: ExamStatus.PUBLISHED, endsAt: { lte: now } },
@@ -1083,14 +1144,53 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
       where: {
         subjectId,
         status: ExamStatus.PUBLISHED,
+        ...(exceptExamId ? { id: { not: exceptExamId } } : {}),
         OR: [{ endsAt: null }, { endsAt: { gt: now } }],
       },
     });
     if (activeExam)
       throw new ConflictException(
-        'Stop or cancel the current scheduled exam or quiz before creating another one'
+        'Stop or cancel the current scheduled exam or quiz before publishing another one'
       );
-    const questions = dto.questions ?? [];
+  }
+
+  private async notifyExamPublished(
+    subject: { subjectCode: string | null; name: string },
+    subjectId: string,
+    exam: {
+      title: string;
+      assessmentType: AssessmentType;
+      scheduledAt: Date | null;
+    }
+  ) {
+    const enrollments = await this.prisma.enrollment.findMany({
+      where: { subjectId },
+      select: { studentId: true },
+    });
+    if (!enrollments.length) return;
+    const kind = exam.assessmentType === AssessmentType.QUIZ ? 'Quiz' : 'Exam';
+    await this.prisma.notification.createMany({
+      data: enrollments.map(({ studentId }) => ({
+        userId: studentId,
+        type: 'ASSESSMENT_CREATED',
+        message:
+          exam.scheduledAt && exam.scheduledAt > new Date()
+            ? `${kind} "${exam.title}" for ${subject.subjectCode ?? subject.name} is scheduled for ${exam.scheduledAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.`
+            : `${kind} "${exam.title}" is now available for ${subject.subjectCode ?? subject.name}.`,
+      })),
+    });
+  }
+
+  /**
+   * Creates an exam. With `publish: false` it is saved as a DRAFT: invisible
+   * to students, editable, and reviewable (AI difficulty review) before the
+   * teacher publishes it.
+   */
+  async createExam(subjectId: string, teacherId: string, dto: CreateExamDto) {
+    const subject = await this.owned(subjectId, teacherId);
+    const publish = dto.publish ?? true;
+    const content = await this.examContent(subjectId, teacherId, dto);
+    if (publish) await this.assertNoActiveExam(subjectId);
     const versionSource = dto.sourceExamId
       ? await this.prisma.exam.findFirst({
           where: { id: dto.sourceExamId, subjectId, subject: { teacherId } },
@@ -1107,137 +1207,136 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
           })
         )._max.version ?? 0) + 1
       : 1;
-    const sourceType = dto.sourceType ?? 'MANUAL';
-    if (sourceType !== 'GOOGLE_FORMS_IMPORT' && questions.length === 0)
-      throw new ConflictException('At least one question is required');
-    if (sourceType === 'GOOGLE_FORMS_IMPORT' && !dto.externalFormUrl)
-      throw new ConflictException('Google Form link is required');
-    if (
-      dto.scheduledAt &&
-      dto.endsAt &&
-      new Date(dto.endsAt) <= new Date(dto.scheduledAt)
-    )
-      throw new ConflictException('End time must be after start time');
-    for (const question of questions) {
-      if (
-        question.type === 'MULTIPLE_CHOICE' &&
-        (!question.options?.length ||
-          !question.options.some((option) => option.isCorrect))
-      )
-        throw new ConflictException(
-          'Multiple-choice questions need options and one correct answer'
-        );
-      if (
-        (question.type === 'ENUMERATION' ||
-          question.type === 'IDENTIFICATION') &&
-        !question.correctAnswer
-      )
-        throw new ConflictException(
-          'This question type requires a correct answer'
-        );
-      if (question.type === 'ENUMERATION') {
-        // The key is a JSON list of expected items; a malformed key used to
-        // crash exam creation with a server error.
-        let items: unknown;
-        try {
-          items = JSON.parse(question.correctAnswer!);
-        } catch {
-          items = null;
-        }
-        if (
-          !Array.isArray(items) ||
-          !items.length ||
-          items.some((item) => typeof item !== 'string' || !item.trim())
-        )
-          throw new BadRequestException(
-            `Enumeration question "${question.prompt.slice(0, 60)}" needs a list of expected answers`
-          );
-      }
-    }
-    const exam = await this.prisma.$transaction(async (tx) => {
-      return tx.exam.create({
+    const exam = await this.prisma.exam.create({
+      data: {
+        subjectId,
+        ...content.fields,
+        roomCode: crypto
+          .randomUUID()
+          .replaceAll('-', '')
+          .slice(0, 8)
+          .toUpperCase(),
+        status: publish ? ExamStatus.PUBLISHED : ExamStatus.DRAFT,
+        publishedAt: publish ? new Date() : null,
+        versionGroupId: versionSource?.versionGroupId,
+        version: nextVersion,
+        questions: { create: content.questions },
+      },
+      include: { questions: { include: { options: true } } },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: publish ? 'EXAM_CREATED' : 'EXAM_DRAFT_CREATED',
+        targetType: 'Exam',
+        targetId: exam.id,
+      },
+    });
+    if (publish) await this.notifyExamPublished(subject, subjectId, exam);
+    return exam;
+  }
+
+  private async ownedDraft(subjectId: string, examId: string, teacherId: string) {
+    const exam = await this.prisma.exam.findFirst({
+      where: { id: examId, subjectId, subject: { teacherId } },
+    });
+    if (!exam) throw new NotFoundException('Assessment not found');
+    if (exam.status !== ExamStatus.DRAFT)
+      throw new ConflictException(
+        'Only drafts can be edited. Published assessments are locked; create a new version instead.'
+      );
+    return exam;
+  }
+
+  /** Replaces a draft's settings and questions (the AI review is cleared). */
+  async updateDraft(
+    subjectId: string,
+    examId: string,
+    teacherId: string,
+    dto: CreateExamDto
+  ) {
+    await this.owned(subjectId, teacherId);
+    await this.ownedDraft(subjectId, examId, teacherId);
+    const content = await this.examContent(subjectId, teacherId, dto);
+    const saved = await this.prisma.$transaction(async (tx) => {
+      await tx.question.deleteMany({ where: { examId } });
+      return tx.exam.update({
+        where: { id: examId },
         data: {
-          subjectId,
-          academicPeriodId: dto.academicPeriodId,
-          term: dto.term,
-          assessmentType: dto.assessmentType as AssessmentType,
-          title: dto.title.trim(),
-          instructions: dto.instructions?.trim(),
-          totalPoints: questions.reduce(
-            (sum, question) => sum + question.points,
-            0
-          ),
-          durationMinutes: dto.durationMinutes,
-          roomCode: crypto
-            .randomUUID()
-            .replaceAll('-', '')
-            .slice(0, 8)
-            .toUpperCase(),
-          requireCamera: dto.requireCamera,
-          requireMicrophone: dto.requireMicrophone,
-          appPolicyMode: dto.appPolicyMode as AppPolicyMode,
-          appPolicyList: dto.appPolicyList,
-          status: ExamStatus.PUBLISHED,
-          randomizeQuestions: dto.randomizeQuestions ?? false,
-          randomizeOptions: dto.randomizeOptions ?? false,
-          versionGroupId: versionSource?.versionGroupId,
-          version: nextVersion,
-          publishedAt: new Date(),
-          scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
-          endsAt: dto.endsAt ? new Date(dto.endsAt) : null,
-          sourceType: sourceType as ExamSourceType,
-          externalFormUrl:
-            sourceType === 'GOOGLE_FORMS_IMPORT'
-              ? this.googleFormUrl(dto.externalFormUrl!)
-              : null,
-          questions: {
-            create: questions.map((question, index) => ({
-              type: question.type as QuestionType,
-              order: index + 1,
-              points: question.points,
-              prompt: question.prompt.trim(),
-              isRequired: question.isRequired,
-              correctAnswer:
-                question.type === 'MULTIPLE_CHOICE' || question.type === 'ESSAY'
-                  ? undefined
-                  : question.type === 'ENUMERATION'
-                    ? JSON.parse(question.correctAnswer!)
-                    : question.correctAnswer!,
-              rubric: question.rubric?.trim(),
-              options:
-                question.type === 'MULTIPLE_CHOICE'
-                  ? { create: question.options }
-                  : undefined,
-            })),
-          },
+          ...content.fields,
+          // Questions changed, so a previous review no longer applies.
+          aiReview: Prisma.DbNull,
+          aiReviewedAt: null,
+          questions: { create: content.questions },
         },
-        include: { questions: { include: { options: true } } },
+        include: {
+          questions: { include: { options: true }, orderBy: { order: 'asc' } },
+        },
       });
     });
     await this.prisma.auditLog.create({
       data: {
         actorId: teacherId,
-        action: 'EXAM_CREATED',
+        action: 'EXAM_DRAFT_UPDATED',
         targetType: 'Exam',
-        targetId: exam.id,
+        targetId: examId,
       },
     });
-    const enrollments = await this.prisma.enrollment.findMany({
-      where: { subjectId },
-      select: { studentId: true },
+    return saved;
+  }
+
+  /** Publishes a draft: students can see and join it from now on. */
+  async publishDraft(subjectId: string, examId: string, teacherId: string) {
+    const subject = await this.owned(subjectId, teacherId);
+    const draft = await this.ownedDraft(subjectId, examId, teacherId);
+    const period = await this.prisma.academicPeriod.findUnique({
+      where: { id: draft.academicPeriodId },
+      select: { status: true },
     });
-    if (enrollments.length)
-      await this.prisma.notification.createMany({
-        data: enrollments.map(({ studentId }) => ({
-          userId: studentId,
-          type: 'ASSESSMENT_CREATED',
-          message:
-            exam.scheduledAt && exam.scheduledAt > new Date()
-              ? `${exam.assessmentType === AssessmentType.QUIZ ? 'Quiz' : 'Exam'} "${exam.title}" for ${subject.subjectCode ?? subject.name} is scheduled for ${exam.scheduledAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.`
-              : `${exam.assessmentType === AssessmentType.QUIZ ? 'Quiz' : 'Exam'} "${exam.title}" is now available for ${subject.subjectCode ?? subject.name}.`,
-        })),
-      });
+    if (period?.status !== 'ACTIVE')
+      throw new ConflictException(
+        'Assessments cannot be published in a closed semester'
+      );
+    if (draft.endsAt && draft.endsAt <= new Date())
+      throw new ConflictException(
+        'The scheduled end time has already passed. Update the schedule before publishing.'
+      );
+    const questionCount = await this.prisma.question.count({
+      where: { examId },
+    });
+    if (draft.sourceType !== ExamSourceType.GOOGLE_FORMS_IMPORT && !questionCount)
+      throw new ConflictException('At least one question is required');
+    await this.assertNoActiveExam(subjectId, examId);
+    const exam = await this.prisma.exam.update({
+      where: { id: examId },
+      data: { status: ExamStatus.PUBLISHED, publishedAt: new Date() },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: 'EXAM_PUBLISHED',
+        targetType: 'Exam',
+        targetId: examId,
+        metadata: { aiReviewed: Boolean(draft.aiReviewedAt) },
+      },
+    });
+    await this.notifyExamPublished(subject, subjectId, exam);
     return exam;
+  }
+
+  async deleteDraft(subjectId: string, examId: string, teacherId: string) {
+    await this.owned(subjectId, teacherId);
+    await this.ownedDraft(subjectId, examId, teacherId);
+    await this.prisma.exam.delete({ where: { id: examId } });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: 'EXAM_DRAFT_DELETED',
+        targetType: 'Exam',
+        targetId: examId,
+      },
+    });
+    return { deleted: true };
   }
   async updateExamSchedule(
     subjectId: string,
@@ -1364,6 +1463,8 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     await this.owned(subjectId, teacherId);
     return this.prisma.exam.findMany({
       where: { subjectId },
+      // The source text and AI report can be large; load them per exam.
+      omit: { sourceText: true, aiReview: true },
       include: { _count: { select: { questions: true } } },
       orderBy: { createdAt: 'desc' },
     });

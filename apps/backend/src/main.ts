@@ -27,6 +27,9 @@ async function bootstrap() {
     const hops = Number(process.env.TRUST_PROXY);
     app.set("trust proxy", Number.isFinite(hops) ? hops : process.env.TRUST_PROXY);
   }
+  // Exam drafts carry the text extracted from source documents (used by the
+  // AI difficulty review), which exceeds the default 100 KB JSON limit.
+  app.useBodyParser('json', { limit: '2mb' });
   app.use(helmet());
   app.enableCors({
     origin: allowedOrigins(),

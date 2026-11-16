@@ -49,6 +49,10 @@ enum QuestionType {
   ENUMERATION
   ESSAY
   IDENTIFICATION
+  /// Checkboxes: one or more correct options (select all that apply).
+  MULTIPLE_RESPONSE
+  /// Sentence with ___ blanks; one accepted-answer list per blank.
+  FILL_IN_THE_BLANK
 }
 
 enum ExamSourceType {
@@ -522,6 +526,11 @@ model Exam {
   version            Int                   @default(1)
   publishedAt        DateTime?
   sessionsArchivedAt DateTime?
+  /// Latest AI difficulty/quality review of the questions (advisory draft report).
+  aiReview           Json?
+  aiReviewedAt       DateTime?
+  /// Text extracted from the documents the questions were generated from.
+  sourceText         String?               @db.Text
   createdAt          DateTime              @default(now())
   subject            Subject               @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   academicPeriod     AcademicPeriod        @relation(fields: [academicPeriodId], references: [id])
@@ -610,6 +619,14 @@ model Question {
   correctAnswer Json?
   rubric        String?
   source        ExamSourceType   @default(MANUAL)
+  /// Difficulty chosen by the teacher (checked by the AI difficulty review).
+  difficulty    QuestionDifficulty @default(MEDIUM)
+  /// Where an AI-generated question came from (file and page/slide).
+  sourceReference String?
+  /// Identification / fill-in-the-blank: accept answers with one small typo.
+  allowTypos    Boolean          @default(false)
+  /// Enumeration / multiple response / fill-in-the-blank: credit per correct part.
+  partialCredit Boolean          @default(true)
   exam          Exam             @relation(fields: [examId], references: [id], onDelete: Cascade)
   options       QuestionOption[]
   answers       Answer[]

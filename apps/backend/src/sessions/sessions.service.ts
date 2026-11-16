@@ -334,7 +334,8 @@ export class SessionsService {
 
   async monitorableExams(teacherId: string) {
     const exams = await this.prisma.exam.findMany({
-      where: { subject: { teacherId } },
+      // Drafts cannot be joined, so there is nothing to monitor.
+      where: { subject: { teacherId }, status: { not: 'DRAFT' } },
       select: {
         id: true,
         title: true,
