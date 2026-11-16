@@ -17,7 +17,7 @@
     "db:studio": "npm run prisma --workspace=backend -- studio",
     "db:seed": "npm run db:seed --workspace=backend",
     "db:setup": "npm run db:up && npm run db:migrate && npm run db:seed",
-    "test": "npm run test --workspace=backend && npm run test --workspace=desktop",
+    "test": "npm run test --workspace=backend && npm run test --workspace=web && npm run test --workspace=desktop",
     "test:ai": "cd apps/ai-service && .venv/Scripts/python -m pytest -q",
     "typecheck": "npm run typecheck --workspace=backend && npm run typecheck --workspace=web && npm run typecheck --workspace=desktop"
   },
