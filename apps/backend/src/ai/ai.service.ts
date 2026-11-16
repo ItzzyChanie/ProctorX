@@ -20,6 +20,7 @@ export type FullFuzzyIndicators = ReducedFuzzyIndicators & {
   multiple_faces?: number;
   voice_detected?: number;
 };
+export type TargetDifficulty = 'EASY' | 'MEDIUM' | 'HARD' | 'MIXED';
 export type QuestionCounts = Record<
   'MULTIPLE_CHOICE' | 'ENUMERATION' | 'IDENTIFICATION' | 'ESSAY',
   number
@@ -171,7 +172,8 @@ export class AiService {
   }
   async generateQuestions(
     files: Express.Multer.File[],
-    counts: QuestionCounts
+    counts: QuestionCounts,
+    difficulty: TargetDifficulty = 'MIXED'
   ) {
     const form = new FormData();
     for (const file of files) {
@@ -186,6 +188,7 @@ export class AiService {
       );
     }
     form.append('counts', JSON.stringify(counts));
+    form.append('difficulty', difficulty);
     try {
       const { data } = await axios.post(
         `${this.baseUrl()}/v1/questions/generate`,
@@ -195,7 +198,8 @@ export class AiService {
             'X-Internal-Api-Key':
               this.apiKey(),
           },
-          timeout: 135_000,
+          // Up to two model calls (one automatic retry).
+          timeout: 270_000,
         }
       );
       return data;
@@ -210,6 +214,35 @@ export class AiService {
       throw new ServiceUnavailableException(
         'AI question generation service is unavailable.'
       );
+    }
+  }
+
+  /** Advisory AI difficulty/quality review of draft questions. */
+  reviewQuestions(payload: unknown) {
+    return this.postJson('/v1/questions/review', payload, 'AI question review');
+  }
+
+  /** Rewrites one question to match a target difficulty. */
+  rewriteQuestion(payload: unknown) {
+    return this.postJson('/v1/questions/rewrite', payload, 'AI question rewrite');
+  }
+
+  private async postJson(path: string, payload: unknown, label: string) {
+    try {
+      const { data } = await axios.post(`${this.baseUrl()}${path}`, payload, {
+        headers: { 'X-Internal-Api-Key': this.apiKey() },
+        timeout: 270_000,
+      });
+      return data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        const detail = error.response.data.detail;
+        throw new HttpException(
+          typeof detail === 'string' ? detail : JSON.stringify(detail),
+          error.response.status
+        );
+      }
+      throw new ServiceUnavailableException(`${label} service is unavailable.`);
     }
   }
 }

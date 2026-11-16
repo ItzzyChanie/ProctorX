@@ -7,12 +7,14 @@ import { Button } from '../../components/ui/Button';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import { QuestionEditor } from './exam-builder/QuestionEditor';
+import { AiReviewPanel, type ReviewReport } from './exam-builder/AiReviewPanel';
 import {
   blankQuestion as blank,
   fromGenerated,
   fromStored,
   questionProblem,
   toPayload,
+  type Difficulty,
   type Question,
 } from './exam-builder/questions';
 
@@ -132,6 +134,13 @@ export default function Classes() {
     [openDraftId, setOpenDraftId] = useState(''),
     // Text extracted from the generation documents (used by the AI review).
     [sourceText, setSourceText] = useState(''),
+    // AI difficulty review of the current draft (advisory).
+    [aiReport, setAiReport] = useState<ReviewReport | null>(null),
+    [reviewStale, setReviewStale] = useState(false),
+    [rewritingIndex, setRewritingIndex] = useState<number | null>(null),
+    [targetDifficulty, setTargetDifficulty] = useState<
+      'MIXED' | 'EASY' | 'MEDIUM' | 'HARD'
+    >('MIXED'),
     [selectedBankIds, setSelectedBankIds] = useState<string[]>([]),
     [counts, setCounts] = useState<Record<GenType, number>>({
       MULTIPLE_CHOICE: 0,
@@ -365,6 +374,9 @@ export default function Classes() {
     setDraftId('');
     setOpenDraftId('');
     setSourceText('');
+    setAiReport(null);
+    setReviewStale(false);
+    setRewritingIndex(null);
     setSelectedBankIds([]);
     setAcademicPeriodId('');
     setTerm('');
@@ -458,8 +470,10 @@ export default function Classes() {
       );
     },
   });
-  const patchQ = (i: number, p: Partial<Question>) =>
+  const patchQ = (i: number, p: Partial<Question>) => {
     setQuestions((v) => v.map((q, n) => (n === i ? { ...q, ...p } : q)));
+    if (aiReport) setReviewStale(true);
+  };
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const problem = validate();
@@ -504,6 +518,7 @@ export default function Classes() {
       const data = new FormData();
       sourceFiles.forEach((file) => data.append('files', file));
       data.append('counts', JSON.stringify(counts));
+      data.append('difficulty', targetDifficulty);
       return (
         await api.post<{ questions: unknown[]; sourceText?: string }>(
           `/subjects/${active!.subject.id}/questions/generate`,
@@ -594,6 +609,8 @@ export default function Classes() {
         setDraftGenerated(exam.sourceType === 'AI_GENERATED');
         setQuestions(exam.questions.map(fromStored));
       }
+      setAiReport(exam.aiReview ?? null);
+      setReviewStale(false);
       setNotice('Draft opened. Save or publish when you are ready.');
     },
     onError: () => setNotice('Could not open the draft.'),
@@ -608,6 +625,68 @@ export default function Classes() {
     },
     onError: () => setNotice('Could not delete the draft.'),
   });
+  const runReview = useMutation({
+    mutationFn: async () => {
+      const problem = validate();
+      if (problem) throw new Error(problem);
+      // Save first so the review always matches what is stored.
+      const saved = await save.mutateAsync(false);
+      return (
+        await api.post<ReviewReport>(
+          `/subjects/${active!.subject.id}/exams/${saved.id}/ai-review`
+        )
+      ).data;
+    },
+    onSuccess: (report) => {
+      setAiReport(report);
+      setReviewStale(false);
+      setNotice(
+        report.summary.mismatches || report.summary.issues
+          ? 'AI review ready. Check the flagged questions before publishing.'
+          : 'AI review ready. No difficulty mismatches or issues found.'
+      );
+    },
+    onError: (error: any) =>
+      setNotice(
+        error?.response?.data?.message ||
+          error?.message ||
+          'Could not run the AI review.'
+      ),
+  });
+  const rewrite = useMutation({
+    mutationFn: async ({ index, reason }: { index: number; reason: string }) => {
+      setRewritingIndex(index);
+      const question = questions[index]!;
+      return (
+        await api.post(
+          `/subjects/${active!.subject.id}/exams/${draftId}/questions/rewrite`,
+          {
+            question: toPayload(question),
+            targetDifficulty: question.difficulty,
+            reason,
+          }
+        )
+      ).data;
+    },
+    onSuccess: (rewritten, { index }) => {
+      patchQ(index, {
+        ...fromGenerated(rewritten),
+        points: questions[index]!.points,
+      });
+      setNotice(
+        `Question ${index + 1} rewritten. Review it, then save and run the AI review again.`
+      );
+    },
+    onError: (error: any) =>
+      setNotice(
+        error?.response?.data?.message || 'Could not rewrite the question.'
+      ),
+    onSettled: () => setRewritingIndex(null),
+  });
+  const jumpToQuestion = (index: number) =>
+    document
+      .getElementById(`question-${index}`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   const addBankQuestions = () => {
     const selected = (bankItems.data ?? []).filter((item) =>
       selectedBankIds.includes(item.id)
@@ -1187,6 +1266,22 @@ export default function Classes() {
                     </label>
                   ))}
                 </div>
+                <label className="mt-3 block text-xs font-semibold sm:max-w-xs">
+                  Target difficulty
+                  <select
+                    className={`${input} mt-1`}
+                    value={targetDifficulty}
+                    onChange={(e) => {
+                      setTargetDifficulty(e.target.value as typeof targetDifficulty);
+                      setDraftGenerated(false);
+                    }}
+                  >
+                    <option value="MIXED">Mixed (about 30% easy, 50% medium, 20% hard)</option>
+                    <option value="EASY">Easy</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HARD">Hard</option>
+                  </select>
+                </label>
                 <p className="my-3 text-xs">
                   Upload up to 20 mixed PDF, PowerPoint, or Word documents. AI
                   will read them together and suggest answers with source
@@ -1423,18 +1518,36 @@ export default function Classes() {
                     </div>
                   </section>
                 )}
+                {(mode === 'manual' || draftGenerated) && (
+                  <AiReviewPanel
+                    report={aiReport}
+                    stale={reviewStale}
+                    running={runReview.isPending}
+                    rewritingIndex={rewritingIndex}
+                    onRun={() => runReview.mutate()}
+                    onUseAiLevel={(index: number, level: Difficulty) =>
+                      patchQ(index, { difficulty: level })
+                    }
+                    onRewrite={(index: number, reason: string) =>
+                      rewrite.mutate({ index, reason })
+                    }
+                    onJump={jumpToQuestion}
+                  />
+                )}
                 {(mode === 'manual' || draftGenerated) &&
                   questions.map((q, i) => (
+                    <div key={i} id={`question-${i}`} className="scroll-mt-24">
                     <QuestionEditor
-                      key={i}
                       question={q}
                       index={i}
                       canRemove={questions.length > 1}
                       onChange={(patch) => patchQ(i, patch)}
-                      onRemove={() =>
-                        setQuestions((v) => v.filter((_, n) => n !== i))
-                      }
+                      onRemove={() => {
+                        setQuestions((v) => v.filter((_, n) => n !== i));
+                        if (aiReport) setReviewStale(true);
+                      }}
                     />
+                    </div>
                   ))}
                 <div className="flex justify-between">
                   {mode === 'manual' || draftGenerated ? (

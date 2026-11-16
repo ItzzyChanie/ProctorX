@@ -88,7 +88,7 @@ def test_generate_reads_mixed_documents_and_preserves_source_names(monkeypatch):
 
     captured: dict[str, str] = {}
 
-    async def fake_generate(text: str, counts: Counts):
+    async def fake_generate(text: str, counts: Counts, difficulty: str = "MIXED"):
         captured["text"] = text
         return GeneratedDraft.model_validate(
             {

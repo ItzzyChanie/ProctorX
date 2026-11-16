@@ -27,7 +27,15 @@ import {
   UpdateSubjectDto,
   UpdateExamScheduleDto,
 } from './dto/subjects.dto';
-import { AiService, QuestionCounts } from '../ai/ai.service';
+import { AiService, QuestionCounts, TargetDifficulty } from '../ai/ai.service';
+import {
+  buildReviewReport,
+  reviewPayload,
+  type AiReviewResponse,
+  type ReviewedQuestion,
+} from './difficulty-review';
+import { normalizeQuestion } from './question-rules';
+import type { QuestionDto } from './dto/subjects.dto';
 import { SessionsGateway } from '../sessions/sessions.gateway';
 import { GradingService } from '../sessions/grading.service';
 import { QuestionBankItemDto } from './dto/subjects.dto';
@@ -639,10 +647,11 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     subjectId: string,
     teacherId: string,
     files: Express.Multer.File[],
-    counts: QuestionCounts
+    counts: QuestionCounts,
+    difficulty: TargetDifficulty = 'MIXED'
   ) {
     await this.owned(subjectId, teacherId);
-    const generated = await this.ai.generateQuestions(files, counts);
+    const generated = await this.ai.generateQuestions(files, counts, difficulty);
     return {
       ...generated,
       questions: (generated.questions ?? []).map((question: any) => {
@@ -1322,6 +1331,74 @@ export class SubjectsService implements OnModuleInit, OnModuleDestroy {
     });
     await this.notifyExamPublished(subject, subjectId, exam);
     return exam;
+  }
+
+  /**
+   * Runs the advisory AI difficulty review on a saved draft and stores the
+   * report with it. The teacher decides what to change; nothing is altered.
+   */
+  async reviewDraft(subjectId: string, examId: string, teacherId: string) {
+    await this.owned(subjectId, teacherId);
+    const draft = await this.ownedDraft(subjectId, examId, teacherId);
+    const questions = (await this.prisma.question.findMany({
+      where: { examId },
+      include: { options: true },
+      orderBy: { order: 'asc' },
+    })) as unknown as ReviewedQuestion[];
+    if (!questions.length)
+      throw new ConflictException('Add questions before running the AI review');
+    const ai = (await this.ai.reviewQuestions(
+      reviewPayload(draft, questions)
+    )) as AiReviewResponse;
+    const report = buildReviewReport(questions, ai, draft.durationMinutes);
+    await this.prisma.exam.update({
+      where: { id: examId },
+      data: {
+        aiReview: report as unknown as Prisma.InputJsonValue,
+        aiReviewedAt: new Date(report.generatedAt),
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: 'EXAM_AI_REVIEWED',
+        targetType: 'Exam',
+        targetId: examId,
+        metadata: {
+          questions: report.summary.total,
+          mismatches: report.summary.mismatches,
+          issues: report.summary.issues,
+        },
+      },
+    });
+    return report;
+  }
+
+  /** Rewrites one draft question at the teacher's chosen difficulty. */
+  async rewriteDraftQuestion(
+    subjectId: string,
+    examId: string,
+    teacherId: string,
+    input: { question: QuestionDto; targetDifficulty: 'EASY' | 'MEDIUM' | 'HARD'; reason?: string }
+  ) {
+    await this.owned(subjectId, teacherId);
+    const draft = await this.ownedDraft(subjectId, examId, teacherId);
+    // Validates the question the same way saving it would.
+    const question = normalizeQuestion(input.question, 0);
+    const rewritten = await this.ai.rewriteQuestion({
+      question: {
+        type: question.type,
+        prompt: question.prompt,
+        points: question.points,
+        answers: Array.isArray(question.correctAnswer) ? question.correctAnswer : [],
+        options: input.question.options ?? [],
+        rubric: question.rubric ?? '',
+      },
+      target_difficulty: input.targetDifficulty,
+      reason: input.reason ?? '',
+      source_text: draft.sourceText ?? '',
+    });
+    return { ...rewritten, points: question.points, difficulty: input.targetDifficulty };
   }
 
   async deleteDraft(subjectId: string, examId: string, teacherId: string) {

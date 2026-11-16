@@ -124,3 +124,11 @@ export class UpdateExamScheduleDto {
   @IsISO8601() scheduledAt!: string;
   @IsISO8601() endsAt!: string;
 }
+
+export class RewriteQuestionDto {
+  @ValidateNested()
+  @Type(() => QuestionDto)
+  question!: QuestionDto;
+  @IsIn(DIFFICULTIES) targetDifficulty!: (typeof DIFFICULTIES)[number];
+  @IsOptional() @IsString() @MaxLength(1000) reason?: string;
+}
