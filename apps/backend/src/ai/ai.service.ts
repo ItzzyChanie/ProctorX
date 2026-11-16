@@ -222,6 +222,11 @@ export class AiService {
     return this.postJson('/v1/questions/review', payload, 'AI question review');
   }
 
+  /** Suggested essay score from the rubric (the teacher confirms). */
+  gradeEssay(payload: { prompt: string; rubric: string; points: number; answer: string }) {
+    return this.postJson('/v1/questions/grade-essay', payload, 'AI essay grading');
+  }
+
   /** Rewrites one question to match a target difficulty. */
   rewriteQuestion(payload: unknown) {
     return this.postJson('/v1/questions/rewrite', payload, 'AI question rewrite');

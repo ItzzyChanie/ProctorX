@@ -39,7 +39,7 @@ function harness(lastHeartbeatAt: Date | null, savedAnswers?: unknown[]) {
     },
     $transaction: async (operations: Promise<unknown>[]) => Promise.all(operations),
   };
-  return { service: new GradingService(prisma), writes };
+  return { service: new GradingService(prisma, {} as never), writes };
 }
 
 test('heartbeats only write "last seen" once a minute', async () => {

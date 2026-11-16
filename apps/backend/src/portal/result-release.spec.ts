@@ -30,7 +30,7 @@ test('ungraded work is never shown as released', () => {
 });
 
 test('the submit receipt carries no score or per-question marks', () => {
-  const service = new GradingService({} as never);
+  const service = new GradingService({} as never, {} as never);
   const receipt = service.studentReceipt({
     id: 'sub1',
     submittedAt: new Date(),

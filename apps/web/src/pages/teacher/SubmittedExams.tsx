@@ -49,6 +49,8 @@ type AnswerDetail = {
   selectedOptionIds: string[];
   awardedPoints: number | null;
   gradeStatus: string;
+  aiSuggestedPoints?: number | null;
+  aiJustification?: string | null;
   question: {
     id: string;
     order: number;
@@ -599,6 +601,12 @@ function AnswerCard({
     onSuccess: onUpdated,
     onError,
   });
+  // AI-suggested essay score; the teacher still confirms the final points.
+  const suggest = useMutation({
+    mutationFn: () => api.post(`/sessions/answers/${answer.id}/ai-suggest`),
+    onSuccess: onUpdated,
+    onError,
+  });
   const q = answer.question,
     correct = (answer.awardedPoints ?? 0) === q.points,
     partial =
@@ -705,6 +713,52 @@ function AnswerCard({
             {q.rubric && (
               <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">
                 <b>Rubric:</b> {q.rubric}
+              </div>
+            )}
+            {answer.responseText?.trim() && (
+              <div className="rounded-xl border border-violet-200 bg-violet-50 p-4 text-sm text-violet-950">
+                {answer.aiSuggestedPoints !== null &&
+                answer.aiSuggestedPoints !== undefined ? (
+                  <>
+                    <p className="font-semibold">
+                      AI suggestion: {answer.aiSuggestedPoints} / {q.points}{' '}
+                      <span className="font-normal text-violet-800">
+                        (advisory — you decide the score)
+                      </span>
+                    </p>
+                    {answer.aiJustification && (
+                      <p className="mt-2 whitespace-pre-wrap text-xs">
+                        {answer.aiJustification}
+                      </p>
+                    )}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => setPoints(answer.aiSuggestedPoints ?? 0)}
+                      >
+                        Use suggested score
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        disabled={suggest.isPending}
+                        onClick={() => suggest.mutate()}
+                      >
+                        {suggest.isPending ? 'Asking AI…' : 'Ask again'}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={suggest.isPending}
+                    onClick={() => suggest.mutate()}
+                  >
+                    {suggest.isPending ? 'Asking AI…' : 'Suggest a score with AI'}
+                  </Button>
+                )}
               </div>
             )}
           </div>

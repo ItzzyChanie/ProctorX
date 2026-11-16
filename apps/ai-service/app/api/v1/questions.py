@@ -15,6 +15,7 @@ from app.services.question_generator import (
     rewrite_question,
 )
 from app.services.question_reviewer import ReviewRequest, review_questions
+from app.services.essay_grader import EssayRequest, suggest_essay_score
 
 TARGET_DIFFICULTIES = {"EASY", "MEDIUM", "HARD", "MIXED"}
 
@@ -95,6 +96,18 @@ async def rewrite(request: RewriteRequest):
     try:
         question = await rewrite_question(request)
         return question.model_dump()
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(503, str(error)) from error
+
+
+@router.post("/grade-essay", dependencies=[Depends(verify_internal_api_key)])
+async def grade_essay(request: EssayRequest):
+    """Suggested essay score; the teacher confirms the final grade."""
+    try:
+        suggestion = await suggest_essay_score(request)
+        return suggestion.model_dump()
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     except RuntimeError as error:

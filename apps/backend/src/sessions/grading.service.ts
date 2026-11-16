@@ -22,6 +22,8 @@ import {
   type ScorableQuestion,
   type SubmittedAnswer as ScoringAnswer,
 } from './scoring';
+import { analyzeItems, type AiPrediction } from './item-analysis';
+import { AiService } from '../ai/ai.service';
 
 const HEARTBEAT_WRITE_INTERVAL_MS = 60_000;
 
@@ -30,7 +32,10 @@ type SubmittedAnswer = ScoringAnswer;
 @Injectable()
 export class GradingService implements OnModuleInit, OnModuleDestroy {
   private timeoutTimer?: NodeJS.Timeout;
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private ai: AiService
+  ) {}
 
   onModuleInit() {
     this.timeoutTimer = setInterval(
@@ -640,6 +645,97 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       }),
     ]);
     return this.submissionDetail(submissionId, teacherId);
+  }
+
+  /**
+   * Item analysis after an exam: actual difficulty (p) and discrimination (D)
+   * per question, compared with the teacher's difficulty and the AI review.
+   */
+  async itemAnalysis(examId: string, teacherId: string) {
+    const exam = await this.prisma.exam.findFirst({
+      where: { id: examId, subject: { teacherId } },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        aiReview: true,
+        aiReviewedAt: true,
+        questions: {
+          orderBy: { order: 'asc' },
+          select: { id: true, order: true, type: true, prompt: true, points: true, difficulty: true },
+        },
+      },
+    });
+    if (!exam) throw new NotFoundException('Assessment not found');
+    const submissions = await this.prisma.submission.findMany({
+      where: { session: { examId }, submittedAt: { not: null }, deletedAt: null },
+      select: {
+        totalScore: true,
+        answers: { select: { questionId: true, awardedPoints: true } },
+      },
+    });
+    const review = exam.aiReview as { questions?: AiPrediction[] } | null;
+    return {
+      exam: { id: exam.id, title: exam.title, status: exam.status, aiReviewedAt: exam.aiReviewedAt },
+      ...analyzeItems(exam.questions, submissions, review?.questions ?? []),
+    };
+  }
+
+  /**
+   * Asks the AI for a suggested essay score. It is stored as a suggestion
+   * (AI_SUGGESTED) and only counts once the teacher confirms a score.
+   */
+  async suggestEssayScore(answerId: string, teacherId: string) {
+    const answer = await this.prisma.answer.findUnique({
+      where: { id: answerId },
+      include: {
+        question: true,
+        submission: { include: { session: { include: { exam: { include: { subject: true } } } } } },
+      },
+    });
+    if (!answer) throw new NotFoundException('Answer not found');
+    if (answer.submission.session.exam.subject.teacherId !== teacherId)
+      throw new ForbiddenException();
+    if (answer.question.type !== QuestionType.ESSAY)
+      throw new ConflictException('AI suggestions are only available for essay answers');
+    const suggestion = (await this.ai.gradeEssay({
+      prompt: answer.question.prompt,
+      rubric: answer.question.rubric ?? '',
+      points: answer.question.points,
+      answer: answer.responseText ?? '',
+    })) as { suggestedPoints: number; justification: string; rubricNotes: string[]; manipulationAttempt: boolean };
+    const suggestedPoints = Math.max(
+      0,
+      Math.min(answer.question.points, Math.round(suggestion.suggestedPoints))
+    );
+    const justification = [
+      suggestion.justification,
+      ...suggestion.rubricNotes.map((note) => `• ${note}`),
+      ...(suggestion.manipulationAttempt
+        ? ['⚠ The answer appears to contain instructions aimed at the grader; they were ignored.']
+        : []),
+    ].join('\n');
+    const updated = await this.prisma.answer.update({
+      where: { id: answerId },
+      data: {
+        aiSuggestedPoints: suggestedPoints,
+        aiJustification: justification,
+        ...(answer.gradeStatus === GradeStatus.UNGRADED
+          ? { gradeStatus: GradeStatus.AI_SUGGESTED }
+          : {}),
+      },
+      select: { id: true, aiSuggestedPoints: true, aiJustification: true, gradeStatus: true },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: 'ESSAY_AI_SUGGESTED',
+        targetType: 'Answer',
+        targetId: answerId,
+        metadata: { suggestedPoints, manipulationAttempt: suggestion.manipulationAttempt },
+      },
+    });
+    return { ...updated, manipulationAttempt: suggestion.manipulationAttempt };
   }
 
   async confirmAnswer(answerId: string, teacherId: string, points: number) {

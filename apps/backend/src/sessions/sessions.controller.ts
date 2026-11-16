@@ -136,6 +136,15 @@ export class SessionsController {
   ) {
     return this.grading.updateResultRelease(submissionId, r.user.id, body);
   }
+  @Post('answers/:answerId/ai-suggest')
+  @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT')
+  suggestEssayScore(
+    @Req() r: any,
+    @Param('answerId') answerId: string
+  ) {
+    return this.grading.suggestEssayScore(answerId, r.user.id);
+  }
   @Post('grades/confirm') @Roles(Role.TEACHER)
   @RequirePermission('FLAG_STUDENT') confirm(
     @Req() r: any,
@@ -206,6 +215,13 @@ export class SessionsController {
       file.buffer,
       file.mimetype
     );
+  }
+  @Get('exam/:examId/item-analysis') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') itemAnalysis(
+    @Req() r: any,
+    @Param('examId') examId: string
+  ) {
+    return this.grading.itemAnalysis(examId, r.user.id);
   }
   @Get('exam/:examId/monitor') @Roles(Role.TEACHER)
   @RequirePermission('VIEW_OWN_CLASS_SESSIONS') monitor(

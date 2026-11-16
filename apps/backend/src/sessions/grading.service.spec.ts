@@ -83,7 +83,7 @@ function harness(
     $transaction: async (callback: (tx: unknown) => unknown) =>
       callback(prisma),
   };
-  return { service: new GradingService(prisma), session, calls };
+  return { service: new GradingService(prisma, {} as never), session, calls };
 }
 
 test('finalizing an unsubmitted attempt grades the last saved draft', async () => {
