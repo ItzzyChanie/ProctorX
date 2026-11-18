@@ -158,7 +158,6 @@ export default function Classes() {
       endsAt: '',
       requireCamera: false,
       requireMicrophone: false,
-      blockThirdPartyApps: true,
       randomizeQuestions: false,
       randomizeOptions: false,
     }),
@@ -400,7 +399,6 @@ export default function Classes() {
       endsAt: '',
       requireCamera: false,
       requireMicrophone: false,
-      blockThirdPartyApps: true,
       randomizeQuestions: false,
       randomizeOptions: false,
     });
@@ -446,7 +444,7 @@ export default function Classes() {
         requireCamera: form.requireCamera,
         requireMicrophone: form.requireMicrophone,
         appPolicyMode: 'BLACKLIST',
-        appPolicyList: form.blockThirdPartyApps ? ['*'] : [],
+        appPolicyList: [],
         questions: mode === 'google' ? undefined : questions.map(toPayload),
         sourceText: sourceText || undefined,
         publish,
@@ -609,7 +607,6 @@ export default function Classes() {
         endsAt: localDateTimeValue(exam.endsAt),
         requireCamera: exam.requireCamera,
         requireMicrophone: exam.requireMicrophone,
-        blockThirdPartyApps: (exam.appPolicyList ?? []).includes('*'),
         randomizeQuestions: exam.randomizeQuestions,
         randomizeOptions: exam.randomizeOptions,
       }));
@@ -1543,7 +1540,6 @@ export default function Classes() {
                         [
                           ['requireCamera', 'Require camera'],
                           ['requireMicrophone', 'Require microphone'],
-                          ['blockThirdPartyApps', 'Block third-party apps'],
                           ['randomizeQuestions', 'Randomize question order'],
                           ['randomizeOptions', 'Randomize answer order'],
                         ] as const

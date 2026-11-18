@@ -6,11 +6,8 @@ on:
 
 jobs:
   node:
-    name: Backend, web and desktop
+    name: Backend and web
     runs-on: ubuntu-latest
-    env:
-      # The desktop app's Electron binary is not needed to type-check or test.
-      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,9 +17,9 @@ jobs:
       - run: npm ci
       - name: Generate Prisma client
         run: npx prisma generate --schema apps/backend/prisma/schema.prisma
-      - name: Type-check backend, web and desktop
+      - name: Type-check backend and web
         run: npm run typecheck
-      - name: Unit tests (backend + desktop)
+      - name: Unit tests (backend + web)
         run: npm test
 
   ai-service:

@@ -1,7 +1,7 @@
 /**
  * Media helpers for the exam room: screen/camera capture, WebRTC stream
  * quality for the teacher's monitoring grid, audio processing for the voice
- * detector, and the optional Electron lockdown bridge.
+ * detector.
  */
 
 export type Signal = {
@@ -126,21 +126,6 @@ export const captureCameraFeed = async () => {
   if (track) track.contentHint = 'motion';
   return camera;
 };
-
-type DesktopLockdown = {
-  startLockdown(policy: {
-    mode: 'BLACKLIST' | 'WHITELIST';
-    list: string[];
-  }): Promise<{ platform: string }>;
-  stopLockdown(): Promise<void>;
-  onViolation(callback: (apps: string[]) => void): () => void;
-  onFocusLost(callback: () => void): () => void;
-};
-
-/** Present only inside the ProctorX desktop (Electron) app. */
-export const desktopLockdown = (
-  window as Window & { proctorX?: DesktopLockdown }
-).proctorX;
 
 export const isStreamQuality = (value: unknown): value is StreamQuality =>
   typeof value === 'string' && value in QUALITY_PRESETS;

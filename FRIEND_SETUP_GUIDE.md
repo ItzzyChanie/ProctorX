@@ -82,7 +82,7 @@ Run all commands in this section from the repository root unless the command say
 npm ci
 ```
 
-Use `npm ci` because this project includes `package-lock.json`; it installs the exact versions the project expects. Do not install Nest, Vite, Prisma, or Electron globally.
+Use `npm ci` because this project includes `package-lock.json`; it installs the exact versions the project expects. Do not install Nest, Vite, or Prisma globally.
 
 ### 2. Create the three environment files
 
@@ -185,12 +185,6 @@ npm run dev:ai
 ```
 
 Then open `http://localhost:5173` in a browser. The backend listens at `http://localhost:4000`; the AI API documentation is at `http://127.0.0.1:8000/docs`.
-
-The project also has an optional Electron desktop app. Start it only if needed, in a fourth terminal:
-
-```powershell
-npm run dev:desktop
-```
 
 To stop a development service, focus its terminal and press `Ctrl+C`. To stop database containers while preserving data:
 

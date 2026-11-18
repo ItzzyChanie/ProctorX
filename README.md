@@ -19,9 +19,9 @@ reviewed by a teacher before any decision is made.
 ## Architecture
 
 ```
- Browser (React + Vite)          Optional Electron app (app lockdown)
-        │  HTTPS + cookie session          │
-        ▼                                  ▼
+ Browser (React + Vite)
+        │  HTTPS + cookie session
+        ▼
  ┌─────────────────────────────────────────────────┐
  │ Backend API — NestJS (apps/backend)  :4000      │
  │  • REST + Socket.IO (live monitoring, signaling)│
@@ -51,7 +51,6 @@ teacher review and deleted automatically after 180 days.
 | `apps/web` | React + TypeScript web app (all three portals) |
 | `apps/backend` | NestJS API, Prisma schema and migrations |
 | `apps/ai-service` | FastAPI AI service and Celery worker |
-| `apps/desktop` | Optional Electron app that enforces an application block list |
 | `packages/` | Shared TypeScript config and types |
 | `tools/loadtest` | Load-test scripts and measured results |
 
@@ -104,8 +103,8 @@ Never commit `.env` files.
 ## Testing
 
 ```powershell
-npm test            # backend unit tests + desktop lockdown tests
-npm run typecheck   # backend, web and desktop
+npm test            # backend + web unit tests
+npm run typecheck   # backend and web
 npm run test:ai     # AI service (pytest)
 ```
 
@@ -136,4 +135,4 @@ recommended deployment for 300–500 students.
 
 React 19, Vite, Tailwind CSS, TanStack Query, Socket.IO, WebRTC · NestJS 11,
 Prisma, PostgreSQL 16, Redis 7 · FastAPI, MediaPipe, OpenCV, webrtcvad,
-scikit-fuzzy, Celery · Electron.
+scikit-fuzzy, Celery.

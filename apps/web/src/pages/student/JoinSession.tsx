@@ -47,7 +47,6 @@ import {
   applyStreamQuality,
   captureCameraFeed,
   captureEntireScreen,
-  desktopLockdown,
   isStreamQuality,
   rms,
   SILENCE_RMS,
@@ -69,7 +68,6 @@ export default function JoinSession() {
   const [exam, setExam] = useState<any>();
   const [notice, setNotice] = useState('');
   const [locked, setLocked] = useState(false);
-  const [nativeBlocked, setNativeBlocked] = useState(false);
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState<{
@@ -844,47 +842,6 @@ export default function JoinSession() {
   }, [exam, submitted, captureAttempt, cameraOnly]);
 
   useEffect(() => {
-    const lockdown = desktopLockdown;
-    if (!exam || submitted || !lockdown) return;
-    let violationPending = false;
-    void lockdown
-      .startLockdown({
-        mode: exam.exam.appPolicyMode,
-        list: exam.exam.appPolicyList ?? [],
-      })
-      .catch(() =>
-        setNotice(
-          'Desktop lockdown could not start. Close the exam and check system permissions.'
-        )
-      );
-    const removeViolation = lockdown.onViolation((applications) => {
-      if (!applications.length) {
-        setNativeBlocked(false);
-        return;
-      }
-      setNativeBlocked(true);
-      if (violationPending) return;
-      violationPending = true;
-      setNotice(`Close prohibited application(s): ${applications.join(', ')}`);
-      void api
-        .post(`/sessions/${exam.session.id}/events`, {
-          type: 'BLACKLISTED_APP',
-          metadata: { applications, seconds: 2.5 },
-        })
-        .finally(() => {
-          violationPending = false;
-        });
-    });
-    const removeFocusLost = lockdown.onFocusLost(() => {
-      setFullscreenLost(true);
-    });
-    return () => {
-      removeViolation();
-      removeFocusLost();
-      void lockdown.stopLockdown();
-    };
-  }, [exam, submitted]);
-  useEffect(() => {
     if (!exam || submitted) return;
     const timer = window.setInterval(
       () => setRemainingSeconds((value) => Math.max(0, value - 1)),
@@ -1389,11 +1346,9 @@ export default function JoinSession() {
         {notice && (
           <div className="mb-4 rounded bg-amber-100 p-3">{notice}</div>
         )}
-        {(locked || nativeBlocked) && (
+        {locked && (
           <div className="fixed inset-0 z-[60] grid place-items-center bg-black/60 text-xl text-white">
-            {nativeBlocked
-              ? 'Close prohibited applications to continue.'
-              : 'Exam locked by teacher.'}
+            Exam locked by teacher.
           </div>
         )}
         {exam && !submitted && (screenShareLost || multipleDisplays) && (
@@ -1580,7 +1535,7 @@ export default function JoinSession() {
                   onGo={goToQuestion}
                 />
                 <fieldset
-                  disabled={locked || nativeBlocked}
+                  disabled={locked}
                   className="mx-auto max-w-5xl space-y-5"
                 >
                   {exam.exam.questions
