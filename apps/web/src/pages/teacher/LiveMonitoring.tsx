@@ -33,6 +33,16 @@ import { api } from '../../lib/api';
 import { DEFAULT_RTC_CONFIG, getRtcConfig } from '../../lib/rtc';
 import { socket } from '../../lib/socket';
 import { useAuthStore } from '../../store/authStore';
+import {
+  autoGrid,
+  DEFAULT_PAGE_SIZE,
+  FOCUS_QUALITY_MAX_TILES,
+  PAGE_SIZE_OPTIONS,
+  readPreference,
+  savePreference,
+  TILE_MIN_WIDTH,
+  type TileSize,
+} from './monitoring/gridLayout';
 
 type Student = {
   id: string;
@@ -72,7 +82,6 @@ type SortKey = 'risk' | 'violations' | 'hand' | 'name';
 const CONNECT_TIMEOUT_MS = 10_000;
 const DISCONNECT_GRACE_MS = 5_000;
 const REFRESH_DEBOUNCE_MS = 600;
-const TILE_MIN_WIDTH = { S: 200, M: 300, L: 440 } as const;
 const TIER_RANK = { HIGH: 3, MEDIUM: 2, LOW: 1 } as const;
 
 /**
@@ -291,10 +300,19 @@ export default function LiveMonitoring() {
   const [sectionFilter, setSectionFilter] = useState('');
   const [specialFilter, setSpecialFilter] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('risk');
-  const [tileSize, setTileSize] = useState<keyof typeof TILE_MIN_WIDTH>('M');
+  // Remembered per teacher browser; AUTO sizes tiles to fill the page.
+  const [tileSize, setTileSize] = useState<TileSize>(() =>
+    readPreference<TileSize>('proctorx.monitor.tileSize', ['AUTO', 'S', 'M', 'L'], 'AUTO')
+  );
   // Phones: filters fold behind a single button so the feeds stay in view.
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [pageSize, setPageSize] = useState(24);
+  const [pageSize, setPageSize] = useState(() =>
+    readPreference<number>(
+      'proctorx.monitor.pageSize',
+      [...PAGE_SIZE_OPTIONS, 0],
+      DEFAULT_PAGE_SIZE
+    )
+  );
   const [page, setPage] = useState(0);
   const [warningMessage, setWarningMessage] = useState('');
   const [extraMinutes, setExtraMinutes] = useState(10);
@@ -302,6 +320,22 @@ export default function LiveMonitoring() {
   const [frames] = useState(() => new FrameStore());
   const selectedRef = useRef<string | null>(null);
   const visibleRef = useRef(new Set<string>());
+  // True when only a few tiles are on screen: they get full-quality video.
+  const largeTilesRef = useRef(false);
+  const gridObserver = useRef<ResizeObserver | null>(null);
+  // Callback ref: observe the wall whenever it mounts (it appears only once an
+  // exam is chosen) without re-creating the observer on every render.
+  const gridRef = useCallback((element: HTMLDivElement | null) => {
+    gridObserver.current?.disconnect();
+    gridObserver.current = null;
+    if (!element) return;
+    gridObserver.current = new ResizeObserver(([entry]) =>
+      setGridWidth(Math.round(entry?.contentRect.width ?? 0))
+    );
+    gridObserver.current.observe(element);
+  }, []);
+  const [gridWidth, setGridWidth] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
   const syncRef = useRef<(id: string) => void>(() => undefined);
   const selectedExam = exams.find((exam) => exam.id === examId);
 
@@ -387,7 +421,8 @@ export default function LiveMonitoring() {
       }
       if (live.has(id)) {
         const quality: Quality =
-          selectedRef.current === id
+          selectedRef.current === id ||
+          (visibleRef.current.has(id) && largeTilesRef.current)
             ? 'focus'
             : visibleRef.current.has(id)
               ? 'thumb'
@@ -622,23 +657,30 @@ export default function LiveMonitoring() {
       event,
     }: {
       sessionId: string;
-      score: number;
-      tier: string;
-      event: { type: string };
+      // null while the AI scorer is unavailable (the event is still shown);
+      // a later update without an event carries the recomputed score.
+      score: number | null;
+      tier: string | null;
+      event?: { type: string };
     }) =>
       setStudents((current) =>
         current.map((student) =>
           student.id === sessionId
             ? {
                 ...student,
-                score,
-                tier: tier.toUpperCase() as Student['tier'],
+                ...(score !== null && tier
+                  ? {
+                      score,
+                      tier: tier.toUpperCase() as Student['tier'],
+                    }
+                  : {}),
                 tabSwitches:
                   student.tabSwitches +
-                  (['TAB_SWITCH', 'FULLSCREEN_EXIT'].includes(event.type)
+                  (event &&
+                  ['TAB_SWITCH', 'FULLSCREEN_EXIT'].includes(event.type)
                     ? 1
                     : 0),
-                eventCount: student.eventCount + 1,
+                eventCount: student.eventCount + (event ? 1 : 0),
               }
             : student
         )
@@ -836,6 +878,26 @@ export default function LiveMonitoring() {
         (currentPage + 1) * pageSize
       )
     : visibleStudents;
+  // Few tiles on screen: switch their feeds to full quality (and back).
+  const largeTiles =
+    pageStudents.length > 0 && pageStudents.length <= FOCUS_QUALITY_MAX_TILES;
+  useEffect(() => {
+    if (largeTilesRef.current === largeTiles) return;
+    largeTilesRef.current = largeTiles;
+    visibleRef.current.forEach((id) => syncRef.current(id));
+  }, [largeTiles]);
+  useEffect(() => savePreference('proctorx.monitor.pageSize', pageSize), [pageSize]);
+  useEffect(() => savePreference('proctorx.monitor.tileSize', tileSize), [tileSize]);
+  // The window height bounds small walls so they fit without scrolling.
+  useEffect(() => {
+    const onResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const layout =
+    tileSize === 'AUTO'
+      ? autoGrid(pageStudents.length, gridWidth, viewportHeight)
+      : null;
   const connectedCount = students.filter((student) => student.connected).length;
 
   const sendWarning = async () => {
@@ -1021,11 +1083,12 @@ export default function LiveMonitoring() {
               <select
                 value={tileSize}
                 onChange={(event) =>
-                  setTileSize(event.target.value as keyof typeof TILE_MIN_WIDTH)
+                  setTileSize(event.target.value as TileSize)
                 }
                 className={selectClass}
                 aria-label="Tile size"
               >
+                <option value="AUTO">Auto-fit tiles</option>
                 <option value="S">Small tiles</option>
                 <option value="M">Medium tiles</option>
                 <option value="L">Large tiles</option>
@@ -1036,10 +1099,12 @@ export default function LiveMonitoring() {
                 className={selectClass}
                 aria-label="Tiles per page"
               >
-                <option value={12}>12 per page</option>
-                <option value={24}>24 per page</option>
-                <option value={48}>48 per page</option>
-                <option value={0}>Show all</option>
+                {PAGE_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>
+                    {size === 1 ? '1 screen per page' : `${size} screens per page`}
+                  </option>
+                ))}
+                <option value={0}>Show all screens</option>
               </select>
               <Button
                 variant="ghost"
@@ -1058,8 +1123,10 @@ export default function LiveMonitoring() {
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-text-3">
               <p>
                 Showing {pageStudents.length} of {visibleStudents.length}{' '}
-                matching ({students.length} total). Off-screen tiles are paused
-                to save bandwidth.
+                matching ({students.length} total). Screens on other pages are
+                paused to save bandwidth.
+                {largeTiles &&
+                  ` With ${FOCUS_QUALITY_MAX_TILES} or fewer screens per page, each is shown at full quality.`}
               </p>
               {pageCount > 1 && (
                 <div className="flex items-center gap-2">
@@ -1086,10 +1153,18 @@ export default function LiveMonitoring() {
               )}
             </div>
             <div
-              className="grid gap-3"
-              style={{
-                gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${TILE_MIN_WIDTH[tileSize]}px), 1fr))`,
-              }}
+              ref={gridRef}
+              className="mx-auto grid w-full gap-3"
+              style={
+                layout
+                  ? {
+                      gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
+                      maxWidth: layout.maxWidth,
+                    }
+                  : {
+                      gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${TILE_MIN_WIDTH[tileSize as keyof typeof TILE_MIN_WIDTH]}px), 1fr))`,
+                    }
+              }
             >
               {pageStudents.map((student) => (
                 <Tile

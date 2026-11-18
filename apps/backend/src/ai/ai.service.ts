@@ -20,6 +20,7 @@ export type FullFuzzyIndicators = ReducedFuzzyIndicators & {
   multiple_faces?: number;
   voice_detected?: number;
 };
+export type TargetDifficulty = 'EASY' | 'MEDIUM' | 'HARD' | 'MIXED';
 export type QuestionCounts = Record<
   'MULTIPLE_CHOICE' | 'ENUMERATION' | 'IDENTIFICATION' | 'ESSAY',
   number
@@ -28,6 +29,13 @@ export type QuestionCounts = Record<
 @Injectable()
 export class AiService {
   constructor(private config: ConfigService) {}
+  private baseUrl() {
+    return this.config.get<string>('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000';
+  }
+  /** No insecure default: main.ts refuses to boot without INTERNAL_API_KEY. */
+  private apiKey() {
+    return this.config.getOrThrow<string>('INTERNAL_API_KEY');
+  }
   async scoreReduced(
     sessionId: string,
     studentId: string,
@@ -50,7 +58,7 @@ export class AiService {
   ) {
     try {
       const { data } = await axios.post(
-        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/fuzzy/score`,
+        `${this.baseUrl()}/v1/fuzzy/score`,
         {
           session_id: sessionId,
           student_id: studentId,
@@ -60,7 +68,7 @@ export class AiService {
         {
           headers: {
             'X-Internal-Api-Key':
-              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+              this.apiKey(),
           },
           timeout: 5000,
         }
@@ -76,27 +84,39 @@ export class AiService {
     kind: 'face' | 'audio',
     sessionId: string,
     buffer: Buffer,
-    filename: string
+    filename: string,
+    sampleSeconds?: number,
+    mimeType?: string,
+    streaks?: Record<string, number>
   ) {
     const bytes = buffer.buffer.slice(
       buffer.byteOffset,
       buffer.byteOffset + buffer.byteLength
     ) as ArrayBuffer;
     const form = new FormData();
-    if (kind === 'face') form.append('session_id', sessionId);
+    if (kind === 'face') {
+      form.append('session_id', sessionId);
+      if (sampleSeconds) form.append('sample_seconds', String(sampleSeconds));
+      // The AI service is stateless: it continues from the caller's counters.
+      if (streaks) form.append('state', JSON.stringify(streaks));
+    }
+    // The AI service validates the part's media type, so it must be set
+    // (a bare Blob is sent as application/octet-stream and rejected).
     form.append(
       kind === 'face' ? 'frame' : 'chunk',
-      new Blob([bytes]),
+      new Blob([bytes], {
+        type: mimeType ?? (kind === 'face' ? 'image/jpeg' : 'audio/wav'),
+      }),
       filename
     );
     try {
       const { data } = await axios.post(
-        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/analysis/${kind}`,
+        `${this.baseUrl()}/v1/analysis/${kind}`,
         form,
         {
           headers: {
             'X-Internal-Api-Key':
-              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+              this.apiKey(),
           },
           timeout: 8000,
         }
@@ -111,12 +131,12 @@ export class AiService {
   async requestReport(payload: unknown, format: 'pdf' | 'html' | 'excel') {
     try {
       const { data } = await axios.post(
-        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/jobs/reports`,
+        `${this.baseUrl()}/v1/jobs/reports`,
         { payload, format },
         {
           headers: {
             'X-Internal-Api-Key':
-              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+              this.apiKey(),
           },
           timeout: 5000,
         }
@@ -131,11 +151,11 @@ export class AiService {
   async jobStatus(jobId: string) {
     try {
       const { data } = await axios.get(
-        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/jobs/${jobId}`,
+        `${this.baseUrl()}/v1/jobs/${jobId}`,
         {
           headers: {
             'X-Internal-Api-Key':
-              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+              this.apiKey(),
           },
           timeout: 5000,
         }
@@ -152,7 +172,8 @@ export class AiService {
   }
   async generateQuestions(
     files: Express.Multer.File[],
-    counts: QuestionCounts
+    counts: QuestionCounts,
+    difficulty: TargetDifficulty = 'MIXED'
   ) {
     const form = new FormData();
     for (const file of files) {
@@ -167,16 +188,18 @@ export class AiService {
       );
     }
     form.append('counts', JSON.stringify(counts));
+    form.append('difficulty', difficulty);
     try {
       const { data } = await axios.post(
-        `${this.config.get('AI_SERVICE_URL') ?? 'http://127.0.0.1:8000'}/v1/questions/generate`,
+        `${this.baseUrl()}/v1/questions/generate`,
         form,
         {
           headers: {
             'X-Internal-Api-Key':
-              this.config.get('INTERNAL_API_KEY') ?? 'development-internal-key',
+              this.apiKey(),
           },
-          timeout: 135_000,
+          // Up to two model calls (one automatic retry).
+          timeout: 270_000,
         }
       );
       return data;
@@ -191,6 +214,40 @@ export class AiService {
       throw new ServiceUnavailableException(
         'AI question generation service is unavailable.'
       );
+    }
+  }
+
+  /** Advisory AI difficulty/quality review of draft questions. */
+  reviewQuestions(payload: unknown) {
+    return this.postJson('/v1/questions/review', payload, 'AI question review');
+  }
+
+  /** Suggested essay score from the rubric (the teacher confirms). */
+  gradeEssay(payload: { prompt: string; rubric: string; points: number; answer: string }) {
+    return this.postJson('/v1/questions/grade-essay', payload, 'AI essay grading');
+  }
+
+  /** Rewrites one question to match a target difficulty. */
+  rewriteQuestion(payload: unknown) {
+    return this.postJson('/v1/questions/rewrite', payload, 'AI question rewrite');
+  }
+
+  private async postJson(path: string, payload: unknown, label: string) {
+    try {
+      const { data } = await axios.post(`${this.baseUrl()}${path}`, payload, {
+        headers: { 'X-Internal-Api-Key': this.apiKey() },
+        timeout: 270_000,
+      });
+      return data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        const detail = error.response.data.detail;
+        throw new HttpException(
+          typeof detail === 'string' ? detail : JSON.stringify(detail),
+          error.response.status
+        );
+      }
+      throw new ServiceUnavailableException(`${label} service is unavailable.`);
     }
   }
 }

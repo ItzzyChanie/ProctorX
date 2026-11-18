@@ -1,9 +1,11 @@
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    internal_api_key: str = "development-internal-key"
+    # Required: must match the backend INTERNAL_API_KEY (no insecure default).
+    internal_api_key: str = Field(min_length=32)
     redis_url: str = "redis://localhost:6379/0"
     llm_base_url: str | None = None
     llm_api_key: str | None = None

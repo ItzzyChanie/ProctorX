@@ -24,6 +24,7 @@ import {
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import {
   CreateExamDto,
+  RewriteQuestionDto,
   CreateSubjectDto,
   JoinSubjectDto,
   ReviewJoinRequestDto,
@@ -251,6 +252,60 @@ export class SubjectsController {
   ) {
     return this.subjects.createExam(id, req.user.id, body);
   }
+  /** Replace a draft's settings and questions. */
+  @Patch(':id/exams/:examId/draft')
+  @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
+  updateDraft(
+    @Param('id') id: string,
+    @Param('examId') examId: string,
+    @Req() req: any,
+    @Body() body: CreateExamDto
+  ) {
+    return this.subjects.updateDraft(id, examId, req.user.id, body);
+  }
+  @Post(':id/exams/:examId/publish')
+  @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
+  publishDraft(
+    @Param('id') id: string,
+    @Param('examId') examId: string,
+    @Req() req: any
+  ) {
+    return this.subjects.publishDraft(id, examId, req.user.id);
+  }
+  /** Advisory AI difficulty and quality review of a saved draft. */
+  @Post(':id/exams/:examId/ai-review')
+  @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
+  reviewDraft(
+    @Param('id') id: string,
+    @Param('examId') examId: string,
+    @Req() req: any
+  ) {
+    return this.subjects.reviewDraft(id, examId, req.user.id);
+  }
+  @Post(':id/exams/:examId/questions/rewrite')
+  @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
+  rewriteDraftQuestion(
+    @Param('id') id: string,
+    @Param('examId') examId: string,
+    @Req() req: any,
+    @Body() body: RewriteQuestionDto
+  ) {
+    return this.subjects.rewriteDraftQuestion(id, examId, req.user.id, body);
+  }
+  @Delete(':id/exams/:examId/draft')
+  @Roles(Role.TEACHER)
+  @RequirePermission('CREATE_EXAM')
+  deleteDraft(
+    @Param('id') id: string,
+    @Param('examId') examId: string,
+    @Req() req: any
+  ) {
+    return this.subjects.deleteDraft(id, examId, req.user.id);
+  }
   @Patch(':id/exams/:examId/schedule')
   @Roles(Role.TEACHER)
   @RequirePermission('CREATE_EXAM')
@@ -282,7 +337,8 @@ export class SubjectsController {
     @Param('id') id: string,
     @Req() req: any,
     @UploadedFiles() files: Express.Multer.File[] | undefined,
-    @Body('counts') rawCounts: string
+    @Body('counts') rawCounts: string,
+    @Body('difficulty') rawDifficulty?: string
   ) {
     if (!files?.length)
       throw new BadRequestException(
@@ -304,7 +360,10 @@ export class SubjectsController {
       id,
       req.user.id,
       files,
-      this.parseQuestionCounts(rawCounts)
+      this.parseQuestionCounts(rawCounts),
+      rawDifficulty === 'EASY' || rawDifficulty === 'MEDIUM' || rawDifficulty === 'HARD'
+        ? rawDifficulty
+        : 'MIXED'
     );
   }
 

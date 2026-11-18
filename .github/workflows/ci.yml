@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  node:
+    name: Backend and web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Generate Prisma client
+        run: npx prisma generate --schema apps/backend/prisma/schema.prisma
+      - name: Type-check backend and web
+        run: npm run typecheck
+      - name: Unit tests (backend + web)
+        run: npm test
+
+  ai-service:
+    name: AI service
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/ai-service
+    env:
+      # Test-only value; the real key lives in each deployment's .env.
+      INTERNAL_API_KEY: ci-test-key-not-a-real-secret-0123456789
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: apps/ai-service/requirements.txt
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest -q

@@ -49,6 +49,10 @@ enum QuestionType {
   ENUMERATION
   ESSAY
   IDENTIFICATION
+  /// Checkboxes: one or more correct options (select all that apply).
+  MULTIPLE_RESPONSE
+  /// Sentence with ___ blanks; one accepted-answer list per blank.
+  FILL_IN_THE_BLANK
 }
 
 enum ExamSourceType {
@@ -134,6 +138,7 @@ enum EventType {
   IDLE
   SCREEN_SHARE_STOPPED
   MULTIPLE_DISPLAYS
+  EXTERNAL_FORM_OPENED
 }
 
 enum RecordingStatus {
@@ -212,7 +217,7 @@ model User {
   examSessions          ExamSession[]
   auditLogs             AuditLog[]
   notifications         Notification[]
-  studentLoginSession   StudentLoginSession?
+  loginSessions         LoginSession[]
   requestedReports      GeneratedReport[]
   questionBankItems     QuestionBankItem[]
   examStudentOverrides  ExamStudentOverride[]
@@ -223,16 +228,20 @@ model User {
   @@map("users")
 }
 
-model StudentLoginSession {
+/// One row per signed-in browser for every role. A JWT is valid only while its
+/// `jti` matches a row here, so logout / password change / account disable
+/// revoke access immediately. Students are limited to one live row.
+model LoginSession {
   id         String   @id
-  userId     String   @unique
+  userId     String
   createdAt  DateTime @default(now())
   lastSeenAt DateTime @default(now())
   expiresAt  DateTime
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
   @@index([expiresAt])
-  @@map("student_login_sessions")
+  @@map("login_sessions")
 }
 
 model DeanProfile {
@@ -518,6 +527,11 @@ model Exam {
   version            Int                   @default(1)
   publishedAt        DateTime?
   sessionsArchivedAt DateTime?
+  /// Latest AI difficulty/quality review of the questions (advisory draft report).
+  aiReview           Json?
+  aiReviewedAt       DateTime?
+  /// Text extracted from the documents the questions were generated from.
+  sourceText         String?               @db.Text
   createdAt          DateTime              @default(now())
   subject            Subject               @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   academicPeriod     AcademicPeriod        @relation(fields: [academicPeriodId], references: [id])
@@ -606,6 +620,14 @@ model Question {
   correctAnswer Json?
   rubric        String?
   source        ExamSourceType   @default(MANUAL)
+  /// Difficulty chosen by the teacher (checked by the AI difficulty review).
+  difficulty    QuestionDifficulty @default(MEDIUM)
+  /// Where an AI-generated question came from (file and page/slide).
+  sourceReference String?
+  /// Identification / fill-in-the-blank: accept answers with one small typo.
+  allowTypos    Boolean          @default(false)
+  /// Enumeration / multiple response / fill-in-the-blank: credit per correct part.
+  partialCredit Boolean          @default(true)
   exam          Exam             @relation(fields: [examId], references: [id], onDelete: Cascade)
   options       QuestionOption[]
   answers       Answer[]
@@ -629,7 +651,7 @@ model Submission {
   id              String         @id @default(uuid())
   sessionId       String         @unique
   submittedAt     DateTime?
-  totalScore      Int?
+  totalScore      Float?
   maxScore        Int
   gradeStatus     GradeStatus    @default(UNGRADED)
   mode            SubmissionMode @default(MANUAL)
@@ -648,7 +670,7 @@ model Answer {
   questionId        String
   responseText      String?
   selectedOptionIds String[]    @default([])
-  awardedPoints     Int?
+  awardedPoints     Float?
   aiSuggestedPoints Int?
   aiJustification   String?
   gradeStatus       GradeStatus @default(UNGRADED)

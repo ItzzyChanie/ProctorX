@@ -3,16 +3,15 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Camera,
+  Flag,
   ChevronLeft,
   ChevronRight,
   Clock3,
   EyeOff,
   LogIn,
   Mic,
-  Minus,
   Monitor,
   MonitorOff,
-  Plus,
   ShieldCheck,
   Sparkles,
   Trophy,
@@ -31,175 +30,36 @@ import {
 import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-type Signal = {
-  description?: RTCSessionDescriptionInit;
-  candidate?: RTCIceCandidateInit;
-};
-type Answer = {
-  responseText?: string;
-  selectedOptionIds?: string[];
-  enumerationAnswers?: string[];
-};
-type StudentSubject = {
-  id: string;
-  code: string;
-  subjectCode?: string;
-  schedule?: string;
-  name: string;
-  teacher: { fullName: string };
-  exams: {
-    assessmentType: 'EXAM' | 'QUIZ';
-    status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
-    endsAt: string | null;
-    sessions: { endedAt: string }[];
-  }[];
-};
-type StreamQuality = 'off' | 'thumb' | 'focus';
-// Grid tiles are ~300px wide, so thumbnails are capped at 540p / 5 fps; only
-// the student the teacher has enlarged is sent at full quality.
-const QUALITY_PRESETS: Record<
-  StreamQuality,
-  {
-    active: boolean;
-    maxBitrate: number;
-    maxFramerate: number;
-    maxHeight: number;
-  }
-> = {
-  off: { active: false, maxBitrate: 100_000, maxFramerate: 1, maxHeight: 360 },
-  thumb: { active: true, maxBitrate: 250_000, maxFramerate: 5, maxHeight: 540 },
-  focus: {
-    active: true,
-    maxBitrate: 2_500_000,
-    maxFramerate: 15,
-    maxHeight: 0,
-  },
-};
-const applyStreamQuality = async (
-  connection: RTCPeerConnection,
-  quality: StreamQuality
-) => {
-  const sender = connection
-    .getSenders()
-    .find((candidate) => candidate.track?.kind === 'video');
-  if (!sender) return;
-  const parameters = sender.getParameters();
-  // Encodings only exist once negotiation is done; applied again afterwards.
-  if (!parameters.encodings?.length) return;
-  const preset = QUALITY_PRESETS[quality];
-  const height = sender.track?.getSettings().height ?? 0;
-  parameters.encodings[0] = {
-    ...parameters.encodings[0],
-    active: preset.active,
-    maxBitrate: preset.maxBitrate,
-    maxFramerate: preset.maxFramerate,
-    scaleResolutionDownBy:
-      preset.maxHeight && height > preset.maxHeight
-        ? height / preset.maxHeight
-        : 1,
-  };
-  await sender.setParameters(parameters).catch(() => undefined);
-};
-const captureEntireScreen = async () => {
-  const screen = await navigator.mediaDevices.getDisplayMedia({
-    video: {
-      displaySurface: 'monitor',
-      frameRate: { ideal: 15, max: 20 },
-    },
-    audio: false,
-    monitorTypeSurfaces: 'include',
-    preferCurrentTab: false,
-    selfBrowserSurface: 'exclude',
-    surfaceSwitching: 'exclude',
-  } as DisplayMediaStreamOptions);
-  const track = screen.getVideoTracks()[0];
-  if (track?.getSettings().displaySurface !== 'monitor') {
-    screen.getTracks().forEach((item) => item.stop());
-    throw new Error('The entire screen must be shared.');
-  }
-  // Screens are mostly text: keep resolution sharp, drop frames instead.
-  track.contentHint = 'detail';
-  await track
-    .applyConstraints({ frameRate: { ideal: 15, max: 20 } })
-    .catch(() => undefined);
-  return screen;
-};
-/** Camera-only mode (phones/tablets): the front camera stands in for the screen. */
-const captureCameraFeed = async () => {
-  const camera = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: 'user',
-      width: { ideal: 640 },
-      height: { ideal: 480 },
-      frameRate: { ideal: 15, max: 20 },
-    },
-    audio: false,
-  });
-  const track = camera.getVideoTracks()[0];
-  if (track) track.contentHint = 'motion';
-  return camera;
-};
-type DesktopLockdown = {
-  startLockdown(policy: {
-    mode: 'BLACKLIST' | 'WHITELIST';
-    list: string[];
-  }): Promise<{ platform: string }>;
-  stopLockdown(): Promise<void>;
-  onViolation(callback: (apps: string[]) => void): () => void;
-  onFocusLost(callback: () => void): () => void;
-};
-const desktopLockdown = (window as Window & { proctorX?: DesktopLockdown })
-  .proctorX;
-const roomCodeSchema = z.string().trim().min(1).max(32);
-const QUESTIONS_PER_PAGE = 10;
-const enumerationEntries = (question: any, answer?: Answer) =>
-  answer?.enumerationAnswers ??
-  Array.from(
-    { length: Math.max(1, question.enumerationAnswerCount ?? 1) },
-    () => ''
-  );
-const parseEnumerationResponse = (responseText?: string) => {
-  if (!responseText) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(responseText);
-    return Array.isArray(parsed) ? parsed.map(String) : undefined;
-  } catch {
-    return responseText.split(/\r?\n/u);
-  }
-};
-const hasAnswer = (question: any, answer?: Answer) =>
-  question.type === 'MULTIPLE_CHOICE'
-    ? Boolean(answer?.selectedOptionIds?.length)
-    : question.type === 'ENUMERATION'
-      ? Boolean(answer?.enumerationAnswers?.some((value) => value.trim()))
-      : Boolean(answer?.responseText?.trim());
-const submissionAnswer = (question: any, answer?: Answer) => ({
-  questionId: question.id,
-  responseText:
-    question.type === 'ENUMERATION'
-      ? JSON.stringify(
-          (answer?.enumerationAnswers ?? [])
-            .map((value) => value.trim())
-            .filter(Boolean)
-        )
-      : answer?.responseText,
-  selectedOptionIds: answer?.selectedOptionIds,
-});
-const formatCountdown = (total: number) => {
-  const safe = Math.max(0, total);
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
-  const seconds = safe % 60;
-  return [hours, minutes, seconds]
-    .map((value) => String(value).padStart(2, '0'))
-    .join(':');
-};
+import {
+  answerSchema,
+  conflictMessage,
+  enumerationEntries,
+  formatCountdown,
+  hasAnswer,
+  parseEnumerationResponse,
+  QUESTIONS_PER_PAGE,
+  roomCodeSchema,
+  submissionAnswer,
+  type Answer,
+  type StudentSubject,
+} from './exam/answers';
+import {
+  applyStreamQuality,
+  captureCameraFeed,
+  captureEntireScreen,
+  isStreamQuality,
+  rms,
+  SILENCE_RMS,
+  toSpeechRate,
+  type Signal,
+  type StreamQuality,
+} from './exam/media';
+import { QuestionNavigator } from './exam/QuestionNavigator';
+import { SubmitReviewDialog } from './exam/SubmitReviewDialog';
+import { GoogleFormPanel } from './exam/GoogleFormPanel';
 
-const answerSchema = z.object({
-  questionId: z.string().min(1).max(128),
-  responseText: z.string().max(5000).optional(),
-  selectedOptionIds: z.array(z.string().min(1).max(128)).max(1).optional(),
-});
+/** How long after "open in a new tab" the tab switch counts as that action. */
+const EXTERNAL_FORM_GRACE_MS = 4000;
 
 export default function JoinSession() {
   const queryClient = useQueryClient();
@@ -208,7 +68,6 @@ export default function JoinSession() {
   const [exam, setExam] = useState<any>();
   const [notice, setNotice] = useState('');
   const [locked, setLocked] = useState(false);
-  const [nativeBlocked, setNativeBlocked] = useState(false);
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState<{
@@ -232,6 +91,10 @@ export default function JoinSession() {
   const [preview, setPreview] = useState<any>();
   const [consent, setConsent] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
+  // Questions the student marked to come back to (kept for this attempt).
+  const [flagged, setFlagged] = useState<Set<string>>(() => new Set());
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [fullscreenLost, setFullscreenLost] = useState(false);
   const [screenShareLost, setScreenShareLost] = useState(false);
   const [multipleDisplays, setMultipleDisplays] = useState(false);
@@ -282,6 +145,9 @@ export default function JoinSession() {
   });
   const recorder = useRef<MediaRecorder | null>(null);
   const suppressIncidentRef = useRef(false);
+  // When the student opens the exam's own Google Form in a new tab, the next
+  // tab switch is recorded as a note for the teacher instead of a violation.
+  const externalFormOpenedAtRef = useRef(0);
   const endingRecordingRef = useRef(false);
   const recordingUploads = useRef<Promise<unknown>>(Promise.resolve());
   const screenStream = useRef<MediaStream | null>(null);
@@ -334,7 +200,7 @@ export default function JoinSession() {
               enumerationAnswers:
                 joined.exam.questions.find(
                   (question: any) => question.id === answer.questionId
-                )?.type === 'ENUMERATION'
+                )?.type.match(/^(ENUMERATION|FILL_IN_THE_BLANK)$/)
                   ? parseEnumerationResponse(answer.responseText)
                   : undefined,
             },
@@ -352,12 +218,13 @@ export default function JoinSession() {
       setPreview(undefined);
       setSelectedSubject(undefined);
       setFullscreenLost(false);
-    } catch {
+    } catch (error) {
       if (document.fullscreenElement) await document.exitFullscreen();
       setNotice(
-        cameraOnly
-          ? 'The assessment room could not be entered. Check your connection and try again.'
-          : 'The assessment room could not be entered. Allow fullscreen and try again.'
+        conflictMessage(error) ??
+          (cameraOnly
+            ? 'The assessment room could not be entered. Check your connection and try again.'
+            : 'The assessment room could not be entered. Allow fullscreen and try again.')
       );
     }
   };
@@ -437,7 +304,7 @@ export default function JoinSession() {
       quality?: StreamQuality;
     }) => {
       const viewer = viewerId ? viewers.get(viewerId) : undefined;
-      if (!viewer || !quality || !(quality in QUALITY_PRESETS)) return;
+      if (!viewer || !quality || !isStreamQuality(quality)) return;
       viewer.quality = quality;
       void applyStreamQuality(viewer.connection, quality);
     };
@@ -508,17 +375,30 @@ export default function JoinSession() {
     );
     let lastTabSwitchAt = 0;
     let monitoringArmed = false;
+    const openedExternalForm = () =>
+      Date.now() - externalFormOpenedAtRef.current < EXTERNAL_FORM_GRACE_MS;
     const reportTabSwitch = () => {
       const now = Date.now();
       if (now - lastTabSwitchAt < 1000) return;
       lastTabSwitchAt = now;
-      if (!suppressIncidentRef.current) void captureEvidence('TAB_SWITCH');
+      if (suppressIncidentRef.current) return;
+      if (openedExternalForm()) {
+        externalFormOpenedAtRef.current = 0;
+        void send('EXTERNAL_FORM_OPENED');
+        return;
+      }
+      void captureEvidence('TAB_SWITCH');
     };
     const visibility = () => document.hidden && reportTabSwitch();
     const fullscreen = () => {
       const exited = !document.fullscreenElement;
       setFullscreenLost(exited);
-      if (exited && monitoringArmed && !suppressIncidentRef.current)
+      if (
+        exited &&
+        monitoringArmed &&
+        !suppressIncidentRef.current &&
+        !openedExternalForm()
+      )
         void captureEvidence('FULLSCREEN_EXIT');
     };
     document.addEventListener('visibilitychange', visibility);
@@ -839,7 +719,12 @@ export default function JoinSession() {
             );
           };
           sample();
-          timers.current.push(window.setInterval(sample, 3000));
+          timers.current.push(
+            window.setInterval(
+              sample,
+              (exam.exam.monitoring?.faceSampleSeconds ?? 10) * 1000
+            )
+          );
         }
         if (exam.exam.requireMicrophone) {
           microphoneStream.current = await navigator.mediaDevices.getUserMedia({
@@ -861,10 +746,11 @@ export default function JoinSession() {
           source.connect(processor);
           processor.connect(context.destination);
           const sample = () => {
-            const samples = pcm.splice(0),
-              rate = context.sampleRate;
-            if (!samples.length || ![8000, 16000, 32000, 48000].includes(rate))
-              return;
+            const captured = pcm.splice(0);
+            const { samples, rate } = toSpeechRate(captured, context.sampleRate);
+            // Only send audio that could contain speech; the server's voice
+            // detector still makes the decision. Saves ~95% of uploads.
+            if (!samples.length || !rate || rms(samples) < SILENCE_RMS) return;
             const data = new ArrayBuffer(44 + samples.length * 2),
               view = new DataView(data),
               write = (offset: number, text: string) =>
@@ -898,7 +784,12 @@ export default function JoinSession() {
             );
             void postInBackground(`/sessions/${id}/audio-sample`, form);
           };
-          timers.current.push(window.setInterval(sample, 4000));
+          timers.current.push(
+            window.setInterval(
+              sample,
+              (exam.exam.monitoring?.audioSampleSeconds ?? 10) * 1000
+            )
+          );
         }
       } catch {
         if (!active) return;
@@ -951,46 +842,6 @@ export default function JoinSession() {
   }, [exam, submitted, captureAttempt, cameraOnly]);
 
   useEffect(() => {
-    if (!exam || submitted || !desktopLockdown) return;
-    let violationPending = false;
-    void desktopLockdown
-      .startLockdown({
-        mode: exam.exam.appPolicyMode,
-        list: exam.exam.appPolicyList ?? [],
-      })
-      .catch(() =>
-        setNotice(
-          'Desktop lockdown could not start. Close the exam and check system permissions.'
-        )
-      );
-    const removeViolation = desktopLockdown.onViolation((applications) => {
-      if (!applications.length) {
-        setNativeBlocked(false);
-        return;
-      }
-      setNativeBlocked(true);
-      if (violationPending) return;
-      violationPending = true;
-      setNotice(`Close prohibited application(s): ${applications.join(', ')}`);
-      void api
-        .post(`/sessions/${exam.session.id}/events`, {
-          type: 'BLACKLISTED_APP',
-          metadata: { applications, seconds: 2.5 },
-        })
-        .finally(() => {
-          violationPending = false;
-        });
-    });
-    const removeFocusLost = desktopLockdown.onFocusLost(() => {
-      setFullscreenLost(true);
-    });
-    return () => {
-      removeViolation();
-      removeFocusLost();
-      void desktopLockdown.stopLockdown();
-    };
-  }, [exam, submitted]);
-  useEffect(() => {
     if (!exam || submitted) return;
     const timer = window.setInterval(
       () => setRemainingSeconds((value) => Math.max(0, value - 1)),
@@ -1039,7 +890,8 @@ export default function JoinSession() {
           });
         }
       } catch {
-        // A temporary disconnect intentionally pauses the persisted timer.
+        // Offline: the server-side countdown keeps running (wall clock); the
+        // local timer keeps ticking and resyncs on the next heartbeat.
       } finally {
         busy = false;
       }
@@ -1048,6 +900,74 @@ export default function JoinSession() {
     const timer = window.setInterval(() => void heartbeat(), 5000);
     return () => window.clearInterval(timer);
   }, [exam, queryClient, submitted]);
+  const attemptId: string | undefined = exam?.session?.id;
+  useEffect(() => {
+    if (!attemptId) return;
+    try {
+      const saved = window.sessionStorage.getItem(`proctorx.flags.${attemptId}`);
+      setFlagged(new Set(saved ? (JSON.parse(saved) as string[]) : []));
+    } catch {
+      setFlagged(new Set());
+    }
+  }, [attemptId]);
+  const toggleFlag = (questionId: string) =>
+    setFlagged((current) => {
+      const next = new Set(current);
+      if (next.has(questionId)) next.delete(questionId);
+      else next.add(questionId);
+      try {
+        if (attemptId)
+          window.sessionStorage.setItem(
+            `proctorx.flags.${attemptId}`,
+            JSON.stringify([...next])
+          );
+      } catch {
+        // Flags are a convenience; ignore storage failures.
+      }
+      return next;
+    });
+  const goToQuestion = (index: number) => {
+    setNotice('');
+    setQuestionIndex(Math.floor(index / QUESTIONS_PER_PAGE));
+    window.setTimeout(
+      () =>
+        document
+          .getElementById(`exam-q-${index}`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      50
+    );
+  };
+  const isAnswered = (questionId: string) => {
+    const question = exam?.exam.questions.find((item: any) => item.id === questionId);
+    return question ? hasAnswer(question, answers[questionId]) : false;
+  };
+  const isSelected = (questionId: string, optionId: string) =>
+    Boolean(answers[questionId]?.selectedOptionIds?.includes(optionId));
+  /** Radio behaviour for multiple choice, toggle for "select all that apply". */
+  const choose = (question: any, optionId: string) =>
+    setAnswers((current) => {
+      const selected = current[question.id]?.selectedOptionIds ?? [];
+      return {
+        ...current,
+        [question.id]: {
+          selectedOptionIds:
+            question.type === 'MULTIPLE_RESPONSE'
+              ? selected.includes(optionId)
+                ? selected.filter((id) => id !== optionId)
+                : [...selected, optionId]
+              : [optionId],
+        },
+      };
+    });
+  const confirmSubmit = async () => {
+    setSubmitting(true);
+    try {
+      await submit();
+    } finally {
+      setSubmitting(false);
+      setReviewOpen(false);
+    }
+  };
   const submit = async () => {
     const unanswered = exam.exam.questions.findIndex((question: any) => {
       if (!question.isRequired) return false;
@@ -1098,8 +1018,13 @@ export default function JoinSession() {
       setSubmissionReason('submitted');
       setScore(result);
       setSubmitted(true);
-    } catch {
-      setNotice('Your answers could not be submitted. Please try again.');
+    } catch (error) {
+      // 409 "time is up" / 403 "locked" come from the server; the next
+      // heartbeat picks up an auto-submitted result.
+      setNotice(
+        conflictMessage(error) ??
+          'Your answers could not be submitted. Please try again.'
+      );
     }
   };
   if (!exam)
@@ -1421,11 +1346,9 @@ export default function JoinSession() {
         {notice && (
           <div className="mb-4 rounded bg-amber-100 p-3">{notice}</div>
         )}
-        {(locked || nativeBlocked) && (
+        {locked && (
           <div className="fixed inset-0 z-[60] grid place-items-center bg-black/60 text-xl text-white">
-            {nativeBlocked
-              ? 'Close prohibited applications to continue.'
-              : 'Exam locked by teacher.'}
+            Exam locked by teacher.
           </div>
         )}
         {exam && !submitted && (screenShareLost || multipleDisplays) && (
@@ -1515,27 +1438,14 @@ export default function JoinSession() {
                   ? 'Your latest saved answers were submitted automatically when the timer reached zero.'
                   : 'Your responses are safely recorded. You may now leave the exam room.'}
               </p>
-              {score?.gradeStatus === 'TEACHER_CONFIRMED' &&
-                score.maxScore > 0 && (
-                  <div className="mt-6 rounded-2xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-cyan-50 p-6 text-emerald-900">
-                    <div className="text-sm font-semibold">Automatic score</div>
-                    <div className="mt-1 text-4xl font-black">
-                      {score.totalScore} / {score.maxScore}
-                    </div>
-                    <div className="mt-2 text-sm text-emerald-700">
-                      {Math.round(
-                        ((score.totalScore ?? 0) / score.maxScore) * 100
-                      )}
-                      % of the available points
-                    </div>
-                  </div>
-                )}
-              {score?.gradeStatus !== 'TEACHER_CONFIRMED' && (
-                <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
-                  Your objective responses are saved. A teacher will review
-                  written answers before your final score is released.
-                </div>
-              )}
+              {/* Scores are never shown at submit time: they are released in
+                  My Sessions once the exam closes, so early finishers cannot
+                  share which answers were right. */}
+              <div className="mt-6 rounded-2xl border border-violet-200 bg-violet-50 p-5 text-sm text-violet-900">
+                Your result will appear in <b>My Sessions</b> after the exam
+                closes{score?.maxScore ? ` (out of ${score.maxScore} points)` : ''}.
+                Written answers are graded by your teacher first.
+              </div>
               <Button
                 className="mt-7"
                 onClick={() => {
@@ -1605,38 +1515,27 @@ export default function JoinSession() {
             </div>
             {exam.exam.sourceType === 'GOOGLE_FORMS_IMPORT' &&
             exam.exam.externalFormUrl ? (
-              <div className="mx-auto max-w-5xl">
-                <div className="overflow-hidden rounded-xl border border-border bg-white">
-                  <iframe
-                    title={exam.exam.title}
-                    src={exam.exam.externalFormUrl}
-                    className="h-[calc(100dvh-190px)] min-h-[480px] w-full"
-                    sandbox="allow-forms allow-scripts allow-same-origin allow-popups"
-                    referrerPolicy="strict-origin-when-cross-origin"
-                  />
-                </div>
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                  <a
-                    className="text-sm font-semibold text-brand underline"
-                    href={exam.exam.externalFormUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Open form in a new tab if it does not load
-                  </a>
-                  <Button onClick={() => void submit()}>
-                    I submitted the Google Form
-                  </Button>
-                </div>
-                <p className="mt-2 text-xs text-text-2">
-                  Submit inside Google Forms first, then use the button above to
-                  complete your monitored ProctorX session.
-                </p>
-              </div>
+              <GoogleFormPanel
+                url={exam.exam.externalFormUrl}
+                title={exam.exam.title}
+                submitting={submitting}
+                onOpenInNewTab={() => {
+                  externalFormOpenedAtRef.current = Date.now();
+                }}
+                onFinish={() => void confirmSubmit()}
+              />
             ) : (
               <>
+                <QuestionNavigator
+                  questions={exam.exam.questions}
+                  isAnswered={isAnswered}
+                  flagged={flagged}
+                  currentPage={questionIndex}
+                  perPage={QUESTIONS_PER_PAGE}
+                  onGo={goToQuestion}
+                />
                 <fieldset
-                  disabled={locked || nativeBlocked}
+                  disabled={locked}
                   className="mx-auto max-w-5xl space-y-5"
                 >
                   {exam.exam.questions
@@ -1647,8 +1546,11 @@ export default function JoinSession() {
                     .map((question: any, pageOffset: number) => (
                       <div
                         key={question.id}
-                        className={`group overflow-hidden rounded-2xl border bg-white/95 p-5 shadow-md transition-all duration-300 hover:-translate-y-0.5 hover:shadow-xl sm:p-6 ${
-                          hasAnswer(question, answers[question.id])
+                        id={`exam-q-${questionIndex * QUESTIONS_PER_PAGE + pageOffset}`}
+                        className={`group scroll-mt-28 overflow-hidden rounded-2xl border bg-white/95 p-5 shadow-md transition-all duration-300 hover:-translate-y-0.5 hover:shadow-xl sm:p-6 ${
+                          flagged.has(question.id)
+                            ? 'border-amber-300 ring-1 ring-amber-100'
+                            : hasAnswer(question, answers[question.id])
                             ? 'border-emerald-300 ring-1 ring-emerald-100'
                             : 'border-slate-200'
                         }`}
@@ -1668,6 +1570,19 @@ export default function JoinSession() {
                                 {question.points}{' '}
                                 {question.points === 1 ? 'point' : 'points'}
                               </span>
+                              <button
+                                type="button"
+                                aria-pressed={flagged.has(question.id)}
+                                onClick={() => toggleFlag(question.id)}
+                                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 focus:outline-none focus:ring-2 focus:ring-amber-400 ${
+                                  flagged.has(question.id)
+                                    ? 'bg-amber-400 text-amber-950'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-amber-100'
+                                }`}
+                              >
+                                <Flag size={11} aria-hidden="true" />
+                                {flagged.has(question.id) ? 'Flagged' : 'Flag for review'}
+                              </button>
                               {question.isRequired && (
                                 <span className="rounded-full bg-rose-100 px-2.5 py-1 text-rose-700">
                                   Required
@@ -1679,50 +1594,88 @@ export default function JoinSession() {
                             </h2>
                           </div>
                         </div>
+                        {question.type === 'MULTIPLE_RESPONSE' && (
+                          <p className="mb-3 text-sm font-semibold text-violet-700">
+                            Select all that apply.
+                          </p>
+                        )}
                         {question.options?.map(
                           (option: any, optionIndex: number) => (
                             <label
                               key={option.id}
-                              className={`mb-3 flex cursor-pointer items-center gap-3 rounded-xl border p-4 text-sm font-medium transition-all sm:text-base ${
-                                answers[question.id]?.selectedOptionIds?.[0] ===
-                                option.id
+                              // The radio itself is visually hidden, so show
+                              // keyboard focus on the whole option card.
+                              className={`mb-3 flex cursor-pointer items-center gap-3 rounded-xl border p-4 text-sm font-medium transition-all focus-within:outline-none focus-within:ring-4 focus-within:ring-violet-400 sm:text-base ${
+                                isSelected(question.id, option.id)
                                   ? 'border-violet-500 bg-violet-50 text-violet-950 shadow-sm ring-2 ring-violet-100'
                                   : 'border-slate-200 bg-white text-slate-700 hover:border-violet-300 hover:bg-violet-50/50'
                               }`}
                             >
                               <input
-                                type="radio"
-                                className="sr-only"
-                                checked={
-                                  answers[question.id]
-                                    ?.selectedOptionIds?.[0] === option.id
+                                type={
+                                  question.type === 'MULTIPLE_RESPONSE'
+                                    ? 'checkbox'
+                                    : 'radio'
                                 }
+                                className="sr-only"
+                                checked={isSelected(question.id, option.id)}
                                 onChange={() =>
-                                  setAnswers((current) => ({
-                                    ...current,
-                                    [question.id]: {
-                                      selectedOptionIds: [option.id],
-                                    },
-                                  }))
+                                  choose(question, option.id)
                                 }
                                 name={question.id}
                               />
                               <span
-                                className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-black ${answers[question.id]?.selectedOptionIds?.[0] === option.id ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-500'}`}
+                                className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-black ${isSelected(question.id, option.id) ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-500'}`}
                               >
                                 {String.fromCharCode(65 + optionIndex)}
                               </span>
                               <span className="flex-1">{option.label}</span>
                               <span
-                                className={`h-5 w-5 rounded-full border-2 p-1 ${answers[question.id]?.selectedOptionIds?.[0] === option.id ? 'border-violet-600' : 'border-slate-300'}`}
+                                className={`h-5 w-5 border-2 p-1 ${question.type === 'MULTIPLE_RESPONSE' ? 'rounded-md' : 'rounded-full'} ${isSelected(question.id, option.id) ? 'border-violet-600' : 'border-slate-300'}`}
                               >
-                                {answers[question.id]
-                                  ?.selectedOptionIds?.[0] === option.id && (
-                                  <span className="block h-full w-full rounded-full bg-violet-600" />
+                                {isSelected(question.id, option.id) && (
+                                  <span
+                                    className={`block h-full w-full bg-violet-600 ${question.type === 'MULTIPLE_RESPONSE' ? 'rounded-sm' : 'rounded-full'}`}
+                                  />
                                 )}
                               </span>
                             </label>
                           )
+                        )}
+                        {question.type === 'FILL_IN_THE_BLANK' && (
+                          <div className="space-y-3">
+                            <p className="text-sm text-slate-600">
+                              Fill in each blank (___) in order.
+                            </p>
+                            {enumerationEntries(
+                              question,
+                              answers[question.id]
+                            ).map((value, blankIndex, entries) => (
+                              <label
+                                key={blankIndex}
+                                className="flex items-center gap-2"
+                              >
+                                <span className="shrink-0 rounded-xl bg-cyan-100 px-3 py-2.5 text-sm font-bold text-cyan-800">
+                                  Blank {blankIndex + 1}
+                                </span>
+                                <input
+                                  value={value}
+                                  onChange={(event) =>
+                                    setAnswers((current) => {
+                                      const next = [...entries];
+                                      next[blankIndex] = event.target.value;
+                                      return {
+                                        ...current,
+                                        [question.id]: { enumerationAnswers: next },
+                                      };
+                                    })
+                                  }
+                                  className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-900 outline-none transition focus:border-violet-500 focus:bg-white focus:ring-4 focus:ring-violet-100"
+                                  placeholder={`Answer for blank ${blankIndex + 1}`}
+                                />
+                              </label>
+                            ))}
+                          </div>
                         )}
                         {question.type === 'ENUMERATION' && (
                           <div className="space-y-3">
@@ -1754,49 +1707,12 @@ export default function JoinSession() {
                                   className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-900 outline-none transition focus:border-violet-500 focus:bg-white focus:ring-4 focus:ring-violet-100"
                                   placeholder={`Answer ${entryIndex + 1}`}
                                 />
-                                <button
-                                  type="button"
-                                  aria-label={`Remove answer ${entryIndex + 1}`}
-                                  disabled={entries.length === 1}
-                                  onClick={() =>
-                                    setAnswers((current) => ({
-                                      ...current,
-                                      [question.id]: {
-                                        enumerationAnswers: entries.filter(
-                                          (_, index) => index !== entryIndex
-                                        ),
-                                      },
-                                    }))
-                                  }
-                                  className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-rose-200 text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-35"
-                                >
-                                  <Minus size={17} />
-                                </button>
                               </div>
                             ))}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setAnswers((current) => ({
-                                  ...current,
-                                  [question.id]: {
-                                    enumerationAnswers: [
-                                      ...enumerationEntries(
-                                        question,
-                                        current[question.id]
-                                      ),
-                                      '',
-                                    ],
-                                  },
-                                }))
-                              }
-                              className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-bold text-violet-700 transition hover:bg-violet-100"
-                            >
-                              <Plus size={16} /> Add another answer
-                            </button>
                             <p className="text-xs text-slate-500">
-                              Answer order does not matter. Each entry is
-                              checked separately.
+                              Give {enumerationEntries(question, answers[question.id]).length}{' '}
+                              answers. Order does not matter; each correct
+                              answer is checked separately.
                             </p>
                           </div>
                         )}
@@ -1869,12 +1785,22 @@ export default function JoinSession() {
                       Next
                     </Button>
                   ) : (
-                    <Button onClick={() => void submit()}>
-                      Submit{' '}
-                      {exam.exam.assessmentType === 'QUIZ' ? 'quiz' : 'exam'}
+                    <Button onClick={() => setReviewOpen(true)}>
+                      Review & submit
                     </Button>
                   )}
                 </div>
+                <SubmitReviewDialog
+                  open={reviewOpen}
+                  kind={exam.exam.assessmentType === 'QUIZ' ? 'quiz' : 'exam'}
+                  questions={exam.exam.questions}
+                  isAnswered={isAnswered}
+                  flagged={flagged}
+                  submitting={submitting}
+                  onGo={goToQuestion}
+                  onCancel={() => setReviewOpen(false)}
+                  onConfirm={() => void confirmSubmit()}
+                />
               </>
             )}
           </>

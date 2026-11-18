@@ -14,6 +14,7 @@ import {
   Shield,
   FileText,
   ClipboardList,
+  BarChart3,
   Clock,
   GraduationCap,
   CalendarRange,
@@ -100,6 +101,7 @@ export const NAV: Record<Role, NavItem[]> = {
         { key: "student-rosters", label: "Student Rosters", icon: Users, path: "/teacher/rosters" },
         { key: "submitted-exams", label: "Submitted Exams", icon: ClipboardList, path: "/teacher/submitted-exams" },
         { key: "question-bank", label: "Question Bank", icon: Library, path: "/teacher/question-bank" },
+        { key: "item-analysis", label: "Item Analysis", icon: BarChart3, path: "/teacher/item-analysis" },
       ],
     },
     {

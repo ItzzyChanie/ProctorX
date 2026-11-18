@@ -1,11 +1,22 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { Check, Copy, Pencil, Plus, Trash2, Upload, X } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
+import { QuestionEditor } from './exam-builder/QuestionEditor';
+import { AiReviewPanel, type ReviewReport } from './exam-builder/AiReviewPanel';
+import {
+  blankQuestion as blank,
+  fromGenerated,
+  fromStored,
+  questionProblem,
+  toPayload,
+  type Difficulty,
+  type Question,
+} from './exam-builder/questions';
 
 type Subject = {
   id: string;
@@ -55,30 +66,10 @@ type AcademicPeriod = {
   semester: 'FIRST' | 'SECOND';
   status: 'ACTIVE' | 'CLOSED';
 };
-type QType = 'MULTIPLE_CHOICE' | 'ENUMERATION' | 'IDENTIFICATION' | 'ESSAY';
-type Question = {
-  type: QType;
-  prompt: string;
-  points: number;
-  isRequired: boolean;
-  answers: string[];
-  rubric: string;
-  options: { label: string; isCorrect: boolean }[];
-};
+/** Question types the AI generator can produce. */
+type GenType = 'MULTIPLE_CHOICE' | 'ENUMERATION' | 'IDENTIFICATION' | 'ESSAY';
 const input =
   'w-full rounded-[10px] border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-brand';
-const blank = (type: QType = 'MULTIPLE_CHOICE'): Question => ({
-  type,
-  prompt: '',
-  points: 1,
-  isRequired: true,
-  answers: [''],
-  rubric: '',
-  options: [
-    { label: '', isCorrect: true },
-    { label: '', isCorrect: false },
-  ],
-});
 const localDateTimeValue = (value: string | null) => {
   if (!value) return '';
   const date = new Date(value);
@@ -125,7 +116,9 @@ export default function Classes() {
     [stopping, setStopping] = useState<Subject>(),
     [rosterSubject, setRosterSubject] = useState<Subject>(),
     [removingStudent, setRemovingStudent] = useState<Enrollment>(),
-    [notice, setNotice] = useState(''),
+    [notice, setNoticeText] = useState(''),
+    // Success messages are marked explicitly; others fall back to a keyword check.
+    [noticeIsSuccess, setNoticeIsSuccess] = useState(false),
     [academicPeriodId, setAcademicPeriodId] = useState(''),
     [term, setTerm] = useState(''),
     [active, setActive] = useState<{
@@ -138,8 +131,20 @@ export default function Classes() {
     [draftGenerated, setDraftGenerated] = useState(false),
     [sourceExamId, setSourceExamId] = useState(''),
     [previousExamId, setPreviousExamId] = useState(''),
+    // Draft being edited (saved, not yet visible to students).
+    [draftId, setDraftId] = useState(''),
+    [openDraftId, setOpenDraftId] = useState(''),
+    // Text extracted from the generation documents (used by the AI review).
+    [sourceText, setSourceText] = useState(''),
+    // AI difficulty review of the current draft (advisory).
+    [aiReport, setAiReport] = useState<ReviewReport | null>(null),
+    [reviewStale, setReviewStale] = useState(false),
+    [rewritingIndex, setRewritingIndex] = useState<number | null>(null),
+    [targetDifficulty, setTargetDifficulty] = useState<
+      'MIXED' | 'EASY' | 'MEDIUM' | 'HARD'
+    >('MIXED'),
     [selectedBankIds, setSelectedBankIds] = useState<string[]>([]),
-    [counts, setCounts] = useState<Record<QType, number>>({
+    [counts, setCounts] = useState<Record<GenType, number>>({
       MULTIPLE_CHOICE: 0,
       ENUMERATION: 0,
       IDENTIFICATION: 0,
@@ -153,7 +158,6 @@ export default function Classes() {
       endsAt: '',
       requireCamera: false,
       requireMicrophone: false,
-      blockThirdPartyApps: true,
       randomizeQuestions: false,
       randomizeOptions: false,
     }),
@@ -165,7 +169,17 @@ export default function Classes() {
     scheduledAt: string;
     endsAt: string;
   }>();
+  const setNotice = (message: string) => {
+    setNoticeText(message);
+    setNoticeIsSuccess(false);
+  };
+  /** Green toast regardless of wording (e.g. "Students cannot see it yet"). */
+  const notifySuccess = (message: string) => {
+    setNoticeText(message);
+    setNoticeIsSuccess(true);
+  };
   const noticeIsError =
+    !noticeIsSuccess &&
     /could not|cannot|check|enter|choose|set at least|complete the|need|invalid|required|declined|failed|error|unsupported|exceed|unavailable|rate limit/i.test(
       notice
     );
@@ -352,7 +366,7 @@ export default function Classes() {
     mutationFn: (v: { id: string; status: 'APPROVED' | 'DECLINED' }) =>
       api.post(`/subjects/join-requests/${v.id}/review`, { status: v.status }),
     onSuccess: (_data, variables) => {
-      setNotice(
+      notifySuccess(
         `Student request ${variables.status === 'APPROVED' ? 'approved' : 'declined'} successfully.`
       );
       void qc.invalidateQueries({ queryKey: ['join-requests'] });
@@ -368,6 +382,12 @@ export default function Classes() {
     setDraftGenerated(false);
     setSourceExamId('');
     setPreviousExamId('');
+    setDraftId('');
+    setOpenDraftId('');
+    setSourceText('');
+    setAiReport(null);
+    setReviewStale(false);
+    setRewritingIndex(null);
     setSelectedBankIds([]);
     setAcademicPeriodId('');
     setTerm('');
@@ -379,15 +399,15 @@ export default function Classes() {
       endsAt: '',
       requireCamera: false,
       requireMicrophone: false,
-      blockThirdPartyApps: true,
       randomizeQuestions: false,
       randomizeOptions: false,
     });
     setQuestions([blank()]);
   };
   const save = useMutation({
-    mutationFn: () =>
-      api.post(`/subjects/${active!.subject.id}/exams`, {
+    mutationFn: async (publish: boolean) => {
+      const base = `/subjects/${active!.subject.id}/exams`;
+      const body = {
         academicPeriodId,
         term,
         assessmentType: active!.kind,
@@ -424,31 +444,29 @@ export default function Classes() {
         requireCamera: form.requireCamera,
         requireMicrophone: form.requireMicrophone,
         appPolicyMode: 'BLACKLIST',
-        appPolicyList: form.blockThirdPartyApps ? ['*'] : [],
-        questions:
-          mode === 'google'
-            ? undefined
-            : questions.map((q) => ({
-                type: q.type,
-                prompt: q.prompt.trim(),
-                points: q.points,
-                isRequired: q.isRequired,
-                correctAnswer:
-                  q.type === 'ENUMERATION'
-                    ? JSON.stringify(q.answers.filter(Boolean))
-                    : q.type === 'IDENTIFICATION'
-                      ? q.answers[0]
-                      : undefined,
-                rubric: q.type === 'ESSAY' ? q.rubric : undefined,
-                options: q.type === 'MULTIPLE_CHOICE' ? q.options : undefined,
-              })),
-      }),
-    onSuccess: () => {
-      setNotice(
-        `${active?.kind === 'QUIZ' ? 'Quiz' : 'Exam'} saved and published.`
-      );
+        appPolicyList: [],
+        questions: mode === 'google' ? undefined : questions.map(toPayload),
+        sourceText: sourceText || undefined,
+        publish,
+      };
+      if (!draftId) return (await api.post(base, body)).data;
+      const saved = (await api.patch(`${base}/${draftId}/draft`, body)).data;
+      if (publish) await api.post(`${base}/${draftId}/publish`);
+      return saved;
+    },
+    onSuccess: (saved: { id: string }, publish) => {
+      const kind = active?.kind === 'QUIZ' ? 'Quiz' : 'Exam';
       void qc.invalidateQueries({ queryKey: ['subjects'] });
-      close();
+      void qc.invalidateQueries({ queryKey: ['previous-exams'] });
+      if (publish) {
+        notifySuccess(`${kind} published. Students can now see it.`);
+        close();
+        return;
+      }
+      setDraftId(saved.id);
+      notifySuccess(
+        `${kind} saved as a draft. Students cannot see it until you publish.`
+      );
     },
     onError: (error: any) => {
       const responseMessage = error?.response?.data?.message;
@@ -462,57 +480,41 @@ export default function Classes() {
       );
     },
   });
-  const patchQ = (i: number, p: Partial<Question>) =>
+  const patchQ = (i: number, p: Partial<Question>) => {
     setQuestions((v) => v.map((q, n) => (n === i ? { ...q, ...p } : q)));
+    if (aiReport) setReviewStale(true);
+  };
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    const problem = validate();
+    if (problem) return setNotice(problem);
+    save.mutate(true);
+  };
+  const saveDraft = () => {
+    const problem = validate();
+    if (problem) return setNotice(problem);
+    save.mutate(false);
+  };
+  const validate = (): string | null => {
     if (!academicPeriodId || !term)
-      return setNotice('Choose an active semester and examination term.');
+      return 'Choose an active semester and examination term.';
     if (
       !form.scheduledAt ||
       !form.endsAt ||
       new Date(form.endsAt) <= new Date(form.scheduledAt)
     )
-      return setNotice('Choose a valid start and end date/time.');
-    if (mode === 'google') {
-      if (!source.trim()) return setNotice('Enter the Google Form link.');
-      return save.mutate();
-    }
+      return 'Choose a valid start and end date/time.';
+    if (mode === 'google')
+      return source.trim() ? null : 'Enter the Google Form link.';
     if (mode === 'file' && !draftGenerated)
-      return setNotice('Generate the review draft first.');
-    if (
-      !form.title.trim() ||
-      form.durationMinutes < 1 ||
-      questions.some(
-        (q) => !q.prompt.trim() || !Number.isInteger(q.points) || q.points < 1
-      )
-    )
-      return setNotice(
-        'Complete the title and every question, using at least 1 point per item.'
-      );
-    if (
-      questions.some(
-        (q) =>
-          q.type === 'MULTIPLE_CHOICE' &&
-          (q.options.length < 2 ||
-            q.options.some((o) => !o.label.trim()) ||
-            !q.options.some((o) => o.isCorrect))
-      )
-    )
-      return setNotice(
-        'Multiple-choice items need two choices and a correct answer.'
-      );
-    if (
-      questions.some(
-        (q) =>
-          (q.type === 'ENUMERATION' || q.type === 'IDENTIFICATION') &&
-          !q.answers.some(Boolean)
-      )
-    )
-      return setNotice(
-        'Add correct answers for enumeration and identification items.'
-      );
-    save.mutate();
+      return 'Generate the review draft first.';
+    if (!form.title.trim() || form.durationMinutes < 1)
+      return 'Complete the title and duration.';
+    for (const [index, question] of questions.entries()) {
+      const problem = questionProblem(question, index);
+      if (problem) return problem;
+    }
+    return null;
   };
   const generateDraft = useMutation({
     mutationFn: async () => {
@@ -526,22 +528,17 @@ export default function Classes() {
       const data = new FormData();
       sourceFiles.forEach((file) => data.append('files', file));
       data.append('counts', JSON.stringify(counts));
+      data.append('difficulty', targetDifficulty);
       return (
-        await api.post<{ questions: Question[] }>(
+        await api.post<{ questions: unknown[]; sourceText?: string }>(
           `/subjects/${active!.subject.id}/questions/generate`,
           data
         )
       ).data;
     },
-    onSuccess: ({ questions: generated }) => {
-      setQuestions(
-        generated.map((q) => ({
-          ...q,
-          answers: q.answers ?? [],
-          options: q.options ?? [],
-          rubric: q.rubric ?? '',
-        }))
-      );
+    onSuccess: ({ questions: generated, sourceText: text }) => {
+      setQuestions(generated.map(fromGenerated));
+      setSourceText(text ?? '');
       setDraftGenerated(true);
       setNotice(
         'Draft generated. Review and edit all AI-suggested questions and answers before saving.'
@@ -579,22 +576,7 @@ export default function Classes() {
         randomizeQuestions: exam.randomizeQuestions,
         randomizeOptions: exam.randomizeOptions,
       }));
-      setQuestions(
-        exam.questions.map((question: any) => ({
-          type: question.type,
-          prompt: question.prompt,
-          points: question.points,
-          isRequired: question.isRequired,
-          answers: Array.isArray(question.correctAnswer)
-            ? question.correctAnswer.map(String)
-            : [String(question.correctAnswer ?? '')],
-          rubric: question.rubric ?? '',
-          options: question.options.map((option: any) => ({
-            label: option.label,
-            isCorrect: option.isCorrect,
-          })),
-        }))
-      );
+      setQuestions(exam.questions.map(fromStored));
       setMode('manual');
       setNotice(
         'Previous exam loaded as a new immutable version. Review it before publishing.'
@@ -602,26 +584,125 @@ export default function Classes() {
     },
     onError: () => setNotice('Could not load the previous exam.'),
   });
+  const drafts = (previousExams.data ?? []).filter(
+    (exam) => exam.status === 'DRAFT'
+  );
+  const openDraft = useMutation({
+    mutationFn: async (id: string) =>
+      (
+        await api.get<any>(`/subjects/${active!.subject.id}/exams/${id}/copy`)
+      ).data,
+    onSuccess: (exam) => {
+      setDraftId(exam.id);
+      setSourceExamId('');
+      setAcademicPeriodId(exam.academicPeriodId);
+      setTerm(exam.term);
+      setSourceText(exam.sourceText ?? '');
+      setForm((current) => ({
+        ...current,
+        title: exam.title,
+        instructions: exam.instructions ?? '',
+        durationMinutes: exam.durationMinutes,
+        scheduledAt: localDateTimeValue(exam.scheduledAt),
+        endsAt: localDateTimeValue(exam.endsAt),
+        requireCamera: exam.requireCamera,
+        requireMicrophone: exam.requireMicrophone,
+        randomizeQuestions: exam.randomizeQuestions,
+        randomizeOptions: exam.randomizeOptions,
+      }));
+      if (exam.sourceType === 'GOOGLE_FORMS_IMPORT') {
+        setMode('google');
+        setSource(exam.externalFormUrl ?? '');
+      } else {
+        setMode(exam.sourceType === 'AI_GENERATED' ? 'file' : 'manual');
+        setDraftGenerated(exam.sourceType === 'AI_GENERATED');
+        setQuestions(exam.questions.map(fromStored));
+      }
+      setAiReport(exam.aiReview ?? null);
+      setReviewStale(false);
+      notifySuccess('Draft opened. Save or publish when you are ready.');
+    },
+    onError: () => setNotice('Could not open the draft.'),
+  });
+  const deleteDraft = useMutation({
+    mutationFn: () =>
+      api.delete(`/subjects/${active!.subject.id}/exams/${draftId}/draft`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['previous-exams'] });
+      close();
+      notifySuccess('Draft deleted.');
+    },
+    onError: () => setNotice('Could not delete the draft.'),
+  });
+  const runReview = useMutation({
+    mutationFn: async () => {
+      const problem = validate();
+      if (problem) throw new Error(problem);
+      // Save first so the review always matches what is stored.
+      const saved = await save.mutateAsync(false);
+      return (
+        await api.post<ReviewReport>(
+          `/subjects/${active!.subject.id}/exams/${saved.id}/ai-review`
+        )
+      ).data;
+    },
+    onSuccess: (report) => {
+      setAiReport(report);
+      setReviewStale(false);
+      notifySuccess(
+        report.summary.mismatches || report.summary.issues
+          ? 'AI review ready. Check the flagged questions before publishing.'
+          : 'AI review ready. No difficulty mismatches or issues found.'
+      );
+    },
+    onError: (error: any) =>
+      setNotice(
+        error?.response?.data?.message ||
+          error?.message ||
+          'Could not run the AI review.'
+      ),
+  });
+  const rewrite = useMutation({
+    mutationFn: async ({ index, reason }: { index: number; reason: string }) => {
+      setRewritingIndex(index);
+      const question = questions[index]!;
+      return (
+        await api.post(
+          `/subjects/${active!.subject.id}/exams/${draftId}/questions/rewrite`,
+          {
+            question: toPayload(question),
+            targetDifficulty: question.difficulty,
+            reason,
+          }
+        )
+      ).data;
+    },
+    onSuccess: (rewritten, { index }) => {
+      patchQ(index, {
+        ...fromGenerated(rewritten),
+        points: questions[index]!.points,
+      });
+      notifySuccess(
+        `Question ${index + 1} rewritten. Review it, then save and run the AI review again.`
+      );
+    },
+    onError: (error: any) =>
+      setNotice(
+        error?.response?.data?.message || 'Could not rewrite the question.'
+      ),
+    onSettled: () => setRewritingIndex(null),
+  });
+  const jumpToQuestion = (index: number) =>
+    document
+      .getElementById(`question-${index}`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   const addBankQuestions = () => {
     const selected = (bankItems.data ?? []).filter((item) =>
       selectedBankIds.includes(item.id)
     );
     if (!selected.length)
       return setNotice('Select at least one bank question.');
-    const mapped = selected.map((item) => ({
-      type: item.type as QType,
-      prompt: item.prompt,
-      points: item.points,
-      isRequired: item.isRequired,
-      answers: Array.isArray(item.correctAnswer)
-        ? item.correctAnswer.map(String)
-        : [String(item.correctAnswer ?? '')],
-      rubric: item.rubric ?? '',
-      options: (item.options ?? []).map((option: any) => ({
-        label: option.label,
-        isCorrect: option.isCorrect,
-      })),
-    }));
+    const mapped: Question[] = selected.map(fromStored);
     setQuestions((current) => {
       const useful = current.filter((question) => question.prompt.trim());
       return [...useful, ...mapped];
@@ -967,17 +1048,19 @@ export default function Classes() {
                   {active.subject.name} · {questions.length} items
                 </p>
               </div>
-              <button onClick={close}>
+              <button type="button" aria-label="Close" onClick={close}>
                 <X />
               </button>
             </div>
-            <div className="mb-5 flex flex-wrap gap-2">
+            <div className="mb-5 grid gap-2 sm:flex sm:flex-wrap">
               {(['manual', 'file', 'google'] as const).map((m) => (
                 <Button
                   key={m}
                   type="button"
                   variant={mode === m ? 'primary' : 'ghost'}
                   onClick={() => setMode(m)}
+                  // Labels may wrap on phones; give wrapped lines room.
+                  className="w-full text-center leading-tight sm:w-auto"
                 >
                   {m === 'manual'
                     ? 'Manual'
@@ -987,6 +1070,39 @@ export default function Classes() {
                 </Button>
               ))}
             </div>
+            {drafts.length > 0 && !draftId && (
+              <div className="mb-5 flex flex-col gap-2 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-amber-900 sm:flex-row sm:items-center">
+                <p className="text-sm font-bold sm:mr-auto">
+                  You have {drafts.length} unpublished draft
+                  {drafts.length === 1 ? '' : 's'} for this subject.
+                </p>
+                <select
+                  aria-label="Choose a draft"
+                  value={openDraftId}
+                  onChange={(e) => setOpenDraftId(e.target.value)}
+                  className={`${input} sm:max-w-xs`}
+                >
+                  <option value="">Choose a draft</option>
+                  {drafts.map((exam) => (
+                    <option key={exam.id} value={exam.id}>
+                      {exam.title}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  disabled={!openDraftId || openDraft.isPending}
+                  onClick={() => openDraft.mutate(openDraftId)}
+                >
+                  Open draft
+                </Button>
+              </div>
+            )}
+            {draftId && (
+              <p className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                Editing a draft — students cannot see it until you publish.
+              </p>
+            )}
             {mode === 'manual' && (
               <div className="mb-5 grid items-start gap-5 rounded-xl border border-border bg-canvas p-4 lg:grid-cols-2">
                 <div className="min-w-0">
@@ -1000,7 +1116,9 @@ export default function Classes() {
                       className={input}
                     >
                       <option value="">Select a previous exam</option>
-                      {previousExams.data?.map((exam) => (
+                      {previousExams.data
+                        ?.filter((exam) => exam.status !== 'DRAFT')
+                        .map((exam) => (
                         <option key={exam.id} value={exam.id}>
                           {exam.title} · version {exam.version ?? 1}
                         </option>
@@ -1065,11 +1183,22 @@ export default function Classes() {
               </div>
             )}
             {mode === 'file' && (
-              <div className="mb-5 rounded-xl border border-brand/20 bg-brand-soft p-4">
+              <div className="mb-5 min-w-0 rounded-xl border border-brand/20 bg-brand-soft p-4">
+                {/* Styled picker: the native file input has a fixed minimum
+                    width that overflows this panel on phones. */}
+                <label className="flex w-full cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-brand/30 bg-surface px-4 py-5 text-center transition hover:border-brand/60 focus-within:ring-4 focus-within:ring-brand/15 sm:flex-row sm:gap-3 sm:py-4 sm:text-left">
+                  <Upload size={18} className="shrink-0 text-brand" aria-hidden="true" />
+                  <span className="text-sm font-semibold text-text-1">
+                    Choose files
+                  </span>
+                  <span className="text-xs text-text-3">
+                    PPT, PPTX, PDF or DOCX · up to 20 files
+                  </span>
                 <input
                   type="file"
                   multiple
                   accept=".ppt,.pptx,.pdf,.docx"
+                  className="sr-only"
                   onChange={(e) => {
                     const incoming = Array.from(e.target.files ?? []);
                     setSourceFiles((current) => {
@@ -1085,6 +1214,7 @@ export default function Classes() {
                     e.currentTarget.value = '';
                   }}
                 />
+                </label>
                 {!!sourceFiles.length && (
                   <div className="mt-3 space-y-2">
                     <div className="flex items-center justify-between text-xs text-text-2">
@@ -1110,7 +1240,7 @@ export default function Classes() {
                         </span>
                         <button
                           type="button"
-                          className="font-semibold text-risk-high"
+                          className="shrink-0 font-semibold text-risk-high"
                           onClick={() => {
                             setSourceFiles((current) =>
                               current.filter((item) => item !== file)
@@ -1124,8 +1254,8 @@ export default function Classes() {
                     ))}
                   </div>
                 )}
-                <div className="mt-4 grid gap-2 sm:grid-cols-4">
-                  {(Object.keys(counts) as QType[]).map((t) => (
+                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {(Object.keys(counts) as GenType[]).map((t) => (
                     <label className="text-xs font-semibold" key={t}>
                       {t.replace('_', ' ')}
                       <input
@@ -1145,6 +1275,22 @@ export default function Classes() {
                     </label>
                   ))}
                 </div>
+                <label className="mt-3 block text-xs font-semibold sm:max-w-xs">
+                  Target difficulty
+                  <select
+                    className={`${input} mt-1`}
+                    value={targetDifficulty}
+                    onChange={(e) => {
+                      setTargetDifficulty(e.target.value as typeof targetDifficulty);
+                      setDraftGenerated(false);
+                    }}
+                  >
+                    <option value="MIXED">Mixed (about 30% easy, 50% medium, 20% hard)</option>
+                    <option value="EASY">Easy</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HARD">Hard</option>
+                  </select>
+                </label>
                 <p className="my-3 text-xs">
                   Upload up to 20 mixed PDF, PowerPoint, or Word documents. AI
                   will read them together and suggest answers with source
@@ -1152,6 +1298,7 @@ export default function Classes() {
                 </p>
                 <Button
                   type="button"
+                  className="w-full leading-tight sm:w-auto"
                   disabled={!sourceFiles.length || generateDraft.isPending}
                   onClick={() => generateDraft.mutate()}
                 >
@@ -1209,9 +1356,44 @@ export default function Classes() {
                     type="url"
                     value={source}
                     onChange={(e) => setSource(e.target.value)}
-                    placeholder="https://docs.google.com/forms/..."
+                    placeholder="https://forms.gle/... or https://docs.google.com/forms/..."
                   />
                 </label>
+                {source.trim() &&
+                  !/^https:\/\/(docs\.google\.com\/forms\/|forms\.gle\/)/i.test(
+                    source.trim()
+                  ) && (
+                    <p className="-mt-2 text-xs font-semibold text-risk-high">
+                      Use the link from Google Forms → Send → Link (forms.gle/…),
+                      or the docs.google.com/forms link.
+                    </p>
+                  )}
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+                  <p className="font-bold">
+                    So the form opens inside the exam room, check these Google
+                    Form settings first:
+                  </p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                    <li>
+                      Settings → Responses: turn <b>off</b> “Collect email
+                      addresses: Verified” and “Limit to 1 response”. Use
+                      “Responder input” to collect emails instead.
+                    </li>
+                    <li>
+                      Don’t use <b>File upload</b> questions. These need a
+                      Google sign-in, which Google blocks inside embedded forms.
+                    </li>
+                    <li>
+                      Make sure the form is <b>accepting responses</b> and
+                      isn’t restricted to your organization only.
+                    </li>
+                  </ul>
+                  <p className="mt-1">
+                    Answers and scores stay in Google Forms. ProctorX monitors
+                    the attempt; import scores later in Score Upload &amp;
+                    Correlation if you need them here.
+                  </p>
+                </div>
                 <div className="grid gap-3 md:grid-cols-2">
                   <label className="text-xs font-semibold">
                     Start date and time
@@ -1238,9 +1420,17 @@ export default function Classes() {
                     />
                   </label>
                 </div>
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={save.isPending}
+                    onClick={saveDraft}
+                  >
+                    {draftId ? 'Save draft' : 'Save as draft'}
+                  </Button>
                   <Button disabled={save.isPending}>
-                    {save.isPending ? 'Publishing…' : 'Save and Publish Exam'}
+                    {save.isPending ? 'Saving…' : 'Publish'}
                   </Button>
                 </div>
               </form>
@@ -1350,7 +1540,6 @@ export default function Classes() {
                         [
                           ['requireCamera', 'Require camera'],
                           ['requireMicrophone', 'Require microphone'],
-                          ['blockThirdPartyApps', 'Block third-party apps'],
                           ['randomizeQuestions', 'Randomize question order'],
                           ['randomizeOptions', 'Randomize answer order'],
                         ] as const
@@ -1372,209 +1561,35 @@ export default function Classes() {
                     </div>
                   </section>
                 )}
+                {(mode === 'manual' || draftGenerated) && (
+                  <AiReviewPanel
+                    report={aiReport}
+                    stale={reviewStale}
+                    running={runReview.isPending}
+                    rewritingIndex={rewritingIndex}
+                    onRun={() => runReview.mutate()}
+                    onUseAiLevel={(index: number, level: Difficulty) =>
+                      patchQ(index, { difficulty: level })
+                    }
+                    onRewrite={(index: number, reason: string) =>
+                      rewrite.mutate({ index, reason })
+                    }
+                    onJump={jumpToQuestion}
+                  />
+                )}
                 {(mode === 'manual' || draftGenerated) &&
                   questions.map((q, i) => (
-                    <div
-                      key={i}
-                      className="rounded-xl border border-border p-4"
-                    >
-                      <div className="mb-4 grid items-end gap-3 sm:grid-cols-[auto_minmax(0,14rem)_6rem_1fr_auto]">
-                        <b className="self-center text-text-2">{i + 1}.</b>
-                        <label className="block min-w-0 text-xs font-semibold">
-                          Question type
-                          <select
-                            className={`${input} mt-1`}
-                            value={q.type}
-                            onChange={(e) =>
-                              patchQ(i, {
-                                type: e.target.value as QType,
-                                answers: [''],
-                                options: blank().options,
-                              })
-                            }
-                          >
-                            {(
-                              [
-                                'MULTIPLE_CHOICE',
-                                'ENUMERATION',
-                                'IDENTIFICATION',
-                                'ESSAY',
-                              ] as QType[]
-                            ).map((t) => (
-                              <option key={t}>{t.replace(/_/g, ' ')}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="block text-xs font-semibold">
-                          Points
-                          <input
-                            className={`${input} mt-1`}
-                            type="number"
-                            min="1"
-                            value={q.points}
-                            onChange={(e) =>
-                              patchQ(i, { points: +e.target.value })
-                            }
-                          />
-                        </label>
-                        <label className="flex min-h-10 items-center gap-2 self-end text-sm sm:justify-self-end">
-                          <input
-                            type="checkbox"
-                            checked={q.isRequired}
-                            onChange={(e) =>
-                              patchQ(i, { isRequired: e.target.checked })
-                            }
-                          />
-                          Required
-                        </label>
-                        <button
-                          type="button"
-                          className="grid min-h-10 min-w-10 place-items-center self-end rounded-lg text-text-3 hover:bg-red-50 hover:text-risk-high disabled:opacity-40"
-                          disabled={questions.length === 1}
-                          onClick={() =>
-                            setQuestions((v) => v.filter((_, n) => n !== i))
-                          }
-                        >
-                          <Trash2 size={17} />
-                        </button>
-                      </div>
-                      <label className="block text-xs font-semibold">
-                        Question prompt
-                        <textarea
-                          className={`${input} mt-1 min-h-20 resize-y`}
-                          value={q.prompt}
-                          onChange={(e) =>
-                            patchQ(i, { prompt: e.target.value })
-                          }
-                          placeholder="Enter the question"
-                        />
-                      </label>
-                      {q.type === 'MULTIPLE_CHOICE' && (
-                        <div className="mt-3 space-y-2">
-                          {q.options.map((o, n) => (
-                            <div className="flex gap-2" key={n}>
-                              <input
-                                type="radio"
-                                name={`correct-${i}`}
-                                checked={o.isCorrect}
-                                onChange={() =>
-                                  patchQ(i, {
-                                    options: q.options.map((x, j) => ({
-                                      ...x,
-                                      isCorrect: j === n,
-                                    })),
-                                  })
-                                }
-                              />
-                              <input
-                                className={input}
-                                value={o.label}
-                                onChange={(e) =>
-                                  patchQ(i, {
-                                    options: q.options.map((x, j) =>
-                                      j === n
-                                        ? { ...x, label: e.target.value }
-                                        : x
-                                    ),
-                                  })
-                                }
-                                placeholder={`Choice ${n + 1}`}
-                              />
-                              <button
-                                type="button"
-                                disabled={q.options.length <= 2}
-                                onClick={() =>
-                                  patchQ(i, {
-                                    options: q.options.filter(
-                                      (_, j) => j !== n
-                                    ),
-                                  })
-                                }
-                              >
-                                <X size={16} />
-                              </button>
-                            </div>
-                          ))}
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            icon={Plus}
-                            onClick={() =>
-                              patchQ(i, {
-                                options: [
-                                  ...q.options,
-                                  { label: '', isCorrect: false },
-                                ],
-                              })
-                            }
-                          >
-                            Add choice
-                          </Button>
-                        </div>
-                      )}
-                      {q.type === 'ENUMERATION' && (
-                        <div className="mt-3 space-y-2">
-                          {q.answers.map((a, n) => (
-                            <div className="flex gap-2" key={n}>
-                              <input
-                                className={input}
-                                value={a}
-                                onChange={(e) =>
-                                  patchQ(i, {
-                                    answers: q.answers.map((x, j) =>
-                                      j === n ? e.target.value : x
-                                    ),
-                                  })
-                                }
-                                placeholder={`Accepted answer ${n + 1}`}
-                              />
-                              <button
-                                type="button"
-                                disabled={q.answers.length === 1}
-                                onClick={() =>
-                                  patchQ(i, {
-                                    answers: q.answers.filter(
-                                      (_, j) => j !== n
-                                    ),
-                                  })
-                                }
-                              >
-                                <X size={16} />
-                              </button>
-                            </div>
-                          ))}
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            icon={Plus}
-                            onClick={() =>
-                              patchQ(i, { answers: [...q.answers, ''] })
-                            }
-                          >
-                            Add answer blank
-                          </Button>
-                        </div>
-                      )}
-                      {q.type === 'IDENTIFICATION' && (
-                        <input
-                          className={`${input} mt-3`}
-                          value={q.answers[0]}
-                          onChange={(e) =>
-                            patchQ(i, { answers: [e.target.value] })
-                          }
-                          placeholder="Correct answer"
-                        />
-                      )}
-                      {q.type === 'ESSAY' && (
-                        <textarea
-                          className={`${input} mt-3`}
-                          value={q.rubric}
-                          onChange={(e) =>
-                            patchQ(i, { rubric: e.target.value })
-                          }
-                          placeholder="Rubric / guidance"
-                        />
-                      )}
+                    <div key={i} id={`question-${i}`} className="scroll-mt-24">
+                    <QuestionEditor
+                      question={q}
+                      index={i}
+                      canRemove={questions.length > 1}
+                      onChange={(patch) => patchQ(i, patch)}
+                      onRemove={() => {
+                        setQuestions((v) => v.filter((_, n) => n !== i));
+                        if (aiReport) setReviewStale(true);
+                      }}
+                    />
                     </div>
                   ))}
                 <div className="flex justify-between">
@@ -1594,8 +1609,26 @@ export default function Classes() {
                     <Button type="button" variant="ghost" onClick={close}>
                       Cancel
                     </Button>
+                    {draftId && (
+                      <Button
+                        type="button"
+                        variant="danger"
+                        disabled={deleteDraft.isPending}
+                        onClick={() => deleteDraft.mutate()}
+                      >
+                        Delete draft
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={save.isPending}
+                      onClick={saveDraft}
+                    >
+                      {draftId ? 'Save draft' : 'Save as draft'}
+                    </Button>
                     <Button disabled={save.isPending}>
-                      Save and publish {active.kind.toLowerCase()}
+                      Publish {active.kind.toLowerCase()}
                     </Button>
                   </div>
                 </div>

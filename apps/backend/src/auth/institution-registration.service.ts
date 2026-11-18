@@ -7,7 +7,7 @@ import {
 import { AccountStatus, InstitutionRegistrationStatus, Role } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import bcrypt from 'bcrypt';
-import { randomBytes, randomUUID } from 'crypto';
+import { randomBytes, randomInt, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from './email.service';
 import { CreateInstitutionRegistrationDto } from './dto/institution-registration.dto';
@@ -85,7 +85,7 @@ export class InstitutionRegistrationService {
     }
   }
   private code() {
-    return String(Math.floor(100000 + Math.random() * 900000));
+    return String(randomInt(100000, 1_000_000));
   }
 
   private reference() {

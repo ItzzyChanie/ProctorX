@@ -10,6 +10,7 @@ import { PermissionsGuard } from "./guards/permissions.guard";
 import { EmailService } from "./email.service";
 import { AuthGateway } from "./auth.gateway";
 import { InstitutionRegistrationService } from "./institution-registration.service";
+import { SessionRevocationService } from "./session-revocation.service";
 
 @Module({
   imports: [
@@ -17,7 +18,7 @@ import { InstitutionRegistrationService } from "./institution-registration.servi
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService): JwtModuleOptions => ({
-        secret: configService.get<string>("JWT_SECRET"),
+        secret: configService.getOrThrow<string>("JWT_SECRET"),
         signOptions: {
           expiresIn: configService.get<string>("JWT_EXPIRES_IN") ?? "7d",
         } as JwtModuleOptions["signOptions"],
@@ -34,9 +35,11 @@ import { InstitutionRegistrationService } from "./institution-registration.servi
     EmailService,
     AuthGateway,
     InstitutionRegistrationService,
+    SessionRevocationService,
   ],
   exports: [
     JwtModule,
+    SessionRevocationService,
     JwtAuthGuard,
     RolesGuard,
     PermissionsGuard,

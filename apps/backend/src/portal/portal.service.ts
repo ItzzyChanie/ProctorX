@@ -1,3 +1,4 @@
+import { VIOLATION_EVENTS } from '../common/violation-events';
 import {
   ConflictException,
   ForbiddenException,
@@ -19,6 +20,9 @@ import * as XLSX from 'xlsx';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsGateway } from '../sessions/sessions.gateway';
+import { SessionRevocationService } from '../auth/session-revocation.service';
+import { AvatarsService } from '../avatars/avatars.service';
+import { resultsReleased, studentGradeStatus } from './result-release';
 import { generateDefaultPassword } from '../users/import/password.util';
 import { ROLE_DEFAULT_PERMISSIONS } from '../common/constants/role-permissions';
 import {
@@ -74,7 +78,9 @@ export class PortalService {
   constructor(
     private prisma: PrismaService,
     private gateway: SessionsGateway,
-    private ai: AiService
+    private ai: AiService,
+    private revocation: SessionRevocationService,
+    private avatars: AvatarsService
   ) {}
 
   async academicPeriods(institutionId?: string | null) {
@@ -253,7 +259,16 @@ export class PortalService {
         ? Math.round((+x.endedAt - +x.startedAt) / 1000)
         : null,
       status: x.status,
-      submission: x.submission,
+      // Scores stay hidden until the exam closes (see result-release.ts).
+      submission: x.submission
+        ? {
+            ...x.submission,
+            gradeStatus: studentGradeStatus(x.submission.gradeStatus, x.exam.status),
+            totalScore: resultsReleased(x.submission.gradeStatus, x.exam.status)
+              ? x.submission.totalScore
+              : null,
+          }
+        : null,
       reviewStatus:
         x.proctorReviewDecision !== ProctorReviewDecision.PENDING
           ? x.proctorReviewDecision
@@ -311,7 +326,8 @@ export class PortalService {
         where: {
           gradeStatus: GradeStatus.TEACHER_CONFIRMED,
           deletedAt: null,
-          session: { studentId: userId },
+          // Notify only once results are actually visible (exam closed).
+          session: { studentId: userId, exam: { status: { not: 'PUBLISHED' } } },
         },
         select: {
           id: true,
@@ -464,7 +480,8 @@ export class PortalService {
       scoreHistory: sessions
         .filter(
           (x) =>
-            x.submission?.gradeStatus === GradeStatus.TEACHER_CONFIRMED &&
+            !!x.submission &&
+            resultsReleased(x.submission.gradeStatus, x.exam.status) &&
             x.submission.totalScore !== null
         )
         .map((x) => ({
@@ -517,7 +534,8 @@ export class PortalService {
             name: true,
             teacher: { select: { fullName: true } },
             exams: {
-              where: { scheduledAt: { not: null } },
+              // Drafts are never shown to students.
+              where: { scheduledAt: { not: null }, status: { not: 'DRAFT' } },
               select: {
                 id: true,
                 title: true,
@@ -569,7 +587,10 @@ export class PortalService {
       },
     });
     if (!submission) throw new NotFoundException('Result not found');
-    const released = submission.gradeStatus === GradeStatus.TEACHER_CONFIRMED;
+    const released = resultsReleased(
+      submission.gradeStatus,
+      submission.session.exam.status
+    );
     const showCorrect = released && submission.session.exam.showCorrectAnswers;
     return {
       id: submission.id,
@@ -577,7 +598,10 @@ export class PortalService {
       submittedAt: submission.submittedAt,
       totalScore: released ? submission.totalScore : null,
       maxScore: submission.maxScore,
-      gradeStatus: submission.gradeStatus,
+      gradeStatus: studentGradeStatus(
+        submission.gradeStatus,
+        submission.session.exam.status
+      ),
       teacherFeedback: released ? submission.teacherFeedback : null,
       showCorrectAnswers: showCorrect,
       exam: {
@@ -617,7 +641,7 @@ export class PortalService {
   async studentAnalytics(userId: string) {
     const submissions = await this.prisma.submission.findMany({
       where: {
-        session: { studentId: userId },
+        session: { studentId: userId, exam: { status: { not: 'PUBLISHED' } } },
         gradeStatus: GradeStatus.TEACHER_CONFIRMED,
         totalScore: { not: null },
         deletedAt: null,
@@ -821,14 +845,22 @@ export class PortalService {
                 enrollments: { select: { subjectId: true } },
               },
             },
-            recording: true,
             scoreHistory: { orderBy: { computedAt: 'asc' } },
             events: {
               orderBy: { occurredAt: 'asc' },
               include: {
                 evidenceClips: {
                   where: {
-                    phase: EvidenceClipPhase.CENTERED,
+                    // CENTERED is the current single clip per incident.
+                    // BEFORE/AFTER are from the first clip format (early
+                    // September 2026) and are still valid evidence.
+                    phase: {
+                      in: [
+                        EvidenceClipPhase.CENTERED,
+                        EvidenceClipPhase.BEFORE,
+                        EvidenceClipPhase.AFTER,
+                      ],
+                    },
                     status: EvidenceClipStatus.COMPLETE,
                   },
                   orderBy: { startedAt: 'asc' },
@@ -882,22 +914,6 @@ export class PortalService {
           endedAt: session.endedAt,
           proctorReviewDecision: session.proctorReviewDecision,
           proctorReviewedAt: session.proctorReviewedAt,
-          recording: session.recording
-            ? {
-                status: session.recording.status,
-                durationSec:
-                  session.recording.durationSec ??
-                  (session.endedAt
-                    ? Math.max(
-                        0,
-                        Math.round(
-                          (+session.endedAt - +session.startedAt) / 1000
-                        )
-                      )
-                    : null),
-                playbackUrl: `/teacher/sessions/${session.id}/recording`,
-              }
-            : null,
           scoreTimeline: session.scoreHistory.map((score) => ({
             computedAt: score.computedAt,
             score: score.score,
@@ -908,7 +924,15 @@ export class PortalService {
             type: event.type,
             occurredAt: event.occurredAt,
             intensity: event.intensity,
-            clips: event.evidenceClips.map((clip) => ({
+            // Prefer the centered clip; fall back to legacy before/after parts.
+            clips: (event.evidenceClips.some(
+              (clip) => clip.phase === EvidenceClipPhase.CENTERED
+            )
+              ? event.evidenceClips.filter(
+                  (clip) => clip.phase === EvidenceClipPhase.CENTERED
+                )
+              : event.evidenceClips
+            ).map((clip) => ({
               id: clip.id,
               phase: clip.phase,
               startedAt: clip.startedAt,
@@ -953,21 +977,6 @@ export class PortalService {
       throw new NotFoundException('Evidence clip is not available');
     return clip.storagePath;
   }
-  async recordingFile(teacherId: string, sessionId: string) {
-    const session = await this.prisma.examSession.findFirst({
-      where: {
-        id: sessionId,
-        status: SessionStatus.COMPLETED,
-        exam: { subject: { teacherId } },
-      },
-      include: { recording: true },
-    });
-
-    if (!session?.recording)
-      throw new NotFoundException('Recording is not available');
-    return session.recording.storagePath;
-  }
-
   async raise(userId: string, sessionId: string, reason?: string) {
     const s = await this.prisma.examSession.findFirst({
       where: { id: sessionId, studentId: userId },
@@ -1378,7 +1387,7 @@ export class PortalService {
             .filter(Boolean)
             .map((value) => value!.trim())
             .join(' '),
-          profilePicture: input.profilePicture,
+          profilePicture: await this.avatars.resolve(input.profilePicture),
           passwordHash: await bcrypt.hash(initialPassword, 12),
           status: AccountStatus.PENDING,
           mustChangePassword: true,
@@ -1430,14 +1439,16 @@ export class PortalService {
     });
 
     if (!exists) throw new NotFoundException('Faculty member not found');
+    const profilePicture = await this.avatars.resolve(
+      input.profilePicture,
+      exists.profilePicture
+    );
     const user = await this.prisma.user.update({
       where: { id },
       data: {
         fullName: input.fullName.trim(),
         email: input.email.trim().toLowerCase(),
-        ...(input.profilePicture !== undefined
-          ? { profilePicture: input.profilePicture || null }
-          : {}),
+        ...(profilePicture !== undefined ? { profilePicture } : {}),
         ...(exists.role === Role.DEAN
           ? {
               deanProfile: {
@@ -1462,6 +1473,7 @@ export class PortalService {
             }),
       },
     });
+    await this.avatars.discard(exists.profilePicture, profilePicture);
     await this.prisma.auditLog.create({
       data: {
         actorId: deanId,
@@ -1493,6 +1505,8 @@ export class PortalService {
       where: { id },
       data: { status, isActive: status === 'ACTIVE' },
     });
+    // A disabled faculty member is signed out everywhere immediately.
+    if (status === 'DISABLED') await this.revocation.revokeUser(id);
     await this.prisma.auditLog.create({
       data: {
         actorId: deanId,
@@ -1590,7 +1604,7 @@ export class PortalService {
           include: { studentProfile: { include: { section: true } } },
         },
         exam: { include: { subject: true } },
-        events: true,
+        events: { where: VIOLATION_EVENTS },
         scoreHistory: { orderBy: { computedAt: 'asc' } },
       },
     });
@@ -1881,7 +1895,7 @@ export class PortalService {
             include: { studentProfile: { include: { section: true } } },
           },
           exam: { include: { subject: true } },
-          events: true,
+          events: { where: VIOLATION_EVENTS },
           scoreHistory: { orderBy: { computedAt: 'desc' }, take: 1 },
         },
       }),

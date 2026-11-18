@@ -27,7 +27,7 @@ import type { LucideIcon } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { api } from '../../lib/api';
+import { api, assetSrc } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 
 type IncidentEvent = {
@@ -106,6 +106,11 @@ const eventDetails: Record<
     label: 'Multiple displays connected',
     Icon: MonitorOff,
     color: 'bg-violet-600',
+  },
+  EXTERNAL_FORM_OPENED: {
+    label: 'Opened the Google Form in a new tab (note, not a violation)',
+    Icon: AppWindow,
+    color: 'bg-slate-400',
   },
 };
 const detailsFor = (type: string) =>
@@ -413,7 +418,7 @@ export default function Incidents() {
                 <span className="flex min-w-0 items-center gap-3">
                   {report.student.profilePicture ? (
                     <img
-                      src={report.student.profilePicture}
+                      src={assetSrc(report.student.profilePicture)}
                       alt=""
                       className="h-10 w-10 shrink-0 rounded-xl object-cover"
                     />
@@ -623,7 +628,7 @@ function IncidentModal({
           <div className="flex min-w-0 gap-3">
             {report.student.profilePicture ? (
               <img
-                src={report.student.profilePicture}
+                src={assetSrc(report.student.profilePicture)}
                 alt=""
                 className="h-11 w-11 shrink-0 rounded-xl object-cover"
               />

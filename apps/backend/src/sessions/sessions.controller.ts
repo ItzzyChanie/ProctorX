@@ -67,12 +67,14 @@ export class SessionsController {
   ) {
     return this.s.monitorableExams(r.user.id);
   }
-  @Post(':id/submit') @Roles(Role.STUDENT) submit(
+  @Post(':id/submit') @Roles(Role.STUDENT) async submit(
     @Req() r: any,
     @Param('id') id: string,
     @Body() body: SubmitDto
   ) {
-    return this.grading.submit(id, r.user.id, body.answers);
+    return this.grading.studentReceipt(
+      await this.grading.submit(id, r.user.id, body.answers)
+    );
   }
   @Post(':id/draft') @Roles(Role.STUDENT) saveDraft(
     @Req() r: any,
@@ -134,6 +136,15 @@ export class SessionsController {
   ) {
     return this.grading.updateResultRelease(submissionId, r.user.id, body);
   }
+  @Post('answers/:answerId/ai-suggest')
+  @Roles(Role.TEACHER)
+  @RequirePermission('FLAG_STUDENT')
+  suggestEssayScore(
+    @Req() r: any,
+    @Param('answerId') answerId: string
+  ) {
+    return this.grading.suggestEssayScore(answerId, r.user.id);
+  }
   @Post('grades/confirm') @Roles(Role.TEACHER)
   @RequirePermission('FLAG_STUDENT') confirm(
     @Req() r: any,
@@ -155,7 +166,7 @@ export class SessionsController {
     )
     file: Express.Multer.File
   ) {
-    return this.analysis.analyze(id, r.user.id, 'face', file.buffer);
+    return this.analysis.analyze(id, r.user.id, 'face', file.buffer, file.mimetype);
   }
   @Post(':id/audio-sample')
   @Roles(Role.STUDENT)
@@ -173,7 +184,7 @@ export class SessionsController {
     )
     file: Express.Multer.File
   ) {
-    return this.analysis.analyze(id, r.user.id, 'audio', file.buffer);
+    return this.analysis.analyze(id, r.user.id, 'audio', file.buffer, file.mimetype);
   }
   @Post(':id/events') @Roles(Role.STUDENT) event(
     @Req() r: any,
@@ -205,21 +216,12 @@ export class SessionsController {
       file.mimetype
     );
   }
-  @Post(':id/recording-chunks')
-  @Roles(Role.STUDENT)
-  @UseInterceptors(FileInterceptor('chunk'))
-  chunk(
+  @Get('exam/:examId/item-analysis') @Roles(Role.TEACHER)
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') itemAnalysis(
     @Req() r: any,
-    @Param('id') id: string,
-    @UploadedFile(
-      new ParseFilePipeBuilder()
-        .addFileTypeValidator({ fileType: /^video\/webm(?:;.*)?$/i })
-        .addMaxSizeValidator({ maxSize: 25_000_000 })
-        .build()
-    )
-    f: Express.Multer.File
+    @Param('examId') examId: string
   ) {
-    return this.s.recording(id, r.user.id, f.buffer);
+    return this.grading.itemAnalysis(examId, r.user.id);
   }
   @Get('exam/:examId/monitor') @Roles(Role.TEACHER)
   @RequirePermission('VIEW_OWN_CLASS_SESSIONS') monitor(

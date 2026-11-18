@@ -4,7 +4,7 @@ import { Clock3, Search, Trash2 } from 'lucide-react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { api } from '../../lib/api';
+import { api, assetSrc } from '../../lib/api';
 type Subject = { id: string; subjectCode: string; name: string };
 type Student = {
   id: string;
@@ -278,8 +278,8 @@ export default function StudentRosters() {
                   <tr key={s.id} className="border-b border-border">
                     <td className="px-3 py-3">
                       {s.profilePicture ? (
-                        <img
-                          src={s.profilePicture}
+                        <img alt=""
+                          src={assetSrc(s.profilePicture)}
                           className="h-8 w-8 rounded-full object-cover"
                         />
                       ) : (

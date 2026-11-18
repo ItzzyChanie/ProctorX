@@ -11,7 +11,7 @@ import {
   User,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../../lib/api';
+import { api, assetSrc } from '../../lib/api';
 import { useTheme } from '../../lib/useTheme';
 import type { Role } from '../../types/dashboard';
 import { notificationSocket } from '../../lib/socket';
@@ -302,7 +302,7 @@ export function Topbar({
                 >
                   {profilePicture ? (
                     <img
-                      src={profilePicture}
+                      src={assetSrc(profilePicture)}
                       alt=""
                       className="h-full w-full object-cover"
                     />
@@ -363,8 +363,8 @@ export function Topbar({
             style={{ background: 'var(--brand-gradient)' }}
           >
             {profilePicture ? (
-              <img
-                src={profilePicture}
+              <img alt="Your profile picture"
+                src={assetSrc(profilePicture)}
                 className="h-full w-full object-cover"
               />
             ) : (

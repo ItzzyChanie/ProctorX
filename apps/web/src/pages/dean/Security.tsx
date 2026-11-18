@@ -29,6 +29,14 @@ type AccessData = {
   }[];
 };
 
+type RetentionPolicy = {
+  retentionDays: number;
+  appliesTo: string[];
+  kept: string[];
+  lastRunAt: string | null;
+  lastResult: { recordings: number; evidenceClips: number } | null;
+};
+
 const friendlyPermission = (key: string) =>
   key
     .toLowerCase()
@@ -45,6 +53,11 @@ export default function Security() {
     queryKey: ['dean-security-access'],
     queryFn: async () =>
       (await api.get<AccessData>('/dean/security/access')).data,
+  });
+  const retention = useQuery({
+    queryKey: ['dean-security-retention'],
+    queryFn: async () =>
+      (await api.get<RetentionPolicy>('/dean/security/retention')).data,
   });
   const visibleFaculty = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -136,6 +149,57 @@ export default function Security() {
             accent={1}
           />
         </div>
+        <Card>
+          <CardHeader
+            title="Data retention"
+            subtitle={
+              retention.data
+                ? `Recordings and evidence are deleted automatically ${retention.data.retentionDays} days after an assessment attempt ends.`
+                : 'Loading the retention policy...'
+            }
+          />
+          {retention.data && (
+            <div className="grid gap-4 text-sm sm:grid-cols-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-text-3">
+                  Deleted after {retention.data.retentionDays} days
+                </p>
+                <ul className="mt-2 space-y-1 text-text-1">
+                  {retention.data.appliesTo.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-text-3">
+                  Kept
+                </p>
+                <ul className="mt-2 space-y-1 text-text-1">
+                  {retention.data.kept.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-text-3">
+                  Last cleanup
+                </p>
+                <p className="mt-2 text-text-1">
+                  {retention.data.lastRunAt
+                    ? new Date(retention.data.lastRunAt).toLocaleString()
+                    : 'Runs daily (first run shortly after the server starts)'}
+                </p>
+                {retention.data.lastResult && (
+                  <p className="mt-1 text-xs text-text-3">
+                    Removed {retention.data.lastResult.recordings} recording(s)
+                    and {retention.data.lastResult.evidenceClips} evidence
+                    clip(s). Each cleanup is recorded in the audit log.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </Card>
         <div className="grid items-start gap-5 lg:grid-cols-[320px_1fr]">
           <Card>
             <CardHeader

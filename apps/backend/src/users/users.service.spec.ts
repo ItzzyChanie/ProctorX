@@ -18,7 +18,7 @@ test('does not transfer a student to a section outside the institution', async (
       transactionCalled = true;
     },
   } as any;
-  const service = new UsersService(prisma);
+  const service = new UsersService(prisma, {} as never, {} as never);
 
   await assert.rejects(
     service.transferStudent(

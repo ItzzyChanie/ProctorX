@@ -720,7 +720,7 @@ function QuestionEditor({
           <h2 className="text-lg font-bold">
             {editor.id ? 'Edit bank question' : 'New bank question'}
           </h2>
-          <button type="button" onClick={onCancel}>
+          <button type="button" aria-label="Close" onClick={onCancel}>
             <X />
           </button>
         </div>

@@ -1,3 +1,4 @@
+import { VIOLATION_EVENTS, isViolationEvent } from '../common/violation-events';
 import {
   ForbiddenException,
   Injectable,
@@ -15,6 +16,7 @@ import { readFile } from 'fs/promises';
 import { basename, extname } from 'path';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { runExclusive } from '../common/job-lock';
 import { SessionsGateway } from '../sessions/sessions.gateway';
 
 @Injectable()
@@ -27,7 +29,10 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
   ) {}
   onModuleInit() {
     this.syncTimer = setInterval(
-      () => void this.syncPendingDeanReports().catch(() => undefined),
+      () =>
+        void runExclusive(this.prisma, 'sync-dean-reports', () =>
+          this.syncPendingDeanReports()
+        ).catch(() => undefined),
       10_000
     );
   }
@@ -54,7 +59,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       include: {
         student: { select: { fullName: true } },
         exam: { include: { subject: true } },
-        events: { orderBy: { occurredAt: 'asc' } },
+        events: { where: VIOLATION_EVENTS, orderBy: { occurredAt: 'asc' } },
         scoreHistory: { orderBy: { computedAt: 'desc' }, take: 1 },
       },
     });
@@ -68,7 +73,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       snapshot,
       session.events.filter((event) => event.type === 'TAB_SWITCH').length
     );
-    return this.ai.requestReport(
+    const job = await this.ai.requestReport(
       {
         session_id: session.id,
         student: session.student.fullName,
@@ -83,13 +88,42 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
       },
       'pdf'
     );
+    // The AI job queue does not know who asked for a report, so the
+    // append-only audit log records ownership for later status/download checks.
+    if (typeof job?.job_id === 'string')
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: teacherId,
+          action: 'INCIDENT_REPORT_REQUESTED',
+          targetType: 'ReportJob',
+          targetId: job.job_id,
+          metadata: { sessionId: session.id },
+        },
+      });
+    return job;
   }
 
-  jobStatus(jobId: string) {
+  /** Only the teacher who requested a report job may poll or download it. */
+  private async assertJobOwner(jobId: string, teacherId: string) {
+    const owner = await this.prisma.auditLog.findFirst({
+      where: {
+        actorId: teacherId,
+        action: 'INCIDENT_REPORT_REQUESTED',
+        targetType: 'ReportJob',
+        targetId: jobId,
+      },
+      select: { id: true },
+    });
+    if (!owner) throw new NotFoundException('Report job not found');
+  }
+
+  async jobStatus(jobId: string, teacherId: string) {
+    await this.assertJobOwner(jobId, teacherId);
     return this.ai.jobStatus(jobId);
   }
 
-  async jobDownload(jobId: string) {
+  async jobDownload(jobId: string, teacherId: string) {
+    await this.assertJobOwner(jobId, teacherId);
     const job = await this.ai.jobStatus(jobId);
     const path =
       job.status === 'SUCCESS' && typeof job.result?.path === 'string'
@@ -110,7 +144,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
     const sessions = await this.prisma.examSession.findMany({
       where: {
         exam: { subject: { teacherId } },
-        events: { some: {} },
+        events: { some: VIOLATION_EVENTS },
         integrityArchivedAt: archived ? { not: null } : null,
       },
       select: {
@@ -170,7 +204,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
           (status !== 'PUBLISHED' || (!!endsAt && endsAt <= new Date())) &&
           activeSessions.length === 0,
         scoreHistory: [score],
-        eventCount: session.events.length,
+        eventCount: session.events.filter(isViolationEvent).length,
         latestEventAt: session.events[0]?.occurredAt ?? session.startedAt,
       };
     });
@@ -545,7 +579,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
             : {}),
         },
         include: {
-          events: true,
+          events: { where: VIOLATION_EVENTS },
           scoreHistory: { orderBy: { computedAt: 'desc' }, take: 1 },
         },
       });

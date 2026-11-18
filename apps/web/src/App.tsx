@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import LandingPage from './Frontend/landing-page/LandingPage';
+import { ErrorBoundary, RouteErrorBoundary } from './components/ErrorBoundary';
 import {
   ChangePasswordRoute,
   ProtectedRoute,
@@ -28,6 +29,7 @@ import Classes from './pages/teacher/Classes';
 import ClassSections from './pages/teacher/ClassSections';
 import StudentRosters from './pages/teacher/StudentRosters';
 import SubmittedExams from './pages/teacher/SubmittedExams';
+import ItemAnalysis from './pages/teacher/ItemAnalysis';
 import Messages from './pages/teacher/Messages';
 import QuestionBank from './pages/teacher/QuestionBank';
 
@@ -125,6 +127,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <SessionBootstrap>
+        <RouteErrorBoundary>
         <Routes>
           <Route path="/" element={<HomeRoute />} />
           <Route path="/get-started" element={<GetStartedPage />} />
@@ -134,7 +137,14 @@ export default function App() {
 
           <Route element={<ProtectedRoute roles={[Role.STUDENT]} />}>
             <Route path="/student" element={<StudentDashboard />} />
-            <Route path="/student/join" element={<JoinSession />} />
+            <Route
+              path="/student/join"
+              element={
+                <ErrorBoundary variant="exam">
+                  <JoinSession />
+                </ErrorBoundary>
+              }
+            />
             <Route path="/student/sessions" element={<MySessions />} />
             <Route path="/student/sessions/:sessionId/result" element={<ExamResult />} />
             <Route path="/student/calendar" element={<AssessmentCalendar />} />
@@ -157,6 +167,7 @@ export default function App() {
             <Route path="/teacher/submitted-exams" element={teacherGate('VIEW_OWN_CLASS_SESSIONS', 'Submitted Exams', <SubmittedExams />)} />
             <Route path="/teacher/messages" element={<Messages />} />
             <Route path="/teacher/question-bank" element={teacherGate('CREATE_EXAM', 'Question Bank', <QuestionBank />)} />
+            <Route path="/teacher/item-analysis" element={teacherGate('VIEW_OWN_CLASS_SESSIONS', 'Item Analysis', <ItemAnalysis />)} />
             <Route path="/teacher/profile" element={<TeacherProfile />} />
             <Route
               path="/teacher/students"
@@ -179,6 +190,7 @@ export default function App() {
             />
           </Route>
         </Routes>
+        </RouteErrorBoundary>
       </SessionBootstrap>
     </BrowserRouter>
   );

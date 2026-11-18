@@ -69,16 +69,20 @@ export class ReportsController {
     return this.reports.export(sessionId, req.user.id);
   }
   @Get('jobs/:jobId') @Roles(Role.TEACHER)
-  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') job(@Param('jobId') jobId: string) {
-    return this.reports.jobStatus(jobId);
+  @RequirePermission('VIEW_OWN_CLASS_SESSIONS') job(
+    @Req() req: any,
+    @Param('jobId') jobId: string
+  ) {
+    return this.reports.jobStatus(jobId, req.user.id);
   }
 
   @Get('jobs/:jobId/download') @Roles(Role.TEACHER)
   @RequirePermission('VIEW_OWN_CLASS_SESSIONS') async download(
+    @Req() req: any,
     @Param('jobId') jobId: string,
     @Res({ passthrough: true }) response: Response
   ) {
-    const report = await this.reports.jobDownload(jobId);
+    const report = await this.reports.jobDownload(jobId, req.user.id);
     response.setHeader('Content-Type', 'application/pdf');
     response.setHeader(
       'Content-Disposition',

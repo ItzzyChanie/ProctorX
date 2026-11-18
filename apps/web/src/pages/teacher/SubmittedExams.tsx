@@ -4,7 +4,7 @@ import { CheckCircle2, Eye, RotateCcw, Search, Trash2, X, XCircle } from 'lucide
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { api } from '../../lib/api';
+import { api, assetSrc } from '../../lib/api';
 
 type Period = {
   id: string;
@@ -49,6 +49,8 @@ type AnswerDetail = {
   selectedOptionIds: string[];
   awardedPoints: number | null;
   gradeStatus: string;
+  aiSuggestedPoints?: number | null;
+  aiJustification?: string | null;
   question: {
     id: string;
     order: number;
@@ -340,7 +342,7 @@ export default function SubmittedExams() {
                         <td className="px-3 py-3">
                           {student.profilePicture ? (
                             <img
-                              src={student.profilePicture}
+                              src={assetSrc(student.profilePicture)}
                               alt=""
                               className="h-9 w-9 rounded-full object-cover"
                             />
@@ -523,7 +525,8 @@ function ReviewModal({
   const exam = detail.session.exam,
     student = detail.session.student,
     score = detail.totalScore ?? 0,
-    passed = detail.maxScore > 0 && score >= detail.maxScore / 2;
+    passed = detail.maxScore > 0 && score >= detail.maxScore / 2,
+    externalForm = detail.maxScore === 0;
   return (
     <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-900/80 p-3 sm:p-6">
       <div className="mx-auto max-w-6xl">
@@ -542,12 +545,19 @@ function ReviewModal({
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <div className={`rounded-xl px-5 py-3 text-center ${passed ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-700'}`}>
-              <div className="text-xs font-bold uppercase">Current score</div>
-              <div className="text-2xl font-black">
-                {score} / {detail.maxScore}
+            {externalForm ? (
+              <div className="rounded-xl bg-sky-100 px-5 py-3 text-center text-sky-900">
+                <div className="text-xs font-bold uppercase">Score</div>
+                <div className="text-base font-black">In Google Forms</div>
               </div>
-            </div>
+            ) : (
+              <div className={`rounded-xl px-5 py-3 text-center ${passed ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-700'}`}>
+                <div className="text-xs font-bold uppercase">Current score</div>
+                <div className="text-2xl font-black">
+                  {score} / {detail.maxScore}
+                </div>
+              </div>
+            )}
             <button
               onClick={onClose}
               className="rounded-xl p-3 hover:bg-slate-100"
@@ -599,8 +609,16 @@ function AnswerCard({
     onSuccess: onUpdated,
     onError,
   });
+  // AI-suggested essay score; the teacher still confirms the final points.
+  const suggest = useMutation({
+    mutationFn: () => api.post(`/sessions/answers/${answer.id}/ai-suggest`),
+    onSuccess: onUpdated,
+    onError,
+  });
   const q = answer.question,
-    correct = (answer.awardedPoints ?? 0) === q.points;
+    correct = (answer.awardedPoints ?? 0) === q.points,
+    partial =
+      (answer.awardedPoints ?? 0) > 0 && (answer.awardedPoints ?? 0) < q.points;
   const expected = Array.isArray(q.correctAnswer)
     ? q.correctAnswer.map(String)
     : q.correctAnswer == null
@@ -624,6 +642,10 @@ function AnswerCard({
               <span className="flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-emerald-700">
                 <CheckCircle2 size={12} /> Correct
               </span>
+            ) : partial ? (
+              <span className="flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-amber-800">
+                Partial · {answer.awardedPoints} / {q.points}
+              </span>
             ) : (
               <span className="flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-red-700">
                 <XCircle size={12} /> Review
@@ -634,7 +656,7 @@ function AnswerCard({
         </div>
       </div>
       <div className="mt-5">
-        {q.type === 'MULTIPLE_CHOICE' && (
+        {(q.type === 'MULTIPLE_CHOICE' || q.type === 'MULTIPLE_RESPONSE') && (
           <div className="grid gap-2">
             {q.options.map((option) => {
               const selected = answer.selectedOptionIds.includes(option.id);
@@ -665,6 +687,23 @@ function AnswerCard({
             <AnswerList title="Correct answers" values={expected} />
           </div>
         )}
+        {q.type === 'FILL_IN_THE_BLANK' && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <AnswerList
+              title="Student answers (per blank)"
+              values={parseEnumeration(answer.responseText).map(
+                (value, index) => `Blank ${index + 1}: ${value || '(blank)'}`
+              )}
+            />
+            <AnswerList
+              title="Accepted answers (per blank)"
+              values={(Array.isArray(q.correctAnswer) ? q.correctAnswer : []).map(
+                (accepted: unknown, index: number) =>
+                  `Blank ${index + 1}: ${(Array.isArray(accepted) ? accepted : [accepted]).join(' or ')}`
+              )}
+            />
+          </div>
+        )}
         {q.type === 'IDENTIFICATION' && (
           <div className="grid gap-4 md:grid-cols-2">
             <AnswerList
@@ -684,6 +723,52 @@ function AnswerCard({
                 <b>Rubric:</b> {q.rubric}
               </div>
             )}
+            {answer.responseText?.trim() && (
+              <div className="rounded-xl border border-violet-200 bg-violet-50 p-4 text-sm text-violet-950">
+                {answer.aiSuggestedPoints !== null &&
+                answer.aiSuggestedPoints !== undefined ? (
+                  <>
+                    <p className="font-semibold">
+                      AI suggestion: {answer.aiSuggestedPoints} / {q.points}{' '}
+                      <span className="font-normal text-violet-800">
+                        (advisory — you decide the score)
+                      </span>
+                    </p>
+                    {answer.aiJustification && (
+                      <p className="mt-2 whitespace-pre-wrap text-xs">
+                        {answer.aiJustification}
+                      </p>
+                    )}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => setPoints(answer.aiSuggestedPoints ?? 0)}
+                      >
+                        Use suggested score
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        disabled={suggest.isPending}
+                        onClick={() => suggest.mutate()}
+                      >
+                        {suggest.isPending ? 'Asking AI…' : 'Ask again'}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={suggest.isPending}
+                    onClick={() => suggest.mutate()}
+                  >
+                    {suggest.isPending ? 'Asking AI…' : 'Suggest a score with AI'}
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -694,7 +779,7 @@ function AnswerCard({
             type="number"
             min={0}
             max={q.points}
-            step={1}
+            step={0.5}
             value={points}
             onChange={(event) =>
               setPoints(

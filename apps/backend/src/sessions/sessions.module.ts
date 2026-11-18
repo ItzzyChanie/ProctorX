@@ -6,6 +6,7 @@ import { SessionsGateway } from './sessions.gateway';
 import { SessionsService } from './sessions.service';
 import { MonitoringAnalysisService } from './monitoring-analysis.service';
 import { GradingService } from './grading.service';
+import { ProctoringScoreService } from './proctoring-score.service';
 import { AuthModule } from '../auth/auth.module';
 @Module({
   imports: [PrismaModule, AiModule, AuthModule],
@@ -15,7 +16,8 @@ import { AuthModule } from '../auth/auth.module';
     SessionsGateway,
     MonitoringAnalysisService,
     GradingService,
+    ProctoringScoreService,
   ],
-  exports: [SessionsGateway],
+  exports: [SessionsGateway, GradingService],
 })
 export class SessionsModule {}

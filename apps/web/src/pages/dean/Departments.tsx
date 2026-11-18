@@ -13,7 +13,7 @@ import axios from "axios"
 import { DashboardLayout } from "../../components/layout/DashboardLayout"
 import { Card, CardHeader } from "../../components/ui/Card"
 import { Button } from "../../components/ui/Button"
-import { api } from "../../lib/api"
+import { api, assetSrc } from "../../lib/api"
 import { useAuthStore } from "../../store/authStore"
 import type { User } from "@proctorx/shared-types"
 
@@ -492,8 +492,8 @@ export default function Departments() {
                 <tr key={x.userId} className="border-b border-border">
                   <td className="p-3">
                     {x.profilePicture ? (
-                      <img
-                        src={x.profilePicture}
+                      <img alt=""
+                        src={assetSrc(x.profilePicture)}
                         className="h-9 w-9 rounded-full object-cover"
                       />
                     ) : (
@@ -917,7 +917,7 @@ function Modal({
       <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-surface p-6 shadow-2xl">
         <div className="mb-5 flex justify-between">
           <h2 className="text-xl font-bold">{title}</h2>
-          <button onClick={onClose}>
+          <button type="button" aria-label="Close" onClick={onClose}>
             <X size={20} />
           </button>
         </div>
@@ -955,7 +955,7 @@ function ImageInput({
     <label className="block text-sm">
       Profile Picture (optional)
       {value && (
-        <img src={value} className="my-2 h-20 w-20 rounded-full object-cover" />
+        <img alt="Profile picture preview" src={assetSrc(value)} className="my-2 h-20 w-20 rounded-full object-cover" />
       )}
       <input
         type="file"

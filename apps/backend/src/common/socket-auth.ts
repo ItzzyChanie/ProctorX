@@ -3,8 +3,9 @@ import { Role } from '@prisma/client';
 import { Socket } from 'socket.io';
 import { PrismaService } from '../prisma/prisma.service';
 import { ROLE_DEFAULT_PERMISSIONS } from './constants/role-permissions';
+import { isLiveLoginSession } from './login-session';
 
-export type SocketUser = { id: string; role: Role };
+export type SocketUser = { id: string; role: Role; loginSessionId: string };
 
 function cookie(socket: Socket, name: string) {
   const value = socket.handshake.headers.cookie
@@ -45,19 +46,17 @@ export function authenticateSocket(
         role: Role;
         jti?: string;
       }>(token);
-      if (payload.role === Role.STUDENT) {
-        if (!payload.jti) return null;
-        const session = await prisma.studentLoginSession.findUnique({
-          where: { userId: payload.sub },
-        });
-        if (
-          !session ||
-          session.id !== payload.jti ||
-          session.expiresAt <= new Date()
-        )
-          return null;
-      }
-      const user = { id: payload.sub, role: payload.role };
+      // Every role must hold a live, revocable login session.
+      if (
+        !payload.jti ||
+        !(await isLiveLoginSession(prisma, payload.sub, payload.jti))
+      )
+        return null;
+      const user: SocketUser = {
+        id: payload.sub,
+        role: payload.role,
+        loginSessionId: payload.jti,
+      };
       socket.data.user = user;
       return user;
     } catch {

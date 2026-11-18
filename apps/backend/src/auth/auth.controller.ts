@@ -9,7 +9,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -51,21 +51,18 @@ export class AuthController {
   }
 
   @Post('institution-registration')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   registerInstitution(@Body() body: CreateInstitutionRegistrationDto) {
     return this.institutionRegistration.create(body);
   }
 
   @Get('institutions/search')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   searchInstitutions(@Query() query: SearchInstitutionsDto) {
     return this.institutionRegistration.searchInstitutions(query.q);
   }
 
   @Post('institution-registration/verify')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async verifyInstitutionEmail(
     @Body() body: VerifyInstitutionEmailDto,
@@ -81,14 +78,12 @@ export class AuthController {
   }
 
   @Post('institution-registration/resend')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 2, ttl: 60_000 } })
   resendInstitutionCode(@Body() body: ResendInstitutionCodeDto) {
     return this.institutionRegistration.resend(body.referenceNumber);
   }
 
   @Post('login')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async login(
     @Body() body: LoginDto,
@@ -108,7 +103,6 @@ export class AuthController {
   }
 
   @Post('verify-activation')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
 
   async verifyActivation(
@@ -125,7 +119,6 @@ export class AuthController {
   }
 
   @Post('resend-activation')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   resendActivation(@Body() body: ResendActivationDto) {
     return this.auth.resendActivation(body.loginId);
@@ -146,6 +139,7 @@ export class AuthController {
   }
 
   @AllowPasswordChangeRequired()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @UseGuards(JwtAuthGuard) @Post('change-password') changePassword(
     @Req() req: any,
     @Body() body: ChangePasswordDto
@@ -153,13 +147,14 @@ export class AuthController {
     return this.auth.changePassword(
       req.user.id,
       body.currentPassword,
-      body.newPassword
+      body.newPassword,
+      req.user.loginSessionId
     );
   }
 
   @AllowPasswordChangeRequired()
   @UseGuards(JwtAuthGuard) @Get('me') me(@Req() req: any) {
-    return this.auth.me(req.user);
+    return this.auth.me(req.user.id);
   }
 
   @UseGuards(JwtAuthGuard) @Post('profile-picture') profilePicture(

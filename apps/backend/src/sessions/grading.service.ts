@@ -13,62 +13,36 @@ import {
   SubmissionMode,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { runExclusive } from '../common/job-lock';
 import { UpdateResultReleaseDto } from './dto/result-release.dto';
+import { isPastGrace, sessionRemainingSeconds } from './session-timing';
+import {
+  round2,
+  scoreAnswer,
+  type ScorableQuestion,
+  type SubmittedAnswer as ScoringAnswer,
+} from './scoring';
+import { analyzeItems, type AiPrediction } from './item-analysis';
+import { AiService } from '../ai/ai.service';
 
-type SubmittedAnswer = {
-  questionId: string;
-  responseText?: string;
-  selectedOptionIds?: string[];
-};
+const HEARTBEAT_WRITE_INTERVAL_MS = 60_000;
 
-const superscriptDigits: Record<number, string> = {
-  0x2070: '0',
-  0x00b9: '1',
-  0x00b2: '2',
-  0x00b3: '3',
-  0x2074: '4',
-  0x2075: '5',
-  0x2076: '6',
-  0x2077: '7',
-  0x2078: '8',
-  0x2079: '9',
-};
-
-const normalizeObjectiveText = (input: unknown) =>
-  String(input ?? '')
-    .replace(
-      /[\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+/gu,
-      (digits) =>
-        `^${[...digits].map((digit) => superscriptDigits[digit.codePointAt(0)!]).join('')}`
-    )
-    .normalize('NFKC')
-    .toLocaleLowerCase()
-    .trim()
-    .replace(/[\u2010-\u2015]/gu, '-')
-    .replace(/\s*([/\\*^#!+=<>%])\s*/gu, '$1')
-    .replace(/([\p{L}])\s*-\s*(?=\p{L})/gu, '$1')
-    .replace(/([\p{L}])\s+(?=\p{L})/gu, '$1')
-    .replace(/\s+/gu, ' ');
-
-const enumerationValues = (responseText?: string) => {
-  if (!responseText?.trim()) return [];
-  try {
-    const parsed: unknown = JSON.parse(responseText);
-    if (Array.isArray(parsed)) return parsed.map(String);
-  } catch {
-    // Compatibility with enumeration responses saved before separate fields.
-  }
-  return responseText.split(/\r?\n/gu);
-};
+type SubmittedAnswer = ScoringAnswer;
 
 @Injectable()
 export class GradingService implements OnModuleInit, OnModuleDestroy {
   private timeoutTimer?: NodeJS.Timeout;
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private ai: AiService
+  ) {}
 
   onModuleInit() {
     this.timeoutTimer = setInterval(
-      () => void this.finishExpiredSessions().catch(() => undefined),
+      () =>
+        void runExclusive(this.prisma, 'finish-expired-sessions', () =>
+          this.finishExpiredSessions()
+        ).catch(() => undefined),
       10_000
     );
   }
@@ -77,50 +51,9 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
     if (this.timeoutTimer) clearInterval(this.timeoutTimer);
   }
 
-  private objectivePoints(
-    question: {
-      type: QuestionType;
-      points: number;
-      correctAnswer: unknown;
-      options: { id: string; isCorrect: boolean }[];
-    },
-    answer: SubmittedAnswer
-  ) {
-    if (question.type === QuestionType.ESSAY) return null;
-    if (question.type === QuestionType.MULTIPLE_CHOICE) {
-      const expected = question.options
-        .filter((option) => option.isCorrect)
-        .map((option) => option.id)
-        .sort();
-      const actual = [...(answer.selectedOptionIds ?? [])].sort();
-      return expected.length === actual.length &&
-        expected.every((id, index) => id === actual[index])
-        ? question.points
-        : 0;
-    }
-    const expected = Array.isArray(question.correctAnswer)
-      ? question.correctAnswer
-      : [question.correctAnswer];
-    if (question.type === QuestionType.ENUMERATION) {
-      const normalizedExpected = expected
-        .map(normalizeObjectiveText)
-        .filter(Boolean)
-        .sort();
-      const normalizedActual = enumerationValues(answer.responseText)
-        .map(normalizeObjectiveText)
-        .filter(Boolean)
-        .sort();
-      return normalizedExpected.length === normalizedActual.length &&
-        normalizedExpected.every(
-          (value, index) => value === normalizedActual[index]
-        )
-        ? question.points
-        : 0;
-    }
-    const actual = normalizeObjectiveText(answer.responseText);
-    return expected.some((value) => normalizeObjectiveText(value) === actual)
-      ? question.points
-      : 0;
+  /** Points for one answer, or null when the teacher must grade it. */
+  private objectivePoints(question: ScorableQuestion, answer: SubmittedAnswer) {
+    return scoreAnswer(question, answer);
   }
 
   async saveDraft(
@@ -132,9 +65,14 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       where: { id: sessionId, studentId, status: SessionStatus.IN_PROGRESS },
       include: {
         exam: { include: { questions: { include: { options: true } } } },
+        submission: { include: { answers: true } },
       },
     });
     if (!session) throw new ForbiddenException();
+    if (session.isLocked)
+      throw new ForbiddenException('Your teacher has locked this attempt');
+    if (isPastGrace(session, session.exam))
+      throw new ConflictException('Time is up for this assessment');
     const byQuestion = new Map(
       answers.map((answer) => [answer.questionId, answer])
     );
@@ -158,21 +96,52 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
         gradeStatus: GradeStatus.UNGRADED,
       };
     });
-    await this.prisma.submission.upsert({
-      where: { sessionId },
-      create: {
-        sessionId,
-        submittedAt: null,
-        maxScore: session.exam.totalPoints,
-        totalScore: null,
-        gradeStatus: GradeStatus.UNGRADED,
-        answers: { create: rows },
-      },
-      update: {
-        maxScore: session.exam.totalPoints,
-        answers: { deleteMany: {}, create: rows },
-      },
+    const draft = session.submission;
+    if (!draft) {
+      await this.prisma.submission.create({
+        data: {
+          sessionId,
+          submittedAt: null,
+          maxScore: session.exam.totalPoints,
+          totalScore: null,
+          gradeStatus: GradeStatus.UNGRADED,
+          answers: { create: rows },
+        },
+      });
+      return { savedAt: new Date() };
+    }
+    // Autosave runs after every edit; write only the answers that changed
+    // (usually one) instead of deleting and re-inserting the whole draft.
+    const saved = new Map(draft.answers.map((answer) => [answer.questionId, answer]));
+    const changed = rows.filter((row) => {
+      const previous = saved.get(row.questionId);
+      return (
+        !previous ||
+        previous.responseText !== row.responseText ||
+        previous.selectedOptionIds.length !== row.selectedOptionIds.length ||
+        previous.selectedOptionIds.some(
+          (id, index) => id !== row.selectedOptionIds[index]
+        )
+      );
     });
+    if (changed.length)
+      await this.prisma.$transaction(
+        changed.map((row) =>
+          this.prisma.answer.upsert({
+            where: {
+              submissionId_questionId: {
+                submissionId: draft.id,
+                questionId: row.questionId,
+              },
+            },
+            create: { ...row, submissionId: draft.id },
+            update: {
+              responseText: row.responseText,
+              selectedOptionIds: row.selectedOptionIds,
+            },
+          })
+        )
+      );
     return { savedAt: new Date() };
   }
 
@@ -190,44 +159,60 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
       return {
         expired: true,
         remainingSeconds: 0,
-        result: session.submission,
+        result: this.studentReceipt(session.submission),
       };
 
-    const elapsed = session.activeStartedAt
-      ? Math.max(0, Math.floor((+now - +session.activeStartedAt) / 1000))
-      : 0;
-    const deadlineRemaining = session.exam.endsAt
-      ? Math.max(
-          0,
-          Math.floor((+session.exam.endsAt - +now) / 1000) +
-            session.extraTimeSeconds
-        )
-      : Number.MAX_SAFE_INTEGER;
-    const remainingSeconds = Math.min(
-      Math.max(
-        0,
-        (session.remainingSeconds ??
-          session.exam.durationMinutes * 60 + session.extraTimeSeconds) -
-          elapsed
-      ),
-      deadlineRemaining
-    );
+    const remainingSeconds = sessionRemainingSeconds(session, session.exam, now);
     if (remainingSeconds <= 0) {
-      const result = await this.autoSubmit(sessionId);
+      const result = this.studentReceipt(await this.finalizeSession(sessionId));
       return { expired: true, remainingSeconds: 0, result };
     }
-    await this.prisma.examSession.update({
-      where: { id: sessionId },
-      data: {
-        remainingSeconds,
-        activeStartedAt: now,
-        lastHeartbeatAt: now,
-      },
-    });
+    // The countdown is computed from the wall clock, so these columns are only
+    // "last seen" bookkeeping. Writing them every 5 s per student was the
+    // largest source of database commits in the load test; once a minute is
+    // plenty.
+    if (
+      !session.lastHeartbeatAt ||
+      +now - +session.lastHeartbeatAt >= HEARTBEAT_WRITE_INTERVAL_MS
+    )
+      await this.prisma.examSession.update({
+        where: { id: sessionId },
+        data: {
+          remainingSeconds,
+          activeStartedAt: now,
+          lastHeartbeatAt: now,
+        },
+      });
     return { expired: false, remainingSeconds, serverTime: now };
   }
 
-  private async autoSubmit(sessionId: string) {
+  /**
+   * What a student is told right after submitting: no score and no
+   * per-question marks. Results are released only after the exam closes, so
+   * an early finisher cannot tell classmates which answers were right.
+   */
+  studentReceipt(
+    submission: { id: string; submittedAt: Date | null; maxScore: number; mode?: string } | null
+  ) {
+    if (!submission) return null;
+    return {
+      id: submission.id,
+      submittedAt: submission.submittedAt,
+      maxScore: submission.maxScore,
+      mode: submission.mode,
+      resultsPending: true as const,
+    };
+  }
+
+  /**
+   * Grades whatever the student last saved and closes the attempt. Used when
+   * time runs out, when the exam window closes, and when a teacher stops the
+   * exam, so an unsubmitted attempt is never left without a score.
+   */
+  async finalizeSession(
+    sessionId: string,
+    mode: SubmissionMode = SubmissionMode.AUTO_TIMEOUT
+  ) {
     const session = await this.prisma.examSession.findUnique({
       where: { id: sessionId },
       include: { submission: { include: { answers: true } } },
@@ -240,24 +225,53 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
         responseText: answer.responseText ?? undefined,
         selectedOptionIds: answer.selectedOptionIds,
       })) ?? [];
-    return this.submit(
-      sessionId,
-      session.studentId,
-      answers,
-      SubmissionMode.AUTO_TIMEOUT
-    );
+    try {
+      return await this.submit(sessionId, session.studentId, answers, mode);
+    } catch (error) {
+      // Another path (manual submit, heartbeat, expiry job) finished first.
+      if (error instanceof ConflictException)
+        return this.prisma.submission.findUnique({
+          where: { sessionId },
+          include: { answers: true },
+        });
+      throw error;
+    }
   }
 
-  private async finishExpiredSessions() {
+  /** Finalizes every open attempt for an exam (window closed or stopped). */
+  async finalizeExam(examId: string) {
     const sessions = await this.prisma.examSession.findMany({
       where: {
-        status: SessionStatus.IN_PROGRESS,
-        exam: { endsAt: { lte: new Date() } },
+        examId,
+        status: { in: [SessionStatus.IN_PROGRESS, SessionStatus.DISCONNECTED] },
       },
       select: { id: true },
     });
     await Promise.allSettled(
-      sessions.map((session) => this.autoSubmit(session.id))
+      sessions.map((session) => this.finalizeSession(session.id))
+    );
+  }
+
+  private async finishExpiredSessions() {
+    const now = new Date();
+    const sessions = await this.prisma.examSession.findMany({
+      where: {
+        status: { in: [SessionStatus.IN_PROGRESS, SessionStatus.DISCONNECTED] },
+      },
+      select: {
+        id: true,
+        startedAt: true,
+        timerStartedAt: true,
+        extraTimeSeconds: true,
+        exam: { select: { durationMinutes: true, endsAt: true } },
+      },
+    });
+    // Students who never come back are finalized once their grace window has
+    // passed, so an in-flight manual submission still wins the race.
+    await Promise.allSettled(
+      sessions
+        .filter((session) => isPastGrace(session, session.exam, now))
+        .map((session) => this.finalizeSession(session.id))
     );
   }
 
@@ -276,6 +290,17 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
     if (!session) throw new ForbiddenException();
     if (session.status === SessionStatus.COMPLETED)
       throw new ConflictException('This exam has already been submitted');
+    if (mode === SubmissionMode.MANUAL) {
+      if (session.isLocked)
+        throw new ForbiddenException('Your teacher has locked this attempt');
+      if (isPastGrace(session, session.exam)) {
+        // Too late to accept new answers: grade the last saved draft instead.
+        await this.finalizeSession(sessionId);
+        throw new ConflictException(
+          'Time is up. Your last saved answers were submitted automatically.'
+        );
+      }
+    }
     const byQuestion = new Map(
       answers.map((answer) => [answer.questionId, answer])
     );
@@ -303,14 +328,21 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
             : GradeStatus.AUTO_GRADED,
       };
     });
-    const totalScore = rows.reduce(
-      (total, answer) => total + (answer.awardedPoints ?? 0),
-      0
+    const totalScore = round2(
+      rows.reduce((total, answer) => total + (answer.awardedPoints ?? 0), 0)
     );
     const hasEssay = session.exam.questions.some(
       (question) => question.type === QuestionType.ESSAY
     );
     const submission = await this.prisma.$transaction(async (tx) => {
+      const endedAt = new Date();
+      // Claim the attempt first; only one finalize path can win.
+      const claimed = await tx.examSession.updateMany({
+        where: { id: sessionId, status: { not: SessionStatus.COMPLETED } },
+        data: { status: SessionStatus.COMPLETED, endedAt },
+      });
+      if (!claimed.count)
+        throw new ConflictException('This exam has already been submitted');
       const record = await tx.submission.upsert({
         where: { sessionId },
         create: {
@@ -337,11 +369,6 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
           answers: { deleteMany: {}, create: rows },
         },
         include: { answers: true },
-      });
-      const endedAt = new Date();
-      await tx.examSession.update({
-        where: { id: sessionId },
-        data: { status: SessionStatus.COMPLETED, endedAt },
       });
       await tx.recording.updateMany({
         where: { sessionId },
@@ -620,6 +647,97 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
     return this.submissionDetail(submissionId, teacherId);
   }
 
+  /**
+   * Item analysis after an exam: actual difficulty (p) and discrimination (D)
+   * per question, compared with the teacher's difficulty and the AI review.
+   */
+  async itemAnalysis(examId: string, teacherId: string) {
+    const exam = await this.prisma.exam.findFirst({
+      where: { id: examId, subject: { teacherId } },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        aiReview: true,
+        aiReviewedAt: true,
+        questions: {
+          orderBy: { order: 'asc' },
+          select: { id: true, order: true, type: true, prompt: true, points: true, difficulty: true },
+        },
+      },
+    });
+    if (!exam) throw new NotFoundException('Assessment not found');
+    const submissions = await this.prisma.submission.findMany({
+      where: { session: { examId }, submittedAt: { not: null }, deletedAt: null },
+      select: {
+        totalScore: true,
+        answers: { select: { questionId: true, awardedPoints: true } },
+      },
+    });
+    const review = exam.aiReview as { questions?: AiPrediction[] } | null;
+    return {
+      exam: { id: exam.id, title: exam.title, status: exam.status, aiReviewedAt: exam.aiReviewedAt },
+      ...analyzeItems(exam.questions, submissions, review?.questions ?? []),
+    };
+  }
+
+  /**
+   * Asks the AI for a suggested essay score. It is stored as a suggestion
+   * (AI_SUGGESTED) and only counts once the teacher confirms a score.
+   */
+  async suggestEssayScore(answerId: string, teacherId: string) {
+    const answer = await this.prisma.answer.findUnique({
+      where: { id: answerId },
+      include: {
+        question: true,
+        submission: { include: { session: { include: { exam: { include: { subject: true } } } } } },
+      },
+    });
+    if (!answer) throw new NotFoundException('Answer not found');
+    if (answer.submission.session.exam.subject.teacherId !== teacherId)
+      throw new ForbiddenException();
+    if (answer.question.type !== QuestionType.ESSAY)
+      throw new ConflictException('AI suggestions are only available for essay answers');
+    const suggestion = (await this.ai.gradeEssay({
+      prompt: answer.question.prompt,
+      rubric: answer.question.rubric ?? '',
+      points: answer.question.points,
+      answer: answer.responseText ?? '',
+    })) as { suggestedPoints: number; justification: string; rubricNotes: string[]; manipulationAttempt: boolean };
+    const suggestedPoints = Math.max(
+      0,
+      Math.min(answer.question.points, Math.round(suggestion.suggestedPoints))
+    );
+    const justification = [
+      suggestion.justification,
+      ...suggestion.rubricNotes.map((note) => `• ${note}`),
+      ...(suggestion.manipulationAttempt
+        ? ['⚠ The answer appears to contain instructions aimed at the grader; they were ignored.']
+        : []),
+    ].join('\n');
+    const updated = await this.prisma.answer.update({
+      where: { id: answerId },
+      data: {
+        aiSuggestedPoints: suggestedPoints,
+        aiJustification: justification,
+        ...(answer.gradeStatus === GradeStatus.UNGRADED
+          ? { gradeStatus: GradeStatus.AI_SUGGESTED }
+          : {}),
+      },
+      select: { id: true, aiSuggestedPoints: true, aiJustification: true, gradeStatus: true },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: teacherId,
+        action: 'ESSAY_AI_SUGGESTED',
+        targetType: 'Answer',
+        targetId: answerId,
+        metadata: { suggestedPoints, manipulationAttempt: suggestion.manipulationAttempt },
+      },
+    });
+    return { ...updated, manipulationAttempt: suggestion.manipulationAttempt };
+  }
+
   async confirmAnswer(answerId: string, teacherId: string, points: number) {
     const answer = await this.prisma.answer.findUnique({
       where: { id: answerId },
@@ -635,12 +753,16 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
     if (!answer) throw new NotFoundException('Answer not found');
     if (answer.submission.session.exam.subject.teacherId !== teacherId)
       throw new ForbiddenException();
+    // Partial credit allows up to two decimals (e.g. 1.5 or 1.33).
     if (
-      !Number.isInteger(points) ||
+      !Number.isFinite(points) ||
       points < 0 ||
-      points > answer.question.points
+      points > answer.question.points ||
+      Math.abs(round2(points) - points) > 1e-9
     )
-      throw new ConflictException("Points must be within the question's range");
+      throw new ConflictException(
+        "Points must be within the question's range, with at most two decimals"
+      );
     await this.prisma.answer.update({
       where: { id: answerId },
       data: {
@@ -659,9 +781,8 @@ export class GradingService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.submission.update({
       where: { id: answer.submissionId },
       data: {
-        totalScore: answers.reduce(
-          (total, item) => total + (item.awardedPoints ?? 0),
-          0
+        totalScore: round2(
+          answers.reduce((total, item) => total + (item.awardedPoints ?? 0), 0)
         ),
         gradeStatus: pending
           ? GradeStatus.UNGRADED
