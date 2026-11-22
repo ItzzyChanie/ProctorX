@@ -1,8 +1,9 @@
 {
-  "title": "ProctorX 1st Landing Page Sample",
-  "description": "AI-powered online exam proctoring platform delivering secure, scalable remote monitoring with facial recognition and behavior analytics for institutions.",
-  "robots": {
-    "index": false
+  "title": "ProctorX — AI exam proctoring for fair, evidence-based exams",
+  "description": "ProctorX is an AI-assisted exam proctoring platform: live webcam and browser monitoring, timestamped evidence, Google Forms support, and human review on every flag.",
+  "language": "en",
+  "icons": {
+    "icon": "/favicon.svg"
   },
   "accessibility": {
     "addBypassLinks": false,
