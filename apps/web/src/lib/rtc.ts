@@ -2,6 +2,7 @@ import { api } from './api';
 
 export const DEFAULT_RTC_CONFIG: RTCConfiguration = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  iceCandidatePoolSize: 10,
 };
 
 let cached: { config: RTCConfiguration; expiresAt: number } | null = null;

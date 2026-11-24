@@ -7,6 +7,7 @@
 export type Signal = {
   description?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
+  connectionId?: string;
 };
 
 /** Below this RMS level (about -40 dBFS) a chunk is treated as silence. */
@@ -39,8 +40,8 @@ export function toSpeechRate(samples: number[], rate: number) {
 }
 
 export type StreamQuality = 'off' | 'thumb' | 'focus';
-// Grid tiles are ~300px wide, so thumbnails are capped at 540p / 5 fps; only
-// the student the teacher has enlarged is sent at full quality.
+// Grid tiles are ~300px wide, but a slightly stronger thumbnail avoids the
+// visible frame tearing seen on smaller laptop displays.
 const QUALITY_PRESETS: Record<
   StreamQuality,
   {
@@ -51,11 +52,11 @@ const QUALITY_PRESETS: Record<
   }
 > = {
   off: { active: false, maxBitrate: 100_000, maxFramerate: 1, maxHeight: 360 },
-  thumb: { active: true, maxBitrate: 250_000, maxFramerate: 5, maxHeight: 540 },
+  thumb: { active: true, maxBitrate: 1_200_000, maxFramerate: 15, maxHeight: 720 },
   focus: {
     active: true,
-    maxBitrate: 2_500_000,
-    maxFramerate: 15,
+    maxBitrate: 4_000_000,
+    maxFramerate: 30,
     maxHeight: 0,
   },
 };
@@ -90,7 +91,7 @@ export const captureEntireScreen = async () => {
   const screen = await navigator.mediaDevices.getDisplayMedia({
     video: {
       displaySurface: 'monitor',
-      frameRate: { ideal: 15, max: 20 },
+      frameRate: { ideal: 30, max: 30 },
     },
     audio: false,
     monitorTypeSurfaces: 'include',

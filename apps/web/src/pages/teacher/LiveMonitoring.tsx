@@ -73,13 +73,14 @@ type Exam = {
 type Signal = {
   description?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
+  connectionId?: string;
 };
 /** live = WebRTC video, fallback = periodic image frames over the socket. */
 type Link = 'connecting' | 'live' | 'fallback';
 type Quality = 'off' | 'thumb' | 'focus';
 type SortKey = 'risk' | 'violations' | 'hand' | 'name';
 
-const CONNECT_TIMEOUT_MS = 10_000;
+const CONNECT_TIMEOUT_MS = 20_000;
 const DISCONNECT_GRACE_MS = 5_000;
 const REFRESH_DEBOUNCE_MS = 600;
 const TIER_RANK = { HIGH: 3, MEDIUM: 2, LOW: 1 } as const;
@@ -94,10 +95,12 @@ class FrameStore {
   get = (id: string) => this.urls.get(id);
   set(id: string, url?: string) {
     const previous = this.urls.get(id);
-    if (previous) URL.revokeObjectURL(previous);
     if (url) this.urls.set(id, url);
     else this.urls.delete(id);
     this.listeners.get(id)?.forEach((listener) => listener());
+    if (previous) {
+      window.setTimeout(() => URL.revokeObjectURL(previous), 250);
+    }
   }
   subscribe(id: string, listener: () => void) {
     const set = this.listeners.get(id) ?? new Set();
@@ -137,9 +140,12 @@ function ScreenView({
   const showVideo = Boolean(stream) && live;
   useEffect(() => {
     const video = videoRef.current;
-    if (video && video.srcObject !== (stream ?? null))
+    if (!video) return;
+    if (video.srcObject !== (stream ?? null)) {
       video.srcObject = stream ?? null;
-  }, [stream]);
+    }
+    if (stream && live) void video.play().catch(() => undefined);
+  }, [stream, live]);
   return (
     <>
       <video
@@ -147,6 +153,7 @@ function ScreenView({
         autoPlay
         muted
         playsInline
+        disablePictureInPicture
         className={`${fit} ${showVideo ? '' : 'hidden'}`}
       />
       {!showVideo && frame && (
@@ -194,7 +201,7 @@ const Tile = memo(function Tile({
       ref={ref}
       type="button"
       onClick={() => onOpen(student.id)}
-      className={`group relative aspect-video overflow-hidden rounded-lg border-[3px] bg-black text-left shadow-sm ${
+      className={`group relative isolate aspect-video min-w-0 overflow-hidden rounded-lg border-[3px] bg-black text-left shadow-sm contain-[layout_paint] ${
         notSharing
           ? 'border-red-500'
           : student.eventCount === 0
@@ -248,7 +255,7 @@ const Tile = memo(function Tile({
         stream={stream}
         live={live}
         frames={frames}
-        fit="h-full w-full object-contain"
+        fit="absolute inset-0 h-full w-full object-contain"
         placeholder={
           <span className="absolute inset-0 grid place-items-center px-4 text-center text-sm text-white/70">
             <span className="flex items-center">
@@ -375,6 +382,7 @@ export default function LiveMonitoring() {
       rtcConfig = config;
     });
     const peers = new Map<string, RTCPeerConnection>();
+    const connectionIds = new Map<string, string>();
     const pendingCandidates = new Map<string, RTCIceCandidateInit[]>();
     const watched = new Set<string>();
     const live = new Set<string>();
@@ -429,13 +437,34 @@ export default function LiveMonitoring() {
               : 'off';
         if (qualitySent.get(id) !== quality) {
           qualitySent.set(id, quality);
-          socket.emit('webrtc:quality', { sessionId: id, quality });
+          socket.emit('webrtc:quality', {
+            sessionId: id,
+            connectionId: connectionIds.get(id),
+            quality,
+          });
         }
       }
     };
     syncRef.current = sync;
 
     const closePeer = (id: string) => {
+      peers.get(id)?.close();
+      peers.delete(id);
+      connectionIds.delete(id);
+      pendingCandidates.delete(id);
+      live.delete(id);
+      qualitySent.delete(id);
+      clearTimer(`grace:${id}`);
+      clearTimer(`restart:${id}`);
+      clearTimer(`restart:${id}`);
+      setStreams((current) => {
+        if (!(id in current)) return current;
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+    };
+    const replacePeer = (id: string) => {
       peers.get(id)?.close();
       peers.delete(id);
       pendingCandidates.delete(id);
@@ -456,16 +485,27 @@ export default function LiveMonitoring() {
     };
     const requestStream = (id: string) => {
       if (!joined || !watched.has(id)) return;
-      socket.emit('webrtc:watch', { sessionId: id });
+      const connectionId = crypto.randomUUID();
+      connectionIds.set(id, connectionId);
+      socket.emit('webrtc:watch', { sessionId: id, connectionId });
       setTimer(`connect:${id}`, CONNECT_TIMEOUT_MS, () => {
-        if (!live.has(id)) enterFallback(id);
+        if (!live.has(id)) peerFailed(id);
       });
     };
     const peerFailed = (id: string) => {
-      closePeer(id);
-      enterFallback(id);
+      replacePeer(id);
       const attempt = (retries.get(id) ?? 0) + 1;
       retries.set(id, attempt);
+      if (attempt <= 2) {
+        setLink(id, 'connecting');
+        setTimer(
+          `retry:${id}`,
+          1_500,
+          () => requestStream(id)
+        );
+        return;
+      }
+      enterFallback(id);
       setTimer(
         `retry:${id}`,
         Math.min(30_000, 2_000 * 2 ** (attempt - 1)),
@@ -564,9 +604,26 @@ export default function LiveMonitoring() {
       joined = false;
     };
 
-    const ready = async ({ sessionId: id }: { sessionId: string }) => {
+    const ready = async ({
+      sessionId: id,
+      connectionId,
+    }: {
+      sessionId: string;
+      connectionId?: string;
+    }) => {
       if (!watched.has(id)) return;
-      closePeer(id);
+      if (
+        connectionId &&
+        connectionIds.get(id) &&
+        connectionId !== connectionIds.get(id)
+      )
+        return;
+      // Student reconnects and duplicate watch notifications may both deliver
+      // a ready message. Replacing an already-live peer causes a visible
+      // black/connecting flash and can trigger fallback churn.
+      const existing = peers.get(id);
+      if (existing && live.has(id)) return;
+      replacePeer(id);
       const peer = new RTCPeerConnection(rtcConfig);
       peers.set(id, peer);
       const current = () => peers.get(id) === peer;
@@ -576,20 +633,26 @@ export default function LiveMonitoring() {
       peer.ontrack = ({ track, streams: remoteStreams }) => {
         if (!current()) return;
         const stream = remoteStreams[0] ?? new MediaStream([track]);
-        setStreams((existing) => ({ ...existing, [id]: stream }));
+        setStreams((existing) =>
+          existing[id] === stream
+            ? existing
+            : { ...existing, [id]: stream }
+        );
         track.addEventListener('ended', () => current() && peerFailed(id));
       };
       peer.onicecandidate = ({ candidate }) =>
         candidate &&
         socket.emit('webrtc:signal', {
           sessionId: id,
-          signal: { candidate: candidate.toJSON() },
+          connectionId: connectionIds.get(id),
+          signal: { candidate: candidate.toJSON(), connectionId: connectionIds.get(id) },
         });
       peer.onconnectionstatechange = () => {
         if (!current()) return;
         switch (peer.connectionState) {
           case 'connected':
             clearTimer(`grace:${id}`);
+            clearTimer(`restart:${id}`);
             clearTimer(`connect:${id}`);
             clearTimer(`retry:${id}`);
             live.add(id);
@@ -599,6 +662,9 @@ export default function LiveMonitoring() {
             sync(id);
             break;
           case 'disconnected':
+            setTimer(`restart:${id}`, 2_000, () => {
+              if (current()) peer.restartIce();
+            });
             setTimer(`grace:${id}`, DISCONNECT_GRACE_MS, () => {
               if (current()) peerFailed(id);
             });
@@ -616,7 +682,11 @@ export default function LiveMonitoring() {
         if (!current()) return;
         socket.emit('webrtc:signal', {
           sessionId: id,
-          signal: { description: peer.localDescription },
+          connectionId: connectionIds.get(id),
+          signal: {
+            description: peer.localDescription,
+            connectionId: connectionIds.get(id),
+          },
         });
       } catch {
         if (current()) peerFailed(id);
@@ -629,6 +699,12 @@ export default function LiveMonitoring() {
       sessionId: string;
       signal: Signal;
     }) => {
+      if (
+        incoming.connectionId &&
+        connectionIds.get(id) &&
+        incoming.connectionId !== connectionIds.get(id)
+      )
+        return;
       const peer = peers.get(id);
       if (!peer) return;
       try {
@@ -1152,31 +1228,32 @@ export default function LiveMonitoring() {
                 </div>
               )}
             </div>
-            <div
-              ref={gridRef}
-              className="mx-auto grid w-full gap-3"
-              style={
-                layout
-                  ? {
-                      gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
-                      maxWidth: layout.maxWidth,
-                    }
-                  : {
-                      gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${TILE_MIN_WIDTH[tileSize as keyof typeof TILE_MIN_WIDTH]}px), 1fr))`,
-                    }
-              }
-            >
-              {pageStudents.map((student) => (
-                <Tile
-                  key={student.id}
-                  student={student}
-                  stream={streams[student.id]}
-                  link={links[student.id]}
-                  frames={frames}
-                  onOpen={openStudent}
-                  onVisible={onVisible}
-                />
-              ))}
+            <div ref={gridRef} className="w-full min-w-0">
+              <div
+                className={`mx-auto grid w-full min-w-0 gap-3 ${gridWidth > 0 ? 'visible' : 'invisible'}`}
+                style={
+                  layout
+                    ? {
+                        gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
+                        maxWidth: layout.maxWidth,
+                      }
+                    : {
+                        gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${TILE_MIN_WIDTH[tileSize as keyof typeof TILE_MIN_WIDTH]}px), 1fr))`,
+                      }
+                }
+              >
+                {pageStudents.map((student) => (
+                  <Tile
+                    key={student.id}
+                    student={student}
+                    stream={streams[student.id]}
+                    link={links[student.id]}
+                    frames={frames}
+                    onOpen={openStudent}
+                    onVisible={onVisible}
+                  />
+                ))}
+              </div>
             </div>
             {loadError && (
               <div className="rounded-lg border border-risk-high/30 bg-risk-high/5 p-6 text-sm text-risk-high">

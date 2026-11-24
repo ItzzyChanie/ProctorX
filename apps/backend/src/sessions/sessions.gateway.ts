@@ -111,11 +111,16 @@ export class SessionsGateway implements OnGatewayDisconnect {
 
   @SubscribeMessage('webrtc:watch') async watch(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sessionId?: string }
+    @MessageBody() b: { sessionId?: string; connectionId?: string }
   ) {
     const user = await this.teacher(c);
     const data = c.data as TeacherData;
-    if (!user || !data.monitorExamId || typeof b?.sessionId !== 'string')
+    if (
+      !user ||
+      !data.monitorExamId ||
+      typeof b?.sessionId !== 'string' ||
+      typeof b?.connectionId !== 'string'
+    )
       return { ok: false };
     const session = await this.prisma.examSession.findFirst({
       where: {
@@ -132,22 +137,30 @@ export class SessionsGateway implements OnGatewayDisconnect {
     // number of tabs / co-proctors can watch the same screen.
     this.server
       .to(rooms.student(session.id))
-      .emit('webrtc:request', { viewerId: c.id });
+      .emit('webrtc:request', {
+        viewerId: c.id,
+        connectionId: b.connectionId,
+      });
     return { ok: true };
   }
 
   @SubscribeMessage('webrtc:unwatch') async unwatch(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sessionId?: string }
+    @MessageBody() b: { sessionId?: string; connectionId?: string }
   ) {
     if (!this.canControl(c, b?.sessionId)) return { ok: false };
-    await this.stopWatching(c.id, b.sessionId!, c);
+    await this.stopWatching(c.id, b.sessionId!, c, b.connectionId);
     return { ok: true };
   }
 
   @SubscribeMessage('webrtc:quality') quality(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sessionId?: string; quality?: Quality }
+    @MessageBody()
+    b: {
+      sessionId?: string;
+      quality?: Quality;
+      connectionId?: string;
+    }
   ) {
     if (
       !this.canControl(c, b?.sessionId) ||
@@ -156,7 +169,11 @@ export class SessionsGateway implements OnGatewayDisconnect {
       return;
     this.server
       .to(rooms.student(b.sessionId!))
-      .emit('webrtc:quality', { viewerId: c.id, quality: b.quality });
+      .emit('webrtc:quality', {
+        viewerId: c.id,
+        connectionId: b.connectionId,
+        quality: b.quality,
+      });
   }
 
   @SubscribeMessage('screen:fallback') async fallback(
@@ -238,16 +255,29 @@ export class SessionsGateway implements OnGatewayDisconnect {
 
   @SubscribeMessage('webrtc:ready') ready(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { viewerId?: string }
+    @MessageBody() b: { viewerId?: string; connectionId?: string }
   ) {
     const { sessionId } = c.data as StudentData;
-    if (!sessionId || typeof b?.viewerId !== 'string') return;
-    this.server.to(b.viewerId).emit('webrtc:ready', { sessionId });
+    if (
+      !sessionId ||
+      typeof b?.viewerId !== 'string' ||
+      typeof b?.connectionId !== 'string'
+    )
+      return;
+    this.server
+      .to(b.viewerId)
+      .emit('webrtc:ready', { sessionId, connectionId: b.connectionId });
   }
 
   @SubscribeMessage('webrtc:signal') signal(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sessionId?: string; viewerId?: string; signal: unknown }
+    @MessageBody()
+    b: {
+      sessionId?: string;
+      viewerId?: string;
+      connectionId?: string;
+      signal: unknown;
+    }
   ) {
     const { sessionId } = c.data as StudentData;
     if (sessionId) {
@@ -256,13 +286,21 @@ export class SessionsGateway implements OnGatewayDisconnect {
       if (typeof b?.viewerId === 'string')
         this.server
           .to(b.viewerId)
-          .emit('webrtc:signal', { sessionId, signal: b.signal });
+          .emit('webrtc:signal', {
+            sessionId,
+            connectionId: b.connectionId,
+            signal: b.signal,
+          });
       return;
     }
     if (!this.canControl(c, b?.sessionId)) return;
     this.server
       .to(rooms.student(b.sessionId!))
-      .emit('webrtc:signal', { viewerId: c.id, signal: b.signal });
+      .emit('webrtc:signal', {
+        viewerId: c.id,
+        connectionId: b.connectionId,
+        signal: b.signal,
+      });
   }
 
   @SubscribeMessage('screen:frame') frame(
@@ -316,14 +354,21 @@ export class SessionsGateway implements OnGatewayDisconnect {
       await this.stopWatching(c.id, sessionId, c);
   }
 
-  private async stopWatching(viewerId: string, sessionId: string, c?: Socket) {
+  private async stopWatching(
+    viewerId: string,
+    sessionId: string,
+    c?: Socket,
+    connectionId?: string
+  ) {
     if (c) {
       await c.leave(rooms.watch(sessionId));
       await c.leave(rooms.fallback(sessionId));
       const data = c.data as TeacherData;
       data.watching = (data.watching ?? []).filter((id) => id !== sessionId);
     }
-    this.server.to(rooms.student(sessionId)).emit('webrtc:stop', { viewerId });
+    this.server
+      .to(rooms.student(sessionId))
+      .emit('webrtc:stop', { viewerId, connectionId });
     await this.syncFallback(sessionId);
   }
 

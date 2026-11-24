@@ -80,9 +80,19 @@ function SessionBootstrap({ children }: { children: React.ReactNode }) {
     if (user.role !== Role.STUDENT)
       return () => notificationSocket.disconnect();
     const heartbeat = () => {
-      void api.post('/auth/heartbeat').catch(() => {
-        signOut();
-        notificationSocket.disconnect();
+      void api.post('/auth/heartbeat').catch((error: unknown) => {
+        const status =
+          typeof error === 'object' &&
+          error !== null &&
+          'response' in error
+            ? (error as { response?: { status?: number } }).response?.status
+            : undefined;
+        // 401/403 means the login was revoked or expired. Transient network,
+        // database, and 5xx failures must not log a student out.
+        if (status === 401 || status === 403) {
+          signOut();
+          notificationSocket.disconnect();
+        }
       });
     };
     heartbeat();

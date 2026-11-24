@@ -46,17 +46,23 @@ export function authenticateSocket(
         role: Role;
         jti?: string;
       }>(token);
-      // Every role must hold a live, revocable login session.
-      if (
-        !payload.jti ||
-        !(await isLiveLoginSession(prisma, payload.sub, payload.jti))
-      )
-        return null;
+      if (!payload.jti) return null;
       const user: SocketUser = {
         id: payload.sub,
         role: payload.role,
         loginSessionId: payload.jti,
       };
+      try {
+        // Every role must hold a live, revocable login session.
+        if (!(await isLiveLoginSession(prisma, payload.sub, payload.jti)))
+          return null;
+      } catch {
+        // A short database outage must not disconnect an already-authenticated
+        // socket or tear down an active screen-share peer. The auth gateway
+        // will recheck revocation during subsequent heartbeats.
+        socket.data.user = user;
+        return user;
+      }
       socket.data.user = user;
       return user;
     } catch {

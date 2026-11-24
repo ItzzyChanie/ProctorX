@@ -252,29 +252,46 @@ export default function JoinSession() {
       connection: RTCPeerConnection;
       quality: StreamQuality;
       pending: RTCIceCandidateInit[];
+      connectionId: string;
     };
     const viewers = new Map<string, Viewer>();
-    const requestedViewers = new Set<string>();
+    const requestedViewers = new Map<string, string>();
     let fallbackEnabled = false;
     const closeViewer = (viewerId: string) => {
       viewers.get(viewerId)?.connection.close();
       viewers.delete(viewerId);
     };
-    const createPeer = (viewerId: string) => {
+    const createPeer = ({
+      viewerId,
+      connectionId,
+    }: {
+      viewerId: string;
+      connectionId: string;
+    }) => {
       const stream = screenStream.current;
       if (!stream) return;
       closeViewer(viewerId);
       const connection = new RTCPeerConnection(rtcConfig);
-      const viewer: Viewer = { connection, quality: 'thumb', pending: [] };
+      const viewer: Viewer = {
+        connection,
+        quality: 'thumb',
+        pending: [],
+        connectionId,
+      };
       viewers.set(viewerId, viewer);
-      stream
-        .getVideoTracks()
-        .forEach((track) => connection.addTrack(track, stream));
+      stream.getVideoTracks().forEach((track) => {
+        track.contentHint = cameraOnly ? 'motion' : 'detail';
+        connection.addTrack(track, stream);
+      });
       connection.onicecandidate = ({ candidate }) =>
         candidate &&
         socket.emit('webrtc:signal', {
           viewerId,
-          signal: { candidate: candidate.toJSON() },
+          connectionId,
+          signal: {
+            candidate: candidate.toJSON(),
+            connectionId,
+          },
         });
       connection.onconnectionstatechange = () => {
         if (
@@ -283,28 +300,58 @@ export default function JoinSession() {
         )
           closeViewer(viewerId);
       };
-      socket.emit('webrtc:ready', { viewerId });
+      socket.emit('webrtc:ready', { viewerId, connectionId });
     };
-    const watch = ({ viewerId }: { viewerId?: string }) => {
-      if (!viewerId) return;
-      requestedViewers.add(viewerId);
+    const watch = ({
+      viewerId,
+      connectionId,
+    }: {
+      viewerId?: string;
+      connectionId?: string;
+    }) => {
+      if (!viewerId || !connectionId) return;
+      const existing = viewers.get(viewerId);
+      if (
+        existing &&
+        existing.connectionId !== connectionId &&
+        existing.connection.connectionState !== 'failed' &&
+        existing.connection.connectionState !== 'closed'
+      )
+        return;
+      requestedViewers.set(viewerId, connectionId);
       // No-op while the screen picker is still open; replayed after capture.
-      createPeer(viewerId);
+      createPeer({ viewerId, connectionId });
     };
-    const stopViewer = ({ viewerId }: { viewerId?: string }) => {
+    const stopViewer = ({
+      viewerId,
+      connectionId,
+    }: {
+      viewerId?: string;
+      connectionId?: string;
+    }) => {
       if (!viewerId) return;
+      const viewer = viewers.get(viewerId);
+      if (
+        connectionId &&
+        viewer &&
+        viewer.connectionId !== connectionId
+      )
+        return;
       requestedViewers.delete(viewerId);
       closeViewer(viewerId);
     };
     const setQuality = ({
       viewerId,
       quality,
+      connectionId,
     }: {
       viewerId?: string;
       quality?: StreamQuality;
+      connectionId?: string;
     }) => {
       const viewer = viewerId ? viewers.get(viewerId) : undefined;
       if (!viewer || !quality || !isStreamQuality(quality)) return;
+      if (connectionId && viewer.connectionId !== connectionId) return;
       viewer.quality = quality;
       void applyStreamQuality(viewer.connection, quality);
     };
@@ -320,6 +367,11 @@ export default function JoinSession() {
     }) => {
       const viewer = viewerId ? viewers.get(viewerId) : undefined;
       if (!viewer || !viewerId) return;
+      if (
+        incoming.connectionId &&
+        incoming.connectionId !== viewer.connectionId
+      )
+        return;
       const { connection } = viewer;
       try {
         if (incoming.description) {
@@ -332,7 +384,11 @@ export default function JoinSession() {
             );
             socket.emit('webrtc:signal', {
               viewerId,
-              signal: { description: connection.localDescription },
+              connectionId: viewer.connectionId,
+              signal: {
+                description: connection.localDescription,
+                connectionId: viewer.connectionId,
+              },
             });
             await applyStreamQuality(connection, viewer.quality);
           }
@@ -460,7 +516,9 @@ export default function JoinSession() {
         announceSharing();
         // A teacher can request the stream while the screen-picker is open.
         // Start signaling now that capture is actually available.
-        requestedViewers.forEach(createPeer);
+        requestedViewers.forEach((connectionId, viewerId) =>
+          createPeer({ viewerId, connectionId })
+        );
         const screenVideo = document.createElement('video');
         screenVideo.srcObject = screen;
         screenVideo.muted = true;
@@ -648,8 +706,10 @@ export default function JoinSession() {
           });
         };
         recordSegment();
+        let replacingScreen = false;
         const onScreenEnded = () => {
           if (!active) return;
+          if (replacingScreen) return;
           announceSharing();
           setScreenShareLost(true);
           if (!suppressIncidentRef.current) void send('SCREEN_SHARE_STOPPED');
@@ -663,6 +723,7 @@ export default function JoinSession() {
             next.getTracks().forEach((track) => track.stop());
             return;
           }
+          replacingScreen = true;
           screen.getTracks().forEach((track) => track.stop());
           screen = next;
           screenStream.current = next;
@@ -681,6 +742,7 @@ export default function JoinSession() {
           await screenVideo.play().catch(() => undefined);
           track?.addEventListener('ended', onScreenEnded, { once: true });
           announceSharing();
+          replacingScreen = false;
           setScreenShareLost(false);
           if (recorder.current?.state !== 'recording') recordSegment();
         };
