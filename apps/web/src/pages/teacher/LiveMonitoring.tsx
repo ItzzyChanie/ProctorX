@@ -302,7 +302,11 @@ export default function LiveMonitoring() {
   const [sortBy, setSortBy] = useState<SortKey>('risk');
   // Remembered per teacher browser; AUTO sizes tiles to fill the page.
   const [tileSize, setTileSize] = useState<TileSize>(() =>
-    readPreference<TileSize>('proctorx.monitor.tileSize', ['AUTO', 'S', 'M', 'L'], 'AUTO')
+    readPreference<TileSize>(
+      'proctorx.monitor.tileSize',
+      ['AUTO', 'S', 'M', 'L'],
+      'AUTO'
+    )
   );
   // Phones: filters fold behind a single button so the feeds stay in view.
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -335,7 +339,9 @@ export default function LiveMonitoring() {
     gridObserver.current.observe(element);
   }, []);
   const [gridWidth, setGridWidth] = useState(0);
-  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
+  const [viewportHeight, setViewportHeight] = useState(
+    () => window.innerHeight
+  );
   const syncRef = useRef<(id: string) => void>(() => undefined);
   const selectedExam = exams.find((exam) => exam.id === examId);
 
@@ -375,6 +381,8 @@ export default function LiveMonitoring() {
       rtcConfig = config;
     });
     const peers = new Map<string, RTCPeerConnection>();
+    // The student's id for the current connection; other ids are stale.
+    const peerIds = new Map<string, string>();
     const pendingCandidates = new Map<string, RTCIceCandidateInit[]>();
     const watched = new Set<string>();
     const live = new Set<string>();
@@ -438,6 +446,7 @@ export default function LiveMonitoring() {
     const closePeer = (id: string) => {
       peers.get(id)?.close();
       peers.delete(id);
+      peerIds.delete(id);
       pendingCandidates.delete(id);
       live.delete(id);
       qualitySent.delete(id);
@@ -564,11 +573,18 @@ export default function LiveMonitoring() {
       joined = false;
     };
 
-    const ready = async ({ sessionId: id }: { sessionId: string }) => {
-      if (!watched.has(id)) return;
+    const ready = async ({
+      sessionId: id,
+      peerId,
+    }: {
+      sessionId: string;
+      peerId?: string;
+    }) => {
+      if (!watched.has(id) || !peerId) return;
       closePeer(id);
       const peer = new RTCPeerConnection(rtcConfig);
       peers.set(id, peer);
+      peerIds.set(id, peerId);
       const current = () => peers.get(id) === peer;
       // Without a receiving transceiver the offer has no media section and
       // the student's screen track can never be negotiated.
@@ -581,8 +597,10 @@ export default function LiveMonitoring() {
       };
       peer.onicecandidate = ({ candidate }) =>
         candidate &&
+        current() &&
         socket.emit('webrtc:signal', {
           sessionId: id,
+          peerId,
           signal: { candidate: candidate.toJSON() },
         });
       peer.onconnectionstatechange = () => {
@@ -616,6 +634,7 @@ export default function LiveMonitoring() {
         if (!current()) return;
         socket.emit('webrtc:signal', {
           sessionId: id,
+          peerId,
           signal: { description: peer.localDescription },
         });
       } catch {
@@ -624,13 +643,17 @@ export default function LiveMonitoring() {
     };
     const signal = async ({
       sessionId: id,
+      peerId,
       signal: incoming,
     }: {
       sessionId: string;
+      peerId?: string;
       signal: Signal;
     }) => {
       const peer = peers.get(id);
-      if (!peer) return;
+      // An answer or candidate from a replaced connection would break this
+      // one and start a reconnect loop: ignore it.
+      if (!peer || peerIds.get(id) !== peerId) return;
       try {
         if (incoming.description) {
           await peer.setRemoteDescription(incoming.description);
@@ -886,8 +909,14 @@ export default function LiveMonitoring() {
     largeTilesRef.current = largeTiles;
     visibleRef.current.forEach((id) => syncRef.current(id));
   }, [largeTiles]);
-  useEffect(() => savePreference('proctorx.monitor.pageSize', pageSize), [pageSize]);
-  useEffect(() => savePreference('proctorx.monitor.tileSize', tileSize), [tileSize]);
+  useEffect(
+    () => savePreference('proctorx.monitor.pageSize', pageSize),
+    [pageSize]
+  );
+  useEffect(
+    () => savePreference('proctorx.monitor.tileSize', tileSize),
+    [tileSize]
+  );
   // The window height bounds small walls so they fit without scrolling.
   useEffect(() => {
     const onResize = () => setViewportHeight(window.innerHeight);
@@ -1006,8 +1035,12 @@ export default function LiveMonitoring() {
             >
               <span className="flex items-center gap-2">
                 <SlidersHorizontal size={16} /> Filters, sort & layout
-                {[riskFilter, connectionFilter, sectionFilter, specialFilter]
-                  .filter(Boolean).length > 0 && (
+                {[
+                  riskFilter,
+                  connectionFilter,
+                  sectionFilter,
+                  specialFilter,
+                ].filter(Boolean).length > 0 && (
                   <span className="rounded-full bg-brand px-2 py-0.5 text-[10px] text-white">
                     {
                       [
@@ -1101,7 +1134,9 @@ export default function LiveMonitoring() {
               >
                 {PAGE_SIZE_OPTIONS.map((size) => (
                   <option key={size} value={size}>
-                    {size === 1 ? '1 screen per page' : `${size} screens per page`}
+                    {size === 1
+                      ? '1 screen per page'
+                      : `${size} screens per page`}
                   </option>
                 ))}
                 <option value={0}>Show all screens</option>
@@ -1152,31 +1187,35 @@ export default function LiveMonitoring() {
                 </div>
               )}
             </div>
-            <div
-              ref={gridRef}
-              className="mx-auto grid w-full gap-3"
-              style={
-                layout
-                  ? {
-                      gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
-                      maxWidth: layout.maxWidth,
-                    }
-                  : {
-                      gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${TILE_MIN_WIDTH[tileSize as keyof typeof TILE_MIN_WIDTH]}px), 1fr))`,
-                    }
-              }
-            >
-              {pageStudents.map((student) => (
-                <Tile
-                  key={student.id}
-                  student={student}
-                  stream={streams[student.id]}
-                  link={links[student.id]}
-                  frames={frames}
-                  onOpen={openStudent}
-                  onVisible={onVisible}
-                />
-              ))}
+            {/* Measure the full-width wrapper, never the grid itself: the grid
+                gets a maxWidth from that measurement, and observing the element
+                being resized made the layout oscillate (visible flicker). */}
+            <div ref={gridRef} className="w-full">
+              <div
+                className="mx-auto grid w-full gap-3"
+                style={
+                  layout
+                    ? {
+                        gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
+                        maxWidth: layout.maxWidth,
+                      }
+                    : {
+                        gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${TILE_MIN_WIDTH[tileSize as keyof typeof TILE_MIN_WIDTH]}px), 1fr))`,
+                      }
+                }
+              >
+                {pageStudents.map((student) => (
+                  <Tile
+                    key={student.id}
+                    student={student}
+                    stream={streams[student.id]}
+                    link={links[student.id]}
+                    frames={frames}
+                    onOpen={openStudent}
+                    onVisible={onVisible}
+                  />
+                ))}
+              </div>
             </div>
             {loadError && (
               <div className="rounded-lg border border-risk-high/30 bg-risk-high/5 p-6 text-sm text-risk-high">

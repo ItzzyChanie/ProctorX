@@ -238,17 +238,31 @@ export class SessionsGateway implements OnGatewayDisconnect {
 
   @SubscribeMessage('webrtc:ready') ready(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { viewerId?: string }
+    @MessageBody() b: { viewerId?: string; peerId?: string }
   ) {
     const { sessionId } = c.data as StudentData;
-    if (!sessionId || typeof b?.viewerId !== 'string') return;
-    this.server.to(b.viewerId).emit('webrtc:ready', { sessionId });
+    const peerId = this.peerId(b?.peerId);
+    if (!sessionId || typeof b?.viewerId !== 'string' || !peerId) return;
+    this.server.to(b.viewerId).emit('webrtc:ready', { sessionId, peerId });
   }
 
+  /**
+   * Every peer connection carries the id the student generated for it, so a
+   * late offer/answer/ICE candidate from a replaced connection is ignored
+   * instead of breaking the new one (which made the feed reconnect in a loop).
+   */
   @SubscribeMessage('webrtc:signal') signal(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sessionId?: string; viewerId?: string; signal: unknown }
+    @MessageBody()
+    b: {
+      sessionId?: string;
+      viewerId?: string;
+      peerId?: string;
+      signal: unknown;
+    }
   ) {
+    const peerId = this.peerId(b?.peerId);
+    if (!peerId) return;
     const { sessionId } = c.data as StudentData;
     if (sessionId) {
       // Student -> one specific viewer. The sessionId comes from the
@@ -256,13 +270,19 @@ export class SessionsGateway implements OnGatewayDisconnect {
       if (typeof b?.viewerId === 'string')
         this.server
           .to(b.viewerId)
-          .emit('webrtc:signal', { sessionId, signal: b.signal });
+          .emit('webrtc:signal', { sessionId, peerId, signal: b.signal });
       return;
     }
     if (!this.canControl(c, b?.sessionId)) return;
     this.server
       .to(rooms.student(b.sessionId!))
-      .emit('webrtc:signal', { viewerId: c.id, signal: b.signal });
+      .emit('webrtc:signal', { viewerId: c.id, peerId, signal: b.signal });
+  }
+
+  private peerId(value: unknown) {
+    return typeof value === 'string' && /^[\w-]{1,64}$/.test(value)
+      ? value
+      : null;
   }
 
   @SubscribeMessage('screen:frame') frame(

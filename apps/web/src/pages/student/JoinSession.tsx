@@ -197,12 +197,11 @@ export default function JoinSession() {
             {
               responseText: answer.responseText,
               selectedOptionIds: answer.selectedOptionIds,
-              enumerationAnswers:
-                joined.exam.questions.find(
-                  (question: any) => question.id === answer.questionId
-                )?.type.match(/^(ENUMERATION|FILL_IN_THE_BLANK)$/)
-                  ? parseEnumerationResponse(answer.responseText)
-                  : undefined,
+              enumerationAnswers: joined.exam.questions
+                .find((question: any) => question.id === answer.questionId)
+                ?.type.match(/^(ENUMERATION|FILL_IN_THE_BLANK)$/)
+                ? parseEnumerationResponse(answer.responseText)
+                : undefined,
             },
           ])
         )
@@ -249,6 +248,8 @@ export default function JoinSession() {
     });
     // One peer connection per viewer, so several teachers / tabs can watch.
     type Viewer = {
+      /** Unique per connection; signals for any other id are stale. */
+      peerId: string;
       connection: RTCPeerConnection;
       quality: StreamQuality;
       pending: RTCIceCandidateInit[];
@@ -265,15 +266,25 @@ export default function JoinSession() {
       if (!stream) return;
       closeViewer(viewerId);
       const connection = new RTCPeerConnection(rtcConfig);
-      const viewer: Viewer = { connection, quality: 'thumb', pending: [] };
+      const peerId =
+        globalThis.crypto?.randomUUID?.() ??
+        `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      const viewer: Viewer = {
+        peerId,
+        connection,
+        quality: 'thumb',
+        pending: [],
+      };
       viewers.set(viewerId, viewer);
       stream
         .getVideoTracks()
         .forEach((track) => connection.addTrack(track, stream));
       connection.onicecandidate = ({ candidate }) =>
         candidate &&
+        viewers.get(viewerId) === viewer &&
         socket.emit('webrtc:signal', {
           viewerId,
+          peerId,
           signal: { candidate: candidate.toJSON() },
         });
       connection.onconnectionstatechange = () => {
@@ -283,7 +294,7 @@ export default function JoinSession() {
         )
           closeViewer(viewerId);
       };
-      socket.emit('webrtc:ready', { viewerId });
+      socket.emit('webrtc:ready', { viewerId, peerId });
     };
     const watch = ({ viewerId }: { viewerId?: string }) => {
       if (!viewerId) return;
@@ -313,13 +324,16 @@ export default function JoinSession() {
     };
     const signal = async ({
       viewerId,
+      peerId,
       signal: incoming,
     }: {
       viewerId?: string;
+      peerId?: string;
       signal: Signal;
     }) => {
       const viewer = viewerId ? viewers.get(viewerId) : undefined;
-      if (!viewer || !viewerId) return;
+      // Drop signals meant for a connection that has since been replaced.
+      if (!viewer || !viewerId || viewer.peerId !== peerId) return;
       const { connection } = viewer;
       try {
         if (incoming.description) {
@@ -330,8 +344,10 @@ export default function JoinSession() {
             await connection.setLocalDescription(
               await connection.createAnswer()
             );
+            if (viewers.get(viewerId) !== viewer) return;
             socket.emit('webrtc:signal', {
               viewerId,
+              peerId,
               signal: { description: connection.localDescription },
             });
             await applyStreamQuality(connection, viewer.quality);
@@ -449,7 +465,9 @@ export default function JoinSession() {
         if (cameraOnly) await enterFullscreenIfSupported();
         else if (!document.fullscreenElement)
           await document.documentElement.requestFullscreen();
-        const captureFeed = cameraOnly ? captureCameraFeed : captureEntireScreen;
+        const captureFeed = cameraOnly
+          ? captureCameraFeed
+          : captureEntireScreen;
         let screen = await captureFeed();
         if (!active) {
           screen.getTracks().forEach((track) => track.stop());
@@ -747,7 +765,10 @@ export default function JoinSession() {
           processor.connect(context.destination);
           const sample = () => {
             const captured = pcm.splice(0);
-            const { samples, rate } = toSpeechRate(captured, context.sampleRate);
+            const { samples, rate } = toSpeechRate(
+              captured,
+              context.sampleRate
+            );
             // Only send audio that could contain speech; the server's voice
             // detector still makes the decision. Saves ~95% of uploads.
             if (!samples.length || !rate || rms(samples) < SILENCE_RMS) return;
@@ -904,7 +925,9 @@ export default function JoinSession() {
   useEffect(() => {
     if (!attemptId) return;
     try {
-      const saved = window.sessionStorage.getItem(`proctorx.flags.${attemptId}`);
+      const saved = window.sessionStorage.getItem(
+        `proctorx.flags.${attemptId}`
+      );
       setFlagged(new Set(saved ? (JSON.parse(saved) as string[]) : []));
     } catch {
       setFlagged(new Set());
@@ -938,7 +961,9 @@ export default function JoinSession() {
     );
   };
   const isAnswered = (questionId: string) => {
-    const question = exam?.exam.questions.find((item: any) => item.id === questionId);
+    const question = exam?.exam.questions.find(
+      (item: any) => item.id === questionId
+    );
     return question ? hasAnswer(question, answers[questionId]) : false;
   };
   const isSelected = (questionId: string, optionId: string) =>
@@ -1229,8 +1254,8 @@ export default function JoinSession() {
                         <Camera className="shrink-0 text-sky-600" size={18} />
                         <span>
                           <b>Phone/tablet mode.</b> Screen sharing is not
-                          available on mobile browsers, so your front camera
-                          is used for live monitoring and evidence instead. Keep
+                          available on mobile browsers, so your front camera is
+                          used for live monitoring and evidence instead. Keep
                           your face visible and stay in this browser tab —
                           switching apps or tabs is recorded.
                         </span>
@@ -1240,10 +1265,10 @@ export default function JoinSession() {
                       <Clock3 className="shrink-0 text-violet-600" size={18} />
                       <span>
                         A {preview.durationMinutes}-minute timer appears inside
-                        the room and begins once you enter the room.
-                        Fullscreen exits and tab switches do not pause it. Your
-                        saved time resumes after an accidental shutdown, but the
-                        scheduled closing time remains the final deadline.
+                        the room and begins once you enter the room. Fullscreen
+                        exits and tab switches do not pause it. Your saved time
+                        resumes after an accidental shutdown, but the scheduled
+                        closing time remains the final deadline.
                       </span>
                     </p>
                     <p className="flex gap-2">
@@ -1443,7 +1468,8 @@ export default function JoinSession() {
                   share which answers were right. */}
               <div className="mt-6 rounded-2xl border border-violet-200 bg-violet-50 p-5 text-sm text-violet-900">
                 Your result will appear in <b>My Sessions</b> after the exam
-                closes{score?.maxScore ? ` (out of ${score.maxScore} points)` : ''}.
+                closes
+                {score?.maxScore ? ` (out of ${score.maxScore} points)` : ''}.
                 Written answers are graded by your teacher first.
               </div>
               <Button
@@ -1551,8 +1577,8 @@ export default function JoinSession() {
                           flagged.has(question.id)
                             ? 'border-amber-300 ring-1 ring-amber-100'
                             : hasAnswer(question, answers[question.id])
-                            ? 'border-emerald-300 ring-1 ring-emerald-100'
-                            : 'border-slate-200'
+                              ? 'border-emerald-300 ring-1 ring-emerald-100'
+                              : 'border-slate-200'
                         }`}
                       >
                         <div className="mb-5 flex items-start gap-4 border-b border-slate-100 pb-5">
@@ -1581,7 +1607,9 @@ export default function JoinSession() {
                                 }`}
                               >
                                 <Flag size={11} aria-hidden="true" />
-                                {flagged.has(question.id) ? 'Flagged' : 'Flag for review'}
+                                {flagged.has(question.id)
+                                  ? 'Flagged'
+                                  : 'Flag for review'}
                               </button>
                               {question.isRequired && (
                                 <span className="rounded-full bg-rose-100 px-2.5 py-1 text-rose-700">
@@ -1619,9 +1647,7 @@ export default function JoinSession() {
                                 }
                                 className="sr-only"
                                 checked={isSelected(question.id, option.id)}
-                                onChange={() =>
-                                  choose(question, option.id)
-                                }
+                                onChange={() => choose(question, option.id)}
                                 name={question.id}
                               />
                               <span
@@ -1666,7 +1692,9 @@ export default function JoinSession() {
                                       next[blankIndex] = event.target.value;
                                       return {
                                         ...current,
-                                        [question.id]: { enumerationAnswers: next },
+                                        [question.id]: {
+                                          enumerationAnswers: next,
+                                        },
                                       };
                                     })
                                   }
@@ -1710,7 +1738,13 @@ export default function JoinSession() {
                               </div>
                             ))}
                             <p className="text-xs text-slate-500">
-                              Give {enumerationEntries(question, answers[question.id]).length}{' '}
+                              Give{' '}
+                              {
+                                enumerationEntries(
+                                  question,
+                                  answers[question.id]
+                                ).length
+                              }{' '}
                               answers. Order does not matter; each correct
                               answer is checked separately.
                             </p>
