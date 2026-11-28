@@ -1,4 +1,8 @@
-import { VIOLATION_EVENTS, isViolationEvent } from '../common/violation-events';
+import {
+  REVIEW_EVENTS,
+  VIOLATION_EVENTS,
+  isViolationEvent,
+} from '../common/violation-events';
 import {
   ForbiddenException,
   Injectable,
@@ -144,7 +148,7 @@ export class ReportsService implements OnModuleInit, OnModuleDestroy {
     const sessions = await this.prisma.examSession.findMany({
       where: {
         exam: { subject: { teacherId } },
-        events: { some: VIOLATION_EVENTS },
+        events: { some: REVIEW_EVENTS },
         integrityArchivedAt: archived ? { not: null } : null,
       },
       select: {

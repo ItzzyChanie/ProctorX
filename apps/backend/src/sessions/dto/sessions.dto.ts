@@ -28,6 +28,8 @@ export class EventDto {
     'SCREEN_SHARE_STOPPED',
     'MULTIPLE_DISPLAYS',
     'EXTERNAL_FORM_OPENED',
+    'CAMERA_UNAVAILABLE',
+    'MICROPHONE_UNAVAILABLE',
   ])
   type!:
     | 'TAB_SWITCH'
@@ -37,7 +39,9 @@ export class EventDto {
     | 'IDLE'
     | 'SCREEN_SHARE_STOPPED'
     | 'MULTIPLE_DISPLAYS'
-    | 'EXTERNAL_FORM_OPENED';
+    | 'EXTERNAL_FORM_OPENED'
+    | 'CAMERA_UNAVAILABLE'
+    | 'MICROPHONE_UNAVAILABLE';
   @IsOptional() @IsNumber() @Min(0) @Max(1) intensity?: number;
   @IsOptional() @IsObject() metadata?: Record<string, unknown>;
 }
@@ -45,6 +49,8 @@ export class EvidenceClipDto {
   @IsString() eventId!: string;
   @IsIn(['PREVIOUS', 'INCIDENT', 'FOLLOWING'])
   phase!: 'PREVIOUS' | 'INCIDENT' | 'FOLLOWING';
+  /** CAMERA = the webcam recorded alongside the screen for the same segment. */
+  @IsOptional() @IsIn(['SCREEN', 'CAMERA']) track?: 'SCREEN' | 'CAMERA';
   @IsDateString() startedAt!: string;
   @IsDateString() endedAt!: string;
 }

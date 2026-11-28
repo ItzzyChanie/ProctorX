@@ -10,6 +10,8 @@ import {
 } from 'react';
 import {
   AlertTriangle,
+  Camera,
+  CameraOff,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -17,6 +19,7 @@ import {
   Hand,
   Maximize2,
   MessageSquare,
+  MicOff,
   Monitor,
   MonitorOff,
   RotateCcw,
@@ -56,6 +59,11 @@ type Student = {
   screenSharing: boolean;
   /** 'camera' = student is on a phone/tablet streaming the front camera. */
   feedSource: 'screen' | 'camera';
+  /** The exam has "Require camera" on. */
+  requireCamera: boolean;
+  /** missing = no working device (allowed); blocked = student denied access. */
+  cameraStatus: DeviceStatus;
+  microphoneStatus: DeviceStatus;
   raisedHand: boolean;
   remainingSeconds: number;
   extraTimeSeconds: number;
@@ -77,12 +85,24 @@ type Signal = {
 /** live = WebRTC video, fallback = periodic image frames over the socket. */
 type Link = 'connecting' | 'live' | 'fallback';
 type Quality = 'off' | 'thumb' | 'focus';
+type DeviceStatus = 'missing' | 'blocked' | null;
+const toDeviceStatus = (value: unknown): DeviceStatus =>
+  value === 'missing' || value === 'blocked' ? value : null;
 type SortKey = 'risk' | 'violations' | 'hand' | 'name';
 
 const CONNECT_TIMEOUT_MS = 10_000;
 const DISCONNECT_GRACE_MS = 5_000;
 const REFRESH_DEBOUNCE_MS = 600;
 const TIER_RANK = { HIGH: 3, MEDIUM: 2, LOW: 1 } as const;
+/** Previews arrive every ~1.5 s; past this the camera is shown as paused. */
+const FACE_STALE_MS = 6_000;
+
+/**
+ * Desktop students on camera-required exams get a face panel beside their
+ * screen. Phones/tablets already stream the camera as their main feed.
+ */
+const hasFacePanel = (student: Pick<Student, 'requireCamera' | 'feedSource'>) =>
+  student.requireCamera && student.feedSource === 'screen';
 
 /**
  * Fallback frames bypass React state of the page: each tile subscribes to its
@@ -157,11 +177,76 @@ function ScreenView({
   );
 }
 
+/** Small face photo of a desktop student, refreshed every ~1.5 s. */
+function FaceView({
+  id,
+  name,
+  faces,
+  status,
+  compact,
+}: {
+  id: string;
+  name: string;
+  faces: FrameStore;
+  status?: DeviceStatus;
+  compact?: boolean;
+}) {
+  const face = useSyncExternalStore(
+    useCallback((listener) => faces.subscribe(id, listener), [faces, id]),
+    () => faces.get(id)
+  );
+  // A frozen photo must not pass for a live one.
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    setStale(false);
+    if (!face) return;
+    const timer = window.setTimeout(() => setStale(true), FACE_STALE_MS);
+    return () => window.clearTimeout(timer);
+  }, [face]);
+  if (status)
+    return (
+      <span className="grid h-full w-full place-items-center bg-slate-900 p-1 text-center text-white/70">
+        <span className="flex flex-col items-center gap-1">
+          <CameraOff size={compact ? 16 : 22} />
+          <span className="text-[10px] leading-tight">
+            {status === 'missing' ? 'No webcam detected' : 'Camera blocked'}
+          </span>
+        </span>
+      </span>
+    );
+  return (
+    <span className="relative block h-full w-full overflow-hidden bg-slate-900">
+      {face ? (
+        <img
+          src={face}
+          alt={`${name}'s camera`}
+          className={`h-full w-full object-cover ${stale ? 'opacity-40 grayscale' : ''}`}
+        />
+      ) : (
+        <span className="absolute inset-0 grid place-items-center text-white/60">
+          <Camera size={compact ? 16 : 24} />
+        </span>
+      )}
+      {(stale || !face) && !compact && (
+        <span className="absolute inset-x-0 bottom-0 bg-black/60 px-1 py-0.5 text-center text-[10px] text-white/80">
+          {face ? 'Camera paused' : 'Waiting for camera…'}
+        </span>
+      )}
+      {stale && compact && (
+        <span className="absolute inset-0 grid place-items-center">
+          <CameraOff size={16} className="text-white/80" />
+        </span>
+      )}
+    </span>
+  );
+}
+
 const Tile = memo(function Tile({
   student,
   stream,
   link,
   frames,
+  faces,
   onOpen,
   onVisible,
 }: {
@@ -169,6 +254,7 @@ const Tile = memo(function Tile({
   stream?: MediaStream;
   link?: Link;
   frames: FrameStore;
+  faces: FrameStore;
   onOpen: (id: string) => void;
   onVisible: (id: string, visible: boolean) => void;
 }) {
@@ -189,6 +275,9 @@ const Tile = memo(function Tile({
   }, [student.id, onVisible]);
   const live = link === 'live';
   const notSharing = student.connected && !student.screenSharing;
+  const face = hasFacePanel(student);
+  // Overlays sit over the screen side so they never cover the face.
+  const overlayLeft = face ? 'left-[30%]' : 'left-0';
   return (
     <button
       ref={ref}
@@ -204,7 +293,9 @@ const Tile = memo(function Tile({
               : 'border-amber-400'
       }`}
     >
-      <span className="absolute left-2 top-2 z-10 flex flex-wrap gap-1.5">
+      <span
+        className={`absolute ${face ? 'left-[calc(30%+0.5rem)]' : 'left-2'} right-2 top-2 z-10 flex flex-wrap gap-1.5`}
+      >
         <span
           className={`rounded-full px-2 py-1 text-[10px] font-bold text-white ${student.connected ? 'bg-emerald-600' : 'bg-slate-600'}`}
         >
@@ -231,6 +322,32 @@ const Tile = memo(function Tile({
             <Smartphone className="inline" size={11} /> mobile · camera
           </span>
         )}
+        {student.requireCamera && student.cameraStatus && (
+          <span
+            className={`rounded-full px-2 py-1 text-[10px] font-bold text-white ${student.cameraStatus === 'blocked' ? 'bg-red-600' : 'bg-slate-600'}`}
+            title={
+              student.cameraStatus === 'blocked'
+                ? 'The student blocked camera access. Their exam is paused until they allow it.'
+                : 'No working camera on this device. The student was allowed to continue; face checks are skipped.'
+            }
+          >
+            <CameraOff className="inline" size={11} />{' '}
+            {student.cameraStatus === 'blocked' ? 'camera blocked' : 'no camera'}
+          </span>
+        )}
+        {student.microphoneStatus && (
+          <span
+            className={`rounded-full px-2 py-1 text-[10px] font-bold text-white ${student.microphoneStatus === 'blocked' ? 'bg-red-600' : 'bg-slate-600'}`}
+            title={
+              student.microphoneStatus === 'blocked'
+                ? 'The student blocked microphone access. Their exam is paused until they allow it.'
+                : 'No working microphone on this device. The student was allowed to continue; voice checks are skipped.'
+            }
+          >
+            <MicOff className="inline" size={11} />{' '}
+            {student.microphoneStatus === 'blocked' ? 'mic blocked' : 'no mic'}
+          </span>
+        )}
         {student.raisedHand && (
           <span className="rounded-full bg-blue-600 px-2 py-1 text-[10px] font-bold text-white">
             <Hand className="inline" size={11} /> raised hand
@@ -242,35 +359,54 @@ const Tile = memo(function Tile({
           </span>
         )}
       </span>
-      <ScreenView
-        id={student.id}
-        name={student.name}
-        stream={stream}
-        live={live}
-        frames={frames}
-        fit="h-full w-full object-contain"
-        placeholder={
-          <span className="absolute inset-0 grid place-items-center px-4 text-center text-sm text-white/70">
-            <span className="flex items-center">
-              <Monitor size={20} className="mr-2" />
-              {student.connected
-                ? `Connecting to ${student.name}…`
-                : `${student.name} is offline`}
+      <span className="absolute inset-0 flex">
+        {face && (
+          <span className="h-full w-[30%] shrink-0 border-r border-white/15">
+            <FaceView
+              id={student.id}
+              name={student.name}
+              faces={faces}
+              status={student.cameraStatus}
+            />
+          </span>
+        )}
+        <span className="relative block h-full min-w-0 flex-1">
+          <ScreenView
+            id={student.id}
+            name={student.name}
+            stream={stream}
+            live={live}
+            frames={frames}
+            // Selfie-camera feeds are cropped to fill the tile (the face is
+            // centred); screens are never cropped so no edge is hidden.
+            fit={`h-full w-full ${
+              student.feedSource === 'camera' ? 'object-cover' : 'object-contain'
+            }`}
+            placeholder={
+              <span className="absolute inset-0 grid place-items-center px-4 text-center text-sm text-white/70">
+                <span className="flex items-center">
+                  <Monitor size={20} className="mr-2" />
+                  {student.connected
+                    ? `Connecting to ${student.name}…`
+                    : `${student.name} is offline`}
+                </span>
+              </span>
+            }
+          />
+          {notSharing && (
+            <span className="absolute inset-0 z-[5] grid place-items-center bg-red-950/80 px-4 text-center text-sm font-semibold text-white">
+              <span className="flex items-center">
+                <MonitorOff size={18} className="mr-2" />
+                {student.feedSource === 'camera'
+                  ? 'Camera feed stopped'
+                  : 'Screen sharing stopped'}
+              </span>
             </span>
-          </span>
-        }
-      />
-      {notSharing && (
-        <span className="absolute inset-0 z-[5] grid place-items-center bg-red-950/80 px-4 text-center text-sm font-semibold text-white">
-          <span className="flex items-center">
-            <MonitorOff size={18} className="mr-2" />
-            {student.feedSource === 'camera'
-              ? 'Camera feed stopped'
-              : 'Screen sharing stopped'}
-          </span>
+          )}
         </span>
-      )}
-      <span className="absolute bottom-0 left-0 right-0 z-10 flex items-center justify-between gap-2 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-8 text-sm text-white">
+      </span>
+      <span className={`absolute bottom-0 ${overlayLeft} right-0 z-10 flex items-center justify-between gap-2 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-8 text-sm text-white`}
+      >
         <span className="truncate">
           {student.name} · Score {student.score} ({student.tier.toLowerCase()}{' '}
           risk) · {student.tabSwitches} tab switch
@@ -322,6 +458,7 @@ export default function LiveMonitoring() {
   const [extraMinutes, setExtraMinutes] = useState(10);
   const [actionMessage, setActionMessage] = useState('');
   const [frames] = useState(() => new FrameStore());
+  const [faces] = useState(() => new FrameStore());
   const selectedRef = useRef<string | null>(null);
   const visibleRef = useRef(new Set<string>());
   // True when only a few tiles are on screen: they get full-quality video.
@@ -388,6 +525,10 @@ export default function LiveMonitoring() {
     const live = new Set<string>();
     const fallbackWanted = new Set<string>();
     const fallbackSent = new Set<string>();
+    // Students whose tile has a face panel, and those we asked for previews.
+    const faceCapable = new Set<string>();
+    const faceSent = new Set<string>();
+    let examRequiresCamera = false;
     const qualitySent = new Map<string, Quality>();
     const retries = new Map<string, number>();
     const timers = new Map<string, number>();
@@ -426,6 +567,12 @@ export default function LiveMonitoring() {
         if (wantFrames) fallbackSent.add(id);
         else fallbackSent.delete(id);
         socket.emit('screen:fallback', { sessionId: id, enabled: wantFrames });
+      }
+      const wantFace = faceCapable.has(id) && shown;
+      if (wantFace !== faceSent.has(id)) {
+        if (wantFace) faceSent.add(id);
+        else faceSent.delete(id);
+        socket.emit('face:preview', { sessionId: id, enabled: wantFace });
       }
       if (live.has(id)) {
         const quality: Quality =
@@ -493,11 +640,14 @@ export default function LiveMonitoring() {
       closePeer(id);
       fallbackWanted.delete(id);
       fallbackSent.delete(id);
+      faceCapable.delete(id);
+      faceSent.delete(id);
       retries.delete(id);
       clearTimer(`connect:${id}`);
       clearTimer(`retry:${id}`);
       setLink(id);
       frames.set(id);
+      faces.set(id);
       if (socket.connected) socket.emit('webrtc:unwatch', { sessionId: id });
     };
 
@@ -520,6 +670,9 @@ export default function LiveMonitoring() {
           connectionStatus: session.connectionStatus,
           screenSharing: Boolean(session.screenSharing),
           feedSource: session.feedSource === 'camera' ? 'camera' : 'screen',
+          requireCamera: Boolean(session.requireCamera),
+          cameraStatus: toDeviceStatus(session.cameraStatus),
+          microphoneStatus: toDeviceStatus(session.microphoneStatus),
           raisedHand: Boolean(session.raisedHand),
           remainingSeconds: session.remainingSeconds ?? 0,
           extraTimeSeconds: session.extraTimeSeconds ?? 0,
@@ -544,6 +697,14 @@ export default function LiveMonitoring() {
         const ids = new Set(next.map((student) => student.id));
         next.forEach((student) => watch(student.id));
         [...watched].filter((id) => !ids.has(id)).forEach(unwatch);
+        // The same for every attempt of this exam.
+        examRequiresCamera = next.some((student) => student.requireCamera);
+        next.forEach((student) => {
+          if (hasFacePanel(student) && !student.cameraStatus)
+            faceCapable.add(student.id);
+          else faceCapable.delete(student.id);
+          sync(student.id);
+        });
       } catch {
         if (active && seq === refreshSeq) setLoadError(true);
       }
@@ -563,6 +724,7 @@ export default function LiveMonitoring() {
         // Server-side watch rooms are lost with the old socket, and students
         // already closed the peers of the old viewer id: request again.
         fallbackSent.clear();
+        faceSent.clear();
         watched.forEach((id) => {
           closePeer(id);
           requestStream(id);
@@ -711,6 +873,7 @@ export default function LiveMonitoring() {
     const sessionEnded = ({ sessionId }: { sessionId: string }) => {
       // The student is gone: don't keep showing a frozen last video frame.
       closePeer(sessionId);
+      faces.set(sessionId);
       clearTimer(`connect:${sessionId}`);
       clearTimer(`retry:${sessionId}`);
       setLink(sessionId, 'connecting');
@@ -732,22 +895,41 @@ export default function LiveMonitoring() {
       sessionId,
       sharing,
       source,
+      camera,
+      microphone,
     }: {
       sessionId: string;
       sharing: boolean;
       source?: 'screen' | 'camera';
-    }) =>
+      camera?: string | null;
+      microphone?: string | null;
+    }) => {
+      const feedSource = source === 'camera' ? 'camera' : 'screen';
+      const cameraStatus = toDeviceStatus(camera);
+      if (watched.has(sessionId)) {
+        // No webcam: nothing to fetch, the panel just says so.
+        if (
+          hasFacePanel({ requireCamera: examRequiresCamera, feedSource }) &&
+          !cameraStatus
+        )
+          faceCapable.add(sessionId);
+        else faceCapable.delete(sessionId);
+        sync(sessionId);
+      }
       setStudents((current) =>
         current.map((student) =>
           student.id === sessionId
             ? {
                 ...student,
                 screenSharing: sharing,
-                feedSource: source === 'camera' ? 'camera' : 'screen',
+                feedSource,
+                cameraStatus,
+                microphoneStatus: toDeviceStatus(microphone),
               }
             : student
         )
       );
+    };
     const timeAdjusted = ({
       sessionId,
       remainingSeconds,
@@ -800,6 +982,21 @@ export default function LiveMonitoring() {
         )
       );
     };
+    const faceFrame = ({
+      sessionId,
+      frame: incoming,
+    }: {
+      sessionId: string;
+      frame: ArrayBuffer | Uint8Array;
+    }) => {
+      if (!active || !faceSent.has(sessionId)) return;
+      faces.set(
+        sessionId,
+        URL.createObjectURL(
+          new Blob([incoming as BlobPart], { type: 'image/jpeg' })
+        )
+      );
+    };
 
     socket.on('connect', joinMonitorRoom);
     socket.on('disconnect', onDisconnect);
@@ -812,6 +1009,7 @@ export default function LiveMonitoring() {
     socket.on('monitor:time-adjusted', timeAdjusted);
     socket.on('monitor:warning-acknowledged', warningAcknowledged);
     socket.on('screen:frame', frame);
+    socket.on('face:frame', faceFrame);
     socket.connect();
     if (socket.connected) joinMonitorRoom();
     void refreshStudents();
@@ -831,13 +1029,15 @@ export default function LiveMonitoring() {
       socket.off('monitor:time-adjusted', timeAdjusted);
       socket.off('monitor:warning-acknowledged', warningAcknowledged);
       socket.off('screen:frame', frame);
+      socket.off('face:frame', faceFrame);
       syncRef.current = () => undefined;
       frames.clear();
+      faces.clear();
       setStreams({});
       setLinks({});
       socket.disconnect();
     };
-  }, [examId, frames]);
+  }, [examId, frames, faces]);
 
   const chooseExam = (id: string) => {
     setSelectedId(null);
@@ -1211,6 +1411,7 @@ export default function LiveMonitoring() {
                     stream={streams[student.id]}
                     link={links[student.id]}
                     frames={frames}
+                    faces={faces}
                     onOpen={openStudent}
                     onVisible={onVisible}
                   />
@@ -1342,32 +1543,51 @@ export default function LiveMonitoring() {
                 </p>
               )}
             </div>
-            <div className="relative mb-3 grid min-h-[38dvh] flex-1 place-items-center overflow-hidden rounded-lg bg-black lg:mb-0 lg:min-h-0">
-              <ScreenView
-                id={selectedStudent.id}
-                name={selectedStudent.name}
-                stream={streams[selectedStudent.id]}
-                live={links[selectedStudent.id] === 'live'}
-                frames={frames}
-                fit="max-h-full max-w-full object-contain"
-                placeholder={
-                  <span className="text-sm text-white/70">
-                    {selectedStudent.connected
-                      ? 'Connecting…'
-                      : 'Student is offline.'}
-                  </span>
-                }
-              />
-              {selectedStudent.connected && !selectedStudent.screenSharing && (
-                <span className="absolute inset-0 grid place-items-center bg-red-950/80 text-white">
-                  <span className="flex items-center font-semibold">
-                    <MonitorOff size={20} className="mr-2" />
-                    {selectedStudent.feedSource === 'camera'
-                      ? "This student's camera feed has stopped."
-                      : 'This student has stopped sharing their screen.'}
-                  </span>
-                </span>
+            <div className="mb-3 flex min-h-[38dvh] flex-1 gap-2 overflow-hidden lg:mb-0 lg:min-h-0">
+              {hasFacePanel(selectedStudent) && (
+                // Face on the left, much smaller than the screen beside it.
+                <div className="flex w-[22%] min-w-[96px] max-w-[320px] shrink-0 flex-col gap-1">
+                  <div className="aspect-[4/3] w-full overflow-hidden rounded-lg">
+                    <FaceView
+                      id={selectedStudent.id}
+                      name={selectedStudent.name}
+                      faces={faces}
+                      status={selectedStudent.cameraStatus}
+                    />
+                  </div>
+                  <p className="text-[11px] text-white/60">
+                    Camera · updates every few seconds
+                  </p>
+                </div>
               )}
+              <div className="relative grid min-w-0 flex-1 place-items-center overflow-hidden rounded-lg bg-black">
+                <ScreenView
+                  id={selectedStudent.id}
+                  name={selectedStudent.name}
+                  stream={streams[selectedStudent.id]}
+                  live={links[selectedStudent.id] === 'live'}
+                  frames={frames}
+                  fit="max-h-full max-w-full object-contain"
+                  placeholder={
+                    <span className="text-sm text-white/70">
+                      {selectedStudent.connected
+                        ? 'Connecting…'
+                        : 'Student is offline.'}
+                    </span>
+                  }
+                />
+                {selectedStudent.connected &&
+                  !selectedStudent.screenSharing && (
+                    <span className="absolute inset-0 grid place-items-center bg-red-950/80 text-white">
+                      <span className="flex items-center font-semibold">
+                        <MonitorOff size={20} className="mr-2" />
+                        {selectedStudent.feedSource === 'camera'
+                          ? "This student's camera feed has stopped."
+                          : 'This student has stopped sharing their screen.'}
+                      </span>
+                    </span>
+                  )}
+              </div>
             </div>
           </div>
         </div>

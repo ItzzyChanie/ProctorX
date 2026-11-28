@@ -24,6 +24,7 @@ import { PrismaService } from '../prisma/prisma.service';
  *   student:<sessionId>     the student socket(s) of one attempt
  *   watch:<sessionId>       teacher sockets viewing that student's screen
  *   fallback:<sessionId>    viewers whose WebRTC failed and need image frames
+ *   face:<sessionId>        viewers showing that student's face preview
  */
 const rooms = {
   monitor: (examId: string) => `monitor:${examId}`,
@@ -31,6 +32,7 @@ const rooms = {
   student: (sessionId: string) => `student:${sessionId}`,
   watch: (sessionId: string) => `watch:${sessionId}`,
   fallback: (sessionId: string) => `fallback:${sessionId}`,
+  face: (sessionId: string) => `face:${sessionId}`,
 };
 
 type StudentData = {
@@ -40,9 +42,22 @@ type StudentData = {
   connectedAt?: number;
   lastActivityAt?: number;
   lastFrameAt?: number;
+  lastFaceAt?: number;
   screenSharing?: boolean;
   /** 'camera' when a phone/tablet streams its front camera instead of the screen. */
   feedSource?: 'screen' | 'camera';
+  /** Set when a required device is missing/broken, or blocked by the student. */
+  cameraStatus?: DeviceStatus;
+  microphoneStatus?: DeviceStatus;
+};
+type DeviceStatus = 'missing' | 'blocked';
+const deviceStatus = (value: unknown): DeviceStatus | undefined =>
+  value === 'missing' || value === 'blocked' ? value : undefined;
+export type StudentState = {
+  screenSharing: boolean;
+  feedSource: 'screen' | 'camera';
+  cameraStatus?: DeviceStatus;
+  microphoneStatus?: DeviceStatus;
 };
 type TeacherData = {
   user?: SocketUser;
@@ -53,6 +68,9 @@ type Quality = 'off' | 'thumb' | 'focus';
 
 const MAX_FRAME_BYTES = 512 * 1024;
 const MIN_FRAME_INTERVAL_MS = 400;
+// Face previews are tiny JPEGs (a few KB) sent every ~1.5 s.
+const MAX_FACE_BYTES = 64 * 1024;
+const MIN_FACE_INTERVAL_MS = 800;
 
 @WebSocketGateway()
 export class SessionsGateway implements OnGatewayDisconnect {
@@ -169,6 +187,16 @@ export class SessionsGateway implements OnGatewayDisconnect {
     await this.syncFallback(b.sessionId!);
   }
 
+  @SubscribeMessage('face:preview') async facePreview(
+    @ConnectedSocket() c: Socket,
+    @MessageBody() b: { sessionId?: string; enabled?: boolean }
+  ) {
+    if (!this.canControl(c, b?.sessionId)) return;
+    if (b.enabled) await c.join(rooms.face(b.sessionId!));
+    else await c.leave(rooms.face(b.sessionId!));
+    await this.syncFace(b.sessionId!);
+  }
+
   // ---------------------------------------------------------------- student
 
   @SubscribeMessage('student:join') async student(
@@ -211,6 +239,7 @@ export class SessionsGateway implements OnGatewayDisconnect {
       c.emit('webrtc:request', { viewerId: viewer.id })
     );
     await this.syncFallback(session.id);
+    await this.syncFace(session.id);
     return { ok: true };
   }
 
@@ -222,17 +251,27 @@ export class SessionsGateway implements OnGatewayDisconnect {
 
   @SubscribeMessage('screen:state') async screenState(
     @ConnectedSocket() c: Socket,
-    @MessageBody() b: { sharing?: boolean; source?: string }
+    @MessageBody()
+    b: {
+      sharing?: boolean;
+      source?: string;
+      camera?: string;
+      microphone?: string;
+    }
   ) {
     const data = c.data as StudentData;
     if (!data.sessionId || !data.examId) return;
     data.screenSharing = Boolean(b?.sharing);
     data.feedSource = b?.source === 'camera' ? 'camera' : 'screen';
+    data.cameraStatus = deviceStatus(b?.camera);
+    data.microphoneStatus = deviceStatus(b?.microphone);
     this.touch(c);
     this.emitMonitor(data.examId, 'monitor:screen-state', {
       sessionId: data.sessionId,
       sharing: data.screenSharing,
       source: data.feedSource,
+      camera: data.cameraStatus ?? null,
+      microphone: data.microphoneStatus ?? null,
     });
   }
 
@@ -313,6 +352,30 @@ export class SessionsGateway implements OnGatewayDisconnect {
       });
   }
 
+  /** Teacher-only face preview; face analysis uploads stay on HTTP. */
+  @SubscribeMessage('face:frame') face(
+    @ConnectedSocket() c: Socket,
+    @MessageBody() b: { frame?: Buffer | ArrayBuffer }
+  ) {
+    const data = c.data as StudentData;
+    if (!data.sessionId || !b?.frame) return;
+    const size =
+      b.frame instanceof ArrayBuffer ? b.frame.byteLength : b.frame.length;
+    const now = Date.now();
+    if (
+      size > MAX_FACE_BYTES ||
+      now - (data.lastFaceAt ?? 0) < MIN_FACE_INTERVAL_MS
+    )
+      return;
+    data.lastFaceAt = now;
+    this.server
+      .to(rooms.face(data.sessionId))
+      .volatile.emit('face:frame', {
+        sessionId: data.sessionId,
+        frame: b.frame,
+      });
+  }
+
   // -------------------------------------------------------------- lifecycle
 
   async handleDisconnect(c: Socket) {
@@ -340,11 +403,13 @@ export class SessionsGateway implements OnGatewayDisconnect {
     if (c) {
       await c.leave(rooms.watch(sessionId));
       await c.leave(rooms.fallback(sessionId));
+      await c.leave(rooms.face(sessionId));
       const data = c.data as TeacherData;
       data.watching = (data.watching ?? []).filter((id) => id !== sessionId);
     }
     this.server.to(rooms.student(sessionId)).emit('webrtc:stop', { viewerId });
     await this.syncFallback(sessionId);
+    await this.syncFace(sessionId);
   }
 
   /** Students only encode image frames while some viewer actually needs them. */
@@ -355,6 +420,14 @@ export class SessionsGateway implements OnGatewayDisconnect {
     this.server
       .to(rooms.student(sessionId))
       .emit('screen:fallback', { enabled: viewers.length > 0 });
+  }
+
+  /** Students only send face previews while some viewer shows them. */
+  private async syncFace(sessionId: string) {
+    const viewers = await this.server.in(rooms.face(sessionId)).fetchSockets();
+    this.server
+      .to(rooms.student(sessionId))
+      .emit('face:preview', { enabled: viewers.length > 0 });
   }
 
   private async studentSockets(room: string) {
@@ -380,10 +453,7 @@ export class SessionsGateway implements OnGatewayDisconnect {
   /** Live connection + screen-share state for every active attempt. */
   async studentStates(examId: string) {
     const activeAfter = Date.now() - this.activityTimeoutMs;
-    const states = new Map<
-      string,
-      { screenSharing: boolean; feedSource: 'screen' | 'camera' }
-    >();
+    const states = new Map<string, StudentState>();
     for (const data of await this.studentSockets(rooms.examStudents(examId))) {
       if (!data.sessionId || !this.isActive(data, activeAfter)) continue;
       const previous = states.get(data.sessionId);
@@ -395,6 +465,8 @@ export class SessionsGateway implements OnGatewayDisconnect {
           data.feedSource === 'camera' || previous?.feedSource === 'camera'
             ? 'camera'
             : 'screen',
+        cameraStatus: data.cameraStatus ?? previous?.cameraStatus,
+        microphoneStatus: data.microphoneStatus ?? previous?.microphoneStatus,
       });
     }
     return states;
@@ -415,7 +487,11 @@ export class SessionsGateway implements OnGatewayDisconnect {
         .socketsLeave([rooms.student(sessionId), rooms.examStudents(examId)]);
       this.server
         .in(rooms.watch(sessionId))
-        .socketsLeave([rooms.watch(sessionId), rooms.fallback(sessionId)]);
+        .socketsLeave([
+          rooms.watch(sessionId),
+          rooms.fallback(sessionId),
+          rooms.face(sessionId),
+        ]);
       this.emitMonitor(examId, 'monitor:session-end', { sessionId });
     }
   }

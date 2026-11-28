@@ -139,6 +139,8 @@ enum EventType {
   SCREEN_SHARE_STOPPED
   MULTIPLE_DISPLAYS
   EXTERNAL_FORM_OPENED
+  CAMERA_UNAVAILABLE
+  MICROPHONE_UNAVAILABLE
 }
 
 enum RecordingStatus {
@@ -160,6 +162,11 @@ enum EvidenceClipPhase {
   INCIDENT
   FOLLOWING
   CENTERED
+  // Webcam parts recorded alongside PREVIOUS/INCIDENT/FOLLOWING when the exam
+  // requires a camera; merged beside the screen into the CENTERED clip.
+  CAMERA_PREVIOUS
+  CAMERA_INCIDENT
+  CAMERA_FOLLOWING
 }
 
 enum ReportFormat {

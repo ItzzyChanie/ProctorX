@@ -21,6 +21,8 @@ EVENT_COLORS = {
     "IDLE": "#64748b",
     "SCREEN_SHARE_STOPPED": "#b91c1c",
     "MULTIPLE_DISPLAYS": "#7c3aed",
+    "CAMERA_UNAVAILABLE": "#94a3b8",
+    "MICROPHONE_UNAVAILABLE": "#94a3b8",
 }
 
 

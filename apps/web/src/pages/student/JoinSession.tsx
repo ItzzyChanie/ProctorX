@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Camera,
+  CameraOff,
   Flag,
   ChevronLeft,
   ChevronRight,
@@ -10,6 +11,7 @@ import {
   EyeOff,
   LogIn,
   Mic,
+  MicOff,
   Monitor,
   MonitorOff,
   ShieldCheck,
@@ -60,6 +62,28 @@ import { GoogleFormPanel } from './exam/GoogleFormPanel';
 
 /** How long after "open in a new tab" the tab switch counts as that action. */
 const EXTERNAL_FORM_GRACE_MS = 4000;
+// Teacher face preview (desktop + "Require camera"): ~5-8 KB JPEG per photo.
+const FACE_PREVIEW_WIDTH = 240;
+const FACE_PREVIEW_HEIGHT = 180;
+const FACE_PREVIEW_INTERVAL_MS = 1500;
+// A camera held by another app (Zoom, Teams…) is retried before giving up.
+const BUSY_DEVICE_RETRIES = 3;
+const BUSY_DEVICE_RETRY_MS = 2500;
+
+type DeviceKind = 'camera' | 'microphone';
+/**
+ * Why getUserMedia failed. 'blocked' = the student (or the OS privacy
+ * settings) denied access: they have the device, so the exam waits for it.
+ * Everything else means the device is missing or broken: continue without it.
+ */
+const deviceFailure = (error: unknown) => {
+  const name = error instanceof DOMException ? error.name : '';
+  if (name === 'NotAllowedError' || name === 'SecurityError') return 'blocked';
+  if (name === 'NotFoundError' || name === 'OverconstrainedError')
+    return 'not_found';
+  if (name === 'NotReadableError' || name === 'AbortError') return 'busy';
+  return 'error';
+};
 
 export default function JoinSession() {
   const queryClient = useQueryClient();
@@ -102,6 +126,9 @@ export default function JoinSession() {
   // Phones/tablets cannot share the screen: proctor through the camera instead.
   const [cameraOnly] = useState(isCameraOnlyDevice);
   const restartScreenShare = useRef<(() => Promise<void>) | null>(null);
+  // A required camera/mic the student blocked: the exam waits until allowed.
+  const [deviceBlocked, setDeviceBlocked] = useState<DeviceKind | null>(null);
+  const retryBlockedDevice = useRef<(() => void) | null>(null);
   const mySubjects = useQuery({
     queryKey: ['student-subjects'],
     queryFn: async () =>
@@ -322,6 +349,10 @@ export default function JoinSession() {
     const setFallback = ({ enabled }: { enabled?: boolean }) => {
       fallbackEnabled = Boolean(enabled);
     };
+    let facePreviewEnabled = false;
+    const setFacePreview = ({ enabled }: { enabled?: boolean }) => {
+      facePreviewEnabled = Boolean(enabled);
+    };
     const signal = async ({
       viewerId,
       peerId,
@@ -362,12 +393,84 @@ export default function JoinSession() {
         if (viewers.get(viewerId) === viewer) closeViewer(viewerId);
       }
     };
+    const deviceStatus: Record<DeviceKind, 'missing' | 'blocked' | null> = {
+      camera: null,
+      microphone: null,
+    };
     const announceSharing = () =>
       socket.emit('screen:state', {
         sharing:
           screenStream.current?.getVideoTracks()[0]?.readyState === 'live',
         source: cameraOnly ? 'camera' : 'screen',
+        camera: deviceStatus.camera,
+        microphone: deviceStatus.microphone,
       });
+    /**
+     * Opens a required camera/mic. Returns null when the device is missing or
+     * broken (the exam continues and the teacher is told). Waits while the
+     * student has blocked access, until they allow it and press Retry.
+     */
+    const openDevice = async (
+      kind: DeviceKind,
+      open: () => Promise<MediaStream>
+    ): Promise<MediaStream | null> => {
+      let busyRetries = 0;
+      for (;;) {
+        try {
+          const stream = await open();
+          if (busyRetries) setNotice('');
+          if (deviceStatus[kind]) {
+            deviceStatus[kind] = null;
+            setDeviceBlocked(null);
+            announceSharing();
+          }
+          return stream;
+        } catch (error) {
+          if (!active) throw error;
+          const reason = deviceFailure(error);
+          if (reason === 'blocked') {
+            deviceStatus[kind] = 'blocked';
+            setDeviceBlocked(kind);
+            announceSharing();
+            await new Promise<void>((resolve) => {
+              retryBlockedDevice.current = resolve;
+            });
+            retryBlockedDevice.current = null;
+            if (!active) throw error;
+            continue;
+          }
+          if (reason === 'busy' && busyRetries < BUSY_DEVICE_RETRIES) {
+            busyRetries++;
+            setNotice(
+              kind === 'camera'
+                ? 'Your camera is being used by another app (for example Zoom, Teams or Messenger). Close that app; retrying…'
+                : 'Your microphone is being used by another app. Close that app; retrying…'
+            );
+            await new Promise((resolve) =>
+              window.setTimeout(resolve, BUSY_DEVICE_RETRY_MS)
+            );
+            if (!active) throw error;
+            continue;
+          }
+          deviceStatus[kind] = 'missing';
+          setDeviceBlocked(null);
+          announceSharing();
+          setNotice(
+            kind === 'camera'
+              ? 'No working camera was found. You can continue the assessment; your teacher has been notified.'
+              : 'No working microphone was found. You can continue the assessment; your teacher has been notified.'
+          );
+          void postInBackground(`/sessions/${id}/events`, {
+            type:
+              kind === 'camera'
+                ? 'CAMERA_UNAVAILABLE'
+                : 'MICROPHONE_UNAVAILABLE',
+            metadata: { reason },
+          });
+          return null;
+        }
+      }
+    };
     let displaysReported = false;
     // Window Management API (Chromium): isExtended is true when more than one
     // display is attached, which the single-monitor screen share cannot see.
@@ -454,6 +557,7 @@ export default function JoinSession() {
     socket.on('webrtc:stop', stopViewer);
     socket.on('webrtc:quality', setQuality);
     socket.on('screen:fallback', setFallback);
+    socket.on('face:preview', setFacePreview);
     socket.connect();
     if (socket.connected) joinStudentRoom();
     void (async () => {
@@ -530,7 +634,13 @@ export default function JoinSession() {
         // while the server reports a viewer whose peer connection failed.
         timers.current.push(window.setInterval(sendScreenFrame, 1000));
         const preferredMimeType = pickRecorderMimeType();
-        type Segment = { blob: Blob; startedAt: Date; endedAt: Date };
+        type Segment = {
+          blob: Blob;
+          /** Webcam recorded alongside (camera-required exams on desktop). */
+          camera: Promise<Blob | null>;
+          startedAt: Date;
+          endedAt: Date;
+        };
         type PendingEvidence = {
           eventId: string;
           occurredAtMs: number;
@@ -545,19 +655,39 @@ export default function JoinSession() {
           phase: 'PREVIOUS' | 'INCIDENT' | 'FOLLOWING',
           segment: Segment
         ) => {
-          const form = new FormData();
-          form.append('eventId', eventId);
-          form.append('phase', phase);
-          form.append('startedAt', segment.startedAt.toISOString());
-          form.append('endedAt', segment.endedAt.toISOString());
-          const extension = segment.blob.type.includes('mp4') ? 'mp4' : 'webm';
-          form.append(
-            'clip',
-            segment.blob,
-            `${phase.toLowerCase()}.${extension}`
-          );
+          const formFor = (blob: Blob, track: 'SCREEN' | 'CAMERA') => {
+            const form = new FormData();
+            form.append('eventId', eventId);
+            form.append('phase', phase);
+            form.append('track', track);
+            form.append('startedAt', segment.startedAt.toISOString());
+            form.append('endedAt', segment.endedAt.toISOString());
+            const extension = blob.type.includes('mp4') ? 'mp4' : 'webm';
+            form.append(
+              'clip',
+              blob,
+              `${track.toLowerCase()}-${phase.toLowerCase()}.${extension}`
+            );
+            return form;
+          };
           recordingUploads.current = recordingUploads.current
-            .then(() => api.post(`/sessions/${id}/evidence-clips`, form))
+            .then(async () => {
+              // Webcam part first: the screen FOLLOWING part makes the server
+              // build the clip, and by then the webcam parts are all there.
+              // A failed webcam upload only drops the face from the clip.
+              const camera = await segment.camera;
+              if (camera?.size)
+                await api
+                  .post(
+                    `/sessions/${id}/evidence-clips`,
+                    formFor(camera, 'CAMERA')
+                  )
+                  .catch(() => undefined);
+              await api.post(
+                `/sessions/${id}/evidence-clips`,
+                formFor(segment.blob, 'SCREEN')
+              );
+            })
             .catch(() => {
               if (active && !recordingErrorShown) {
                 recordingErrorShown = true;
@@ -573,6 +703,56 @@ export default function JoinSession() {
             uploadClip(pending.eventId, 'PREVIOUS', pending.previous);
           uploadClip(pending.eventId, 'INCIDENT', incident);
         };
+        /**
+         * Records the webcam for the same 10 s as a screen segment, so the
+         * evidence clip can show the face beside the screen. Separate
+         * recorders keep running while the exam tab is hidden (a tab switch),
+         * unlike drawing both onto one canvas. Phones have no second camera
+         * stream: their screen recording already is the camera.
+         */
+        const recordCameraSegment = () => {
+          const track = cameraStream.current?.getVideoTracks()[0];
+          if (!cameraStream.current || track?.readyState !== 'live')
+            return { blob: Promise.resolve(null), stop: () => undefined };
+          const cameraChunks: Blob[] = [];
+          let cameraRecorder: MediaRecorder;
+          try {
+            cameraRecorder = new MediaRecorder(cameraStream.current, {
+              ...(preferredMimeType ? { mimeType: preferredMimeType } : {}),
+              videoBitsPerSecond: 400_000,
+            });
+          } catch {
+            return { blob: Promise.resolve(null), stop: () => undefined };
+          }
+          let giveUp = () => undefined as void;
+          const blob = new Promise<Blob | null>((resolve) => {
+            giveUp = () => resolve(null);
+            const finish = () =>
+              resolve(
+                cameraChunks.length
+                  ? new Blob(cameraChunks, {
+                      type: (cameraRecorder.mimeType || 'video/webm').split(
+                        ';'
+                      )[0]!,
+                    })
+                  : null
+              );
+            cameraRecorder.ondataavailable = (event) => {
+              if (event.data.size) cameraChunks.push(event.data);
+            };
+            cameraRecorder.onstop = finish;
+            cameraRecorder.onerror = () => resolve(null);
+          });
+          cameraRecorder.start();
+          return {
+            blob,
+            stop: () => {
+              if (cameraRecorder.state !== 'inactive') cameraRecorder.stop();
+              // Never let a stuck camera hold up the screen evidence upload.
+              window.setTimeout(giveUp, 5_000);
+            },
+          };
+        };
         const recordSegment = () => {
           if (!active || screen.getVideoTracks()[0]?.readyState !== 'live')
             return;
@@ -586,11 +766,14 @@ export default function JoinSession() {
           segmentRecorder.ondataavailable = (event) => {
             if (event.data.size) chunks.push(event.data);
           };
+          const camera = recordCameraSegment();
           segmentRecorder.onstop = () => {
+            camera.stop();
             const segment: Segment = {
               blob: new Blob(chunks, {
                 type: (segmentRecorder.mimeType || 'video/webm').split(';')[0]!,
               }),
+              camera: camera.blob,
               startedAt,
               endedAt: new Date(),
             };
@@ -705,53 +888,138 @@ export default function JoinSession() {
         if (exam.exam.requireCamera) {
           // In camera-only mode the proctoring feed already is the camera;
           // phones often refuse to open the same camera twice.
-          let video = screenVideo;
-          if (!cameraOnly) {
-            cameraStream.current = await navigator.mediaDevices.getUserMedia({
-              video: { frameRate: { ideal: 15, max: 20 } },
-              audio: false,
-            });
+          let video: HTMLVideoElement | null = screenVideo;
+          const camera = cameraOnly
+            ? null
+            : await openDevice('camera', () =>
+                navigator.mediaDevices.getUserMedia({
+                  video: { frameRate: { ideal: 15, max: 20 } },
+                  audio: false,
+                })
+              );
+          if (!active) {
+            camera?.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          // No working webcam: no face samples or preview, exam continues.
+          if (!cameraOnly && !camera) video = null;
+          if (camera) {
+            cameraStream.current = camera;
             video = document.createElement('video');
-            video.srcObject = cameraStream.current;
+            video.srcObject = camera;
             video.muted = true;
             video.playsInline = true;
             await video.play().catch((error: DOMException) => {
               if (error.name !== 'AbortError') throw error;
             });
-          }
-          const sample = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = 640;
-            canvas.height = 480;
-            canvas.getContext('2d')?.drawImage(video, 0, 0);
-            canvas.toBlob(
-              (blob) => {
-                if (blob) {
-                  const form = new FormData();
-                  form.append('frame', blob, 'frame.jpg');
-                  void postInBackground(`/sessions/${id}/camera-sample`, form);
-                }
-              },
-              'image/jpeg',
-              0.75
+            // Teacher-only face preview, separate from the face analysis
+            // samples below: small, frequent, never analysed or stored.
+            const faceVideo = video;
+            const faceCanvas = document.createElement('canvas');
+            faceCanvas.width = FACE_PREVIEW_WIDTH;
+            faceCanvas.height = FACE_PREVIEW_HEIGHT;
+            let faceEncoding = false;
+            const sendFacePreview = () => {
+              if (
+                !facePreviewEnabled ||
+                faceEncoding ||
+                !active ||
+                !socket.connected ||
+                faceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+              )
+                return;
+              const sourceWidth = faceVideo.videoWidth;
+              const sourceHeight = faceVideo.videoHeight;
+              if (!sourceWidth || !sourceHeight) return;
+              // Centre-crop to 4:3 so the face fills the teacher's panel.
+              const scale = Math.max(
+                FACE_PREVIEW_WIDTH / sourceWidth,
+                FACE_PREVIEW_HEIGHT / sourceHeight
+              );
+              const cropWidth = FACE_PREVIEW_WIDTH / scale;
+              const cropHeight = FACE_PREVIEW_HEIGHT / scale;
+              faceCanvas
+                .getContext('2d')
+                ?.drawImage(
+                  faceVideo,
+                  (sourceWidth - cropWidth) / 2,
+                  (sourceHeight - cropHeight) / 2,
+                  cropWidth,
+                  cropHeight,
+                  0,
+                  0,
+                  FACE_PREVIEW_WIDTH,
+                  FACE_PREVIEW_HEIGHT
+                );
+              faceEncoding = true;
+              faceCanvas.toBlob(
+                async (blob) => {
+                  try {
+                    if (!blob || !active || !socket.connected) return;
+                    socket.volatile.emit('face:frame', {
+                      frame: await blob.arrayBuffer(),
+                    });
+                  } finally {
+                    faceEncoding = false;
+                  }
+                },
+                'image/jpeg',
+                0.6
+              );
+            };
+            timers.current.push(
+              window.setInterval(sendFacePreview, FACE_PREVIEW_INTERVAL_MS)
             );
-          };
-          sample();
-          timers.current.push(
-            window.setInterval(
-              sample,
-              (exam.exam.monitoring?.faceSampleSeconds ?? 10) * 1000
-            )
-          );
+          }
+          const sampleVideo = video;
+          if (sampleVideo) {
+            const sample = () => {
+              const canvas = document.createElement('canvas');
+              canvas.width = 640;
+              canvas.height = 480;
+              canvas.getContext('2d')?.drawImage(sampleVideo, 0, 0);
+              canvas.toBlob(
+                (blob) => {
+                  if (blob) {
+                    const form = new FormData();
+                    form.append('frame', blob, 'frame.jpg');
+                    void postInBackground(
+                      `/sessions/${id}/camera-sample`,
+                      form
+                    );
+                  }
+                },
+                'image/jpeg',
+                0.75
+              );
+            };
+            sample();
+            timers.current.push(
+              window.setInterval(
+                sample,
+                (exam.exam.monitoring?.faceSampleSeconds ?? 10) * 1000
+              )
+            );
+          }
         }
-        if (exam.exam.requireMicrophone) {
-          microphoneStream.current = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              channelCount: 1,
-              echoCancellation: true,
-              noiseSuppression: true,
-            },
-          });
+        // Opened on its own, so a missing camera never skips the microphone.
+        const microphone = exam.exam.requireMicrophone
+          ? await openDevice('microphone', () =>
+              navigator.mediaDevices.getUserMedia({
+                audio: {
+                  channelCount: 1,
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                },
+              })
+            )
+          : null;
+        if (!active) {
+          microphone?.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        if (microphone) {
+          microphoneStream.current = microphone;
           const context = new AudioContext({ sampleRate: 48000 });
           audioContext.current = context;
           const source = context.createMediaStreamSource(
@@ -817,7 +1085,7 @@ export default function JoinSession() {
         setNotice(
           cameraOnly
             ? 'Camera access is required to take this assessment on a phone or tablet. Allow camera (and microphone if asked) in your browser settings.'
-            : 'Required screen, camera, or microphone permission was not granted.'
+            : 'Screen sharing permission was not granted.'
         );
         if (!screenStream.current) {
           // Without a screen share the attempt cannot be proctored: block the
@@ -830,6 +1098,10 @@ export default function JoinSession() {
     })();
     return () => {
       active = false;
+      // Ends a pending "device blocked" wait so the capture task can exit.
+      retryBlockedDevice.current?.();
+      retryBlockedDevice.current = null;
+      setDeviceBlocked(null);
       document.removeEventListener('visibilitychange', visibility);
       document.removeEventListener('fullscreenchange', fullscreen);
       socket.off('connect', joinStudentRoom);
@@ -843,6 +1115,7 @@ export default function JoinSession() {
       socket.off('webrtc:stop', stopViewer);
       socket.off('webrtc:quality', setQuality);
       socket.off('screen:fallback', setFallback);
+      socket.off('face:preview', setFacePreview);
       displayScreen.removeEventListener?.('change', checkDisplays);
       restartScreenShare.current = null;
       timers.current.forEach(window.clearInterval);
@@ -1280,13 +1553,13 @@ export default function JoinSession() {
                     <p className="flex gap-2">
                       <Camera className="shrink-0 text-brand" size={18} />
                       {preview.requireCamera
-                        ? 'Your camera will capture monitoring samples.'
+                        ? 'Your camera will capture monitoring samples. If your device has no working camera you can still continue, and your teacher will be notified.'
                         : 'Camera monitoring is not required.'}
                     </p>
                     <p className="flex gap-2">
                       <Mic className="shrink-0 text-brand" size={18} />
                       {preview.requireMicrophone
-                        ? 'Microphone audio will be analyzed for voice activity.'
+                        ? 'Microphone audio will be analyzed for voice activity. If your device has no working microphone you can still continue, and your teacher will be notified.'
                         : 'Microphone monitoring is not required.'}
                     </p>
                     <p className="flex gap-2">
@@ -1411,6 +1684,35 @@ export default function JoinSession() {
                   {cameraOnly ? 'Turn camera on' : 'Share entire screen'}
                 </Button>
               )}
+            </div>
+          </div>
+        )}
+        {exam && !submitted && deviceBlocked && (
+          <div className="fixed inset-0 z-[66] grid place-items-center bg-black/85 p-6 text-center text-white">
+            <div className="max-w-md">
+              {deviceBlocked === 'camera' ? (
+                <CameraOff className="mx-auto mb-3" size={38} />
+              ) : (
+                <MicOff className="mx-auto mb-3" size={38} />
+              )}
+              <h2 className="text-xl font-bold">
+                {deviceBlocked === 'camera'
+                  ? 'Camera access is blocked'
+                  : 'Microphone access is blocked'}
+              </h2>
+              <p className="my-3 text-sm text-white/80">
+                This assessment requires your{' '}
+                {deviceBlocked === 'camera' ? 'camera' : 'microphone'}, and
+                access to it was blocked. Click the{' '}
+                {deviceBlocked === 'camera' ? 'camera' : 'microphone'} or lock
+                icon in the address bar and choose <strong>Allow</strong>, then
+                press Retry. On Windows, also check Settings › Privacy &amp;
+                security › {deviceBlocked === 'camera' ? 'Camera' : 'Microphone'}.
+                Your teacher can see that access is blocked.
+              </p>
+              <Button onClick={() => retryBlockedDevice.current?.()}>
+                Retry
+              </Button>
             </div>
           </div>
         )}

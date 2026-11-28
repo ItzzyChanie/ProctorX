@@ -112,6 +112,16 @@ const eventDetails: Record<
     Icon: AppWindow,
     color: 'bg-slate-400',
   },
+  CAMERA_UNAVAILABLE: {
+    label: 'No working camera on this device (note, not a violation)',
+    Icon: CameraOff,
+    color: 'bg-slate-400',
+  },
+  MICROPHONE_UNAVAILABLE: {
+    label: 'No working microphone on this device (note, not a violation)',
+    Icon: Mic,
+    color: 'bg-slate-400',
+  },
 };
 const detailsFor = (type: string) =>
   eventDetails[type] ?? {

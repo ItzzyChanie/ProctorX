@@ -1,4 +1,7 @@
-import { VIOLATION_EVENTS } from '../common/violation-events';
+import {
+  DEVICE_NOTE_TYPES,
+  VIOLATION_EVENTS,
+} from '../common/violation-events';
 import {
   ConflictException,
   ForbiddenException,
@@ -33,6 +36,50 @@ import { GradingService } from './grading.service';
 import { ProctoringScoreService } from './proctoring-score.service';
 import { sessionRemainingSeconds } from './session-timing';
 import { monitoringIntervals } from './monitoring-config';
+
+/** Screen evidence parts and the webcam part recorded alongside each. */
+const SCREEN_PARTS: EvidenceClipPhase[] = [
+  EvidenceClipPhase.PREVIOUS,
+  EvidenceClipPhase.INCIDENT,
+  EvidenceClipPhase.FOLLOWING,
+];
+const CAMERA_PHASE: Partial<Record<EvidenceClipPhase, EvidenceClipPhase>> = {
+  [EvidenceClipPhase.PREVIOUS]: EvidenceClipPhase.CAMERA_PREVIOUS,
+  [EvidenceClipPhase.INCIDENT]: EvidenceClipPhase.CAMERA_INCIDENT,
+  [EvidenceClipPhase.FOLLOWING]: EvidenceClipPhase.CAMERA_FOLLOWING,
+};
+const CAMERA_PARTS = Object.values(CAMERA_PHASE) as EvidenceClipPhase[];
+
+// Split evidence frame: face on the left (30%), screen on the right (70%).
+const SPLIT_HEIGHT = 720;
+const SPLIT_FACE_WIDTH = 480;
+const SPLIT_SCREEN_WIDTH = 1120;
+/**
+ * Trims both inputs to the same window, crops the webcam to fill its strip
+ * (the face is centred) and fits the screen without cropping, then places
+ * them side by side. Input 0 = screen, input 1 = webcam.
+ */
+const splitEvidenceFilter = (offsetSeconds: number, durationSeconds: number) => {
+  const window = `trim=start=${offsetSeconds.toFixed(3)}:duration=${durationSeconds.toFixed(3)},setpts=PTS-STARTPTS,fps=15`;
+  return [
+    `[0:v]${window},scale=w=${SPLIT_SCREEN_WIDTH}:h=${SPLIT_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+      `pad=${SPLIT_SCREEN_WIDTH}:${SPLIT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[screen]`,
+    `[1:v]${window},scale=w=${SPLIT_FACE_WIDTH}:h=${SPLIT_HEIGHT}:force_original_aspect_ratio=increase,` +
+      `crop=${SPLIT_FACE_WIDTH}:${SPLIT_HEIGHT},setsar=1[face]`,
+    '[face][screen]hstack=inputs=2[out]',
+  ].join(';');
+};
+
+const DEVICE_REASONS = ['not_found', 'busy', 'error'] as const;
+/** Only a known reason is stored from the client's metadata. */
+const deviceNoteMetadata = (metadata: unknown) => {
+  const reason = (metadata as { reason?: unknown } | undefined)?.reason;
+  return {
+    reason: DEVICE_REASONS.includes(reason as (typeof DEVICE_REASONS)[number])
+      ? (reason as string)
+      : 'error',
+  };
+};
 
 @Injectable()
 export class SessionsService {
@@ -379,6 +426,34 @@ export class SessionsService {
       include: { exam: true },
     });
     if (!session) throw new ForbiddenException();
+    if (DEVICE_NOTE_TYPES.includes(type)) {
+      // A note, not a violation: the device has no working camera/mic.
+      const required =
+        type === EventType.CAMERA_UNAVAILABLE
+          ? session.exam.requireCamera
+          : session.exam.requireMicrophone;
+      if (!required) throw new ForbiddenException();
+      // Once per attempt, even if the student reloads or reconnects.
+      const note =
+        (await this.prisma.proctoringEvent.findFirst({
+          where: { sessionId, type },
+        })) ??
+        (await this.prisma.proctoringEvent.create({
+          data: {
+            sessionId,
+            type,
+            occurredAt: new Date(),
+            metadata: deviceNoteMetadata(metadata),
+          },
+        }));
+      return {
+        suspicion_score: null,
+        tier: null,
+        scored: false,
+        eventId: note.id,
+        occurredAt: note.occurredAt,
+      };
+    }
     if (type === EventType.EXTERNAL_FORM_OPENED) {
       // A note, not a violation: no incident and no effect on the score.
       if (session.exam.sourceType !== ExamSourceType.GOOGLE_FORMS_IMPORT)
@@ -416,21 +491,26 @@ export class SessionsService {
     input: {
       eventId: string;
       phase: EvidenceClipPhase;
+      track?: 'SCREEN' | 'CAMERA';
       startedAt: string;
       endedAt: string;
     },
     chunk: Buffer,
     mimeType = 'video/webm'
   ) {
+    const camera = input.track === 'CAMERA';
     const event = await this.prisma.proctoringEvent.findFirst({
       where: {
         id: input.eventId,
         sessionId,
         type: { in: [EventType.TAB_SWITCH, EventType.FULLSCREEN_EXIT] },
-        session: { studentId },
+        // Webcam evidence only for exams that require the camera.
+        session: { studentId, ...(camera ? { exam: { requireCamera: true } } : {}) },
       },
     });
     if (!event) throw new ForbiddenException();
+    const phase = camera ? CAMERA_PHASE[input.phase] : input.phase;
+    if (!phase) throw new ForbiddenException();
     const startedAt = new Date(input.startedAt);
     const endedAt = new Date(input.endedAt);
     if (+endedAt <= +startedAt || +endedAt - +startedAt > 12_000)
@@ -442,17 +522,14 @@ export class SessionsService {
     // Phones on iOS Safari record MP4; FFmpeg later merges every phase into
     // one WebM evidence clip regardless of the source container.
     const extension = /mp4/i.test(mimeType) ? 'mp4' : 'webm';
-    const path = join(
-      dir,
-      `${event.id}-${input.phase.toLowerCase()}.${extension}`
-    );
+    const path = join(dir, `${event.id}-${phase.toLowerCase()}.${extension}`);
     await writeFile(path, chunk);
     const saved = await this.prisma.evidenceClip.upsert({
-      where: { eventId_phase: { eventId: event.id, phase: input.phase } },
+      where: { eventId_phase: { eventId: event.id, phase } },
       create: {
         sessionId,
         eventId: event.id,
-        phase: input.phase,
+        phase,
         storagePath: path,
         startedAt,
         endedAt,
@@ -468,7 +545,9 @@ export class SessionsService {
       },
       select: { id: true, phase: true, status: true },
     });
-    if (input.phase !== EvidenceClipPhase.FOLLOWING) return saved;
+    // Students upload each webcam part before its screen part, so the screen
+    // FOLLOWING part is the last to arrive and triggers the merge.
+    if (phase !== EvidenceClipPhase.FOLLOWING) return saved;
     return (await this.finalizeEvidenceClip(event.id)) ?? saved;
   }
 
@@ -480,13 +559,7 @@ export class SessionsService {
         sessionId: true,
         evidenceClips: {
           where: {
-            phase: {
-              in: [
-                EvidenceClipPhase.PREVIOUS,
-                EvidenceClipPhase.INCIDENT,
-                EvidenceClipPhase.FOLLOWING,
-              ],
-            },
+            phase: { in: [...SCREEN_PARTS, ...CAMERA_PARTS] },
             status: EvidenceClipStatus.COMPLETE,
           },
           orderBy: { startedAt: 'asc' },
@@ -494,17 +567,26 @@ export class SessionsService {
       },
     });
     if (!event) return null;
-    const incident = event.evidenceClips.find(
+    const parts = event.evidenceClips.filter((clip) =>
+      SCREEN_PARTS.includes(clip.phase)
+    );
+    const incident = parts.find(
       (clip) => clip.phase === EvidenceClipPhase.INCIDENT
     );
-    const following = event.evidenceClips.find(
+    const following = parts.find(
       (clip) => clip.phase === EvidenceClipPhase.FOLLOWING
     );
     if (!incident || !following) return null;
     if (!ffmpegPath) throw new ConflictException('FFmpeg is unavailable');
     const executable = ffmpegPath;
-
-    const parts = event.evidenceClips;
+    // The face is shown only when every screen part has its webcam part
+    // (no webcam, phones, or a failed upload give a screen-only clip).
+    const cameraParts = parts.map((part) =>
+      event.evidenceClips.find(
+        (clip) => clip.phase === CAMERA_PHASE[part.phase]
+      )
+    );
+    const withCamera = cameraParts.every(Boolean);
     const availableStart = parts[0]!.startedAt;
     const availableEnd = parts[parts.length - 1]!.endedAt;
     const clipStart = new Date(
@@ -517,37 +599,58 @@ export class SessionsService {
     const offsetSeconds = Math.max(0, (+clipStart - +availableStart) / 1000);
     const dir = join(process.cwd(), 'storage', 'evidence');
     const listPath = join(dir, `${eventId}-concat.txt`);
+    const cameraListPath = join(dir, `${eventId}-camera-concat.txt`);
     const temporaryPath = join(dir, `${eventId}-centered.tmp.webm`);
     const outputPath = join(dir, `${eventId}-centered.webm`);
-    const concatList = parts
-      .map((clip) => `file '${clip.storagePath.replace(/\\/g, '/')}'`)
-      .join('\n');
-    await writeFile(listPath, concatList);
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        let errorOutput = '';
-        const ffmpeg = spawn(executable, [
+    const concatList = (clips: { storagePath: string }[]) =>
+      clips
+        .map((clip) => `file '${clip.storagePath.replace(/\\/g, '/')}'`)
+        .join('\n');
+    await writeFile(listPath, concatList(parts));
+    if (withCamera)
+      await writeFile(
+        cameraListPath,
+        concatList(cameraParts as { storagePath: string }[])
+      );
+    const encode = [
+      '-an',
+      '-c:v',
+      'libvpx',
+      '-deadline',
+      'realtime',
+      '-cpu-used',
+      '5',
+    ];
+    const args = withCamera
+      ? [
           '-y',
-          '-f',
-          'concat',
-          '-safe',
-          '0',
-          '-i',
-          listPath,
+          ...['-f', 'concat', '-safe', '0', '-i', listPath],
+          ...['-f', 'concat', '-safe', '0', '-i', cameraListPath],
+          '-filter_complex',
+          splitEvidenceFilter(offsetSeconds, durationSeconds),
+          '-map',
+          '[out]',
+          ...encode,
+          // Two pictures in one frame: keep the screen text readable.
+          '-b:v',
+          '1500k',
+          temporaryPath,
+        ]
+      : [
+          '-y',
+          ...['-f', 'concat', '-safe', '0', '-i', listPath],
           '-ss',
           offsetSeconds.toFixed(3),
           '-t',
           durationSeconds.toFixed(3),
-          '-an',
-          '-c:v',
-          'libvpx',
-          '-deadline',
-          'realtime',
-          '-cpu-used',
-          '5',
+          ...encode,
           temporaryPath,
-        ]);
+        ];
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let errorOutput = '';
+        const ffmpeg = spawn(executable, args);
         ffmpeg.stderr.on('data', (data: Buffer) => {
           errorOutput += String(data);
         });
@@ -591,21 +694,18 @@ export class SessionsService {
       await this.prisma.evidenceClip.deleteMany({
         where: {
           eventId,
-          phase: {
-            in: [
-              EvidenceClipPhase.PREVIOUS,
-              EvidenceClipPhase.INCIDENT,
-              EvidenceClipPhase.FOLLOWING,
-            ],
-          },
+          phase: { in: [...SCREEN_PARTS, ...CAMERA_PARTS] },
         },
       });
       await Promise.all(
-        parts.map((part) => unlink(part.storagePath).catch(() => undefined))
+        event.evidenceClips.map((part) =>
+          unlink(part.storagePath).catch(() => undefined)
+        )
       );
       return centered;
     } finally {
       await unlink(listPath).catch(() => undefined);
+      await unlink(cameraListPath).catch(() => undefined);
       await unlink(temporaryPath).catch(() => undefined);
     }
   }
@@ -667,6 +767,10 @@ export class SessionsService {
       connectionStatus: states.has(session.id) ? 'CONNECTED' : 'DISCONNECTED',
       screenSharing: states.get(session.id)?.screenSharing ?? false,
       feedSource: states.get(session.id)?.feedSource ?? 'screen',
+      // Desktop students on these exams also send a small face preview.
+      requireCamera: exam.requireCamera,
+      cameraStatus: states.get(session.id)?.cameraStatus ?? null,
+      microphoneStatus: states.get(session.id)?.microphoneStatus ?? null,
       eventCount: _count.events,
       tabSwitchCount: tabSwitchCount.get(session.id) ?? 0,
       raisedHand: Boolean(session.raiseHandRequests.length),
