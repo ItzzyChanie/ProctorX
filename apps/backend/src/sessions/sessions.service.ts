@@ -6,6 +6,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -36,6 +37,7 @@ import { GradingService } from './grading.service';
 import { ProctoringScoreService } from './proctoring-score.service';
 import { sessionRemainingSeconds } from './session-timing';
 import { monitoringIntervals } from './monitoring-config';
+import { EncodeQueue } from './encode-queue';
 
 /** Screen evidence parts and the webcam part recorded alongside each. */
 const SCREEN_PARTS: EvidenceClipPhase[] = [
@@ -70,6 +72,13 @@ const splitEvidenceFilter = (offsetSeconds: number, durationSeconds: number) => 
   ].join(';');
 };
 
+/**
+ * Evidence clips are video encodes that share the server's CPU with the API
+ * and the AI service. When many students trigger incidents at once, only this
+ * many encode at a time; the others wait their turn (first come, first served).
+ */
+const MAX_PARALLEL_CLIP_BUILDS = 2;
+
 const DEVICE_REASONS = ['not_found', 'busy', 'error'] as const;
 /** Only a known reason is stored from the client's metadata. */
 const deviceNoteMetadata = (metadata: unknown) => {
@@ -83,6 +92,11 @@ const deviceNoteMetadata = (metadata: unknown) => {
 
 @Injectable()
 export class SessionsService {
+  private readonly logger = new Logger(SessionsService.name);
+  private readonly clipEncoder = new EncodeQueue(MAX_PARALLEL_CLIP_BUILDS);
+  /** Clip builds in progress, by incident id. */
+  private readonly clipBuilds = new Map<string, Promise<unknown>>();
+
   constructor(
     private prisma: PrismaService,
     private ai: AiService,
@@ -547,8 +561,33 @@ export class SessionsService {
     });
     // Students upload each webcam part before its screen part, so the screen
     // FOLLOWING part is the last to arrive and triggers the merge.
-    if (phase !== EvidenceClipPhase.FOLLOWING) return saved;
-    return (await this.finalizeEvidenceClip(event.id)) ?? saved;
+    if (phase === EvidenceClipPhase.FOLLOWING) this.scheduleClipBuild(event.id);
+    return saved;
+  }
+
+  /**
+   * Builds the clip in the background: the student's upload returns at once
+   * instead of waiting in the encode queue, so their later evidence uploads
+   * are never held up. Builds of the same incident run one after another.
+   */
+  private scheduleClipBuild(eventId: string) {
+    const previous = this.clipBuilds.get(eventId) ?? Promise.resolve();
+    const build = previous
+      .catch(() => undefined)
+      .then(() => this.finalizeEvidenceClip(eventId));
+    this.clipBuilds.set(eventId, build);
+    build
+      .catch((error: unknown) =>
+        this.logger.error(
+          `Evidence clip for incident ${eventId} could not be built: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        )
+      )
+      .finally(() => {
+        if (this.clipBuilds.get(eventId) === build)
+          this.clipBuilds.delete(eventId);
+      });
   }
 
   private async finalizeEvidenceClip(eventId: string) {
@@ -648,23 +687,27 @@ export class SessionsService {
         ];
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        let errorOutput = '';
-        const ffmpeg = spawn(executable, args);
-        ffmpeg.stderr.on('data', (data: Buffer) => {
-          errorOutput += String(data);
-        });
-        ffmpeg.on('error', reject);
-        ffmpeg.on('close', (code: number | null) => {
-          if (code === 0) resolve();
-          else
-            reject(
-              new Error(
-                `FFmpeg exited with ${code}: ${errorOutput.slice(-1000)}`
-              )
-            );
-        });
-      });
+      // Waits for a free encoder slot when other clips are being built.
+      await this.clipEncoder.run(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            let errorOutput = '';
+            const ffmpeg = spawn(executable, args);
+            ffmpeg.stderr.on('data', (data: Buffer) => {
+              errorOutput += String(data);
+            });
+            ffmpeg.on('error', reject);
+            ffmpeg.on('close', (code: number | null) => {
+              if (code === 0) resolve();
+              else
+                reject(
+                  new Error(
+                    `FFmpeg exited with ${code}: ${errorOutput.slice(-1000)}`
+                  )
+                );
+            });
+          })
+      );
       await unlink(outputPath).catch(() => undefined);
       await rename(temporaryPath, outputPath);
       const output = await stat(outputPath);
